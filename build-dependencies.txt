@@ -1,0 +1,6 @@
+# Rust build deps
+cargo rustc
+# xtask uses this
+git-core
+# C dependencies
+pkgconfig(openssl)
