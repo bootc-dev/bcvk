@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod vm;
 mod hostexec;
+mod runscript;
+mod vm;
 
 #[derive(Parser)]
 struct Cli {
@@ -18,6 +19,7 @@ struct RunOpts {
 
 #[derive(Subcommand)]
 enum Commands {
+    OutputEntrypoint,
     /// Run the bootc container image within an ephemeral VM.
     Run(RunOpts),
 }
@@ -28,6 +30,9 @@ async fn run() -> Result<()> {
     match cli.command {
         Commands::Run(opts) => {
             hostexec::run(["podman", "inspect", &opts.image])?;
+        }
+        Commands::OutputEntrypoint => {
+            runscript::print(&mut std::io::stdout().lock())?;
         }
     }
     Ok(())

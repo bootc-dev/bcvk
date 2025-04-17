@@ -5,6 +5,8 @@
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"image": "ghcr.io/cgwalters/toolbox:c9s",
 
+	"mounts": ["source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind"],
+
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
 

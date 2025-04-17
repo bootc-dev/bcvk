@@ -1,4 +1,4 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 
 pub(crate) fn run<I, T>(args: I) -> anyhow::Result<()>
 where

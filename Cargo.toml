@@ -9,3 +9,4 @@ anyhow = "1.0"
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 xshell = "0.2.7"
+cfg-if = "1.0.0"

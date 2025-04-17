@@ -105,6 +105,7 @@ name = "bootc-kit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cfg-if",
  "clap",
  "thiserror",
  "tokio",
