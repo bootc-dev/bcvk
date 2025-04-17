@@ -1,12 +1,28 @@
-[package]
-name = "bootc-kit"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+members = [ "crates/*"]
+resolver = "2"
 
-[dependencies]
-clap = { version = "4.4", features = ["derive"] }
-anyhow = "1.0"
-thiserror = "1.0"
-tokio = { version = "1", features = ["full"] }
-xshell = "0.2.7"
+[workspace.dependencies]
+anyhow = "1"
 cfg-if = "1.0.0"
+xshell = "0.2.7"
+
+[workspace.lints.rust]
+# Require an extra opt-in for unsafe
+unsafe_code = "deny"
+# Absolutely must handle errors
+unused_must_use = "forbid"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+# Feel free to comment this one out locally during development of a patch.
+dead_code = "deny"
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+# These should only be in local code
+dbg_macro = "deny"
+todo = "deny"
+# These two are in my experience the lints which are most likely
+# to trigger, and among the least valuable to fix.
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"

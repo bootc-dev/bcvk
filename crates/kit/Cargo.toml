@@ -1,0 +1,13 @@
+[package]
+name = "bootc-kit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+anyhow =  { workspace = true }
+thiserror = "1.0"
+tokio = { version = "1", features = ["full"] }
+xshell = { workspace = true }
+cfg-if = { workspace = true }
