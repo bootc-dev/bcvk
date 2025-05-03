@@ -1,10 +1,9 @@
 use std::ffi::OsString;
 use std::process::Command;
-use std::sync::atomic::AtomicUsize;
 
 use anyhow::Result;
 use cap_std_ext::cap_std;
-use rand::{distr::SampleString, Rng};
+use rand::distr::SampleString;
 
 use crate::containerenv::{get_cached_container_execution_info, global_rootfs};
 
