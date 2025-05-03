@@ -5,9 +5,13 @@ edition = "2021"
 publish = false
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
 anyhow =  { workspace = true }
+cap-std-ext = { version = "4" }
+clap = { version = "4.4", features = ["derive"] }
+fn-error-context = { version = "0.2" }
+bootc-mount = { git = "https://github.com/bootc-dev/bootc", commit = "578063b24ca5b39498a70cbf91b2f0437916a29c" }
 thiserror = "1.0"
+rustix = { "version" = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 tokio = { version = "1", features = ["full"] }
 xshell = { workspace = true }
 cfg-if = { workspace = true }
