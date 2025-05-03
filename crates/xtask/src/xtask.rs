@@ -51,7 +51,7 @@ fn build(sh: &Shell) -> Result<()> {
         if #[cfg(target_os = "macos")] {
             cmd!(sh, "cargo build -p agent-macos --release").run()?;
         } else if #[cfg(target_os = "linux")] {
-            cmd!(sh, "cargo build -p agent-linux --release").run()?;
+            // Nothing, we can just use systemd-run
         } else {
             compile_error!("Unsupported OS")
         }

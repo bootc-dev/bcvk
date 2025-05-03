@@ -4,10 +4,9 @@ use std::sync::atomic::AtomicUsize;
 
 use anyhow::Result;
 use cap_std_ext::cap_std;
+use rand::{distr::SampleString, Rng};
 
 use crate::containerenv::{get_cached_container_execution_info, global_rootfs};
-
-static RUNID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Default)]
 pub struct SystemdConfig {
@@ -15,21 +14,34 @@ pub struct SystemdConfig {
 }
 
 /// Generate a command instance which uses systemd-run to spawn the target
-/// command in the host environment.
+/// command in the host environment. However, we use BindsTo= on our
+/// unit to ensure the lifetime of the command is bounded by the container.
 pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
     let config = config.unwrap_or_default();
 
     let rootfs = global_rootfs(cap_std::ambient_authority())?;
     let info = get_cached_container_execution_info(&rootfs)?;
     let containerid = &info.id;
-    let runid = RUNID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // A random suffix, 8 alphanumeric chars gives 62 ** 8 possibilities, so low chance of collision
+    // And we only care about such collissions for *concurrent* processes bound to *the same*
+    // podman container ID; after a unit has exited it's fine if we reuse an ID.
+    let runid = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 8);
     let unit = format!("hostcmd-{containerid}-{runid}.service");
     let scope = format!("libpod-{containerid}.scope");
     let properties = [format!("BindsTo={scope}"), format!("After={scope}")];
 
     let properties = properties.into_iter().flat_map(|p| ["-p".to_owned(), p]);
     let mut r = Command::new("systemd-run");
-    r.args(["--quiet", "--collect", "-u", unit.as_str()]);
+    // Note that we need to specify this RootDirectory property to suppress heuristics
+    // systemd-run has to search for the binary, which in the general case won't exist
+    // in the container.
+    r.args([
+        "--quiet",
+        "--collect",
+        "-u",
+        unit.as_str(),
+        "--property=RootDirectory=/",
+    ]);
     if config.inherit_fds {
         r.arg("--pipe");
     }
@@ -41,6 +53,8 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
     Ok(r)
 }
 
+/// Synchronously execute the provided command arguments on the host via `systemd-run`.
+/// File descriptors are inherited by default, and the command's result code is checked for errors.
 pub fn run<I, T>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = T>,

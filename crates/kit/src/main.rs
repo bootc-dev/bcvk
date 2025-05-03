@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -13,24 +15,24 @@ struct Cli {
 }
 
 #[derive(Parser)]
-struct RunOpts {
-    /// Name of the container image to run
-    image: String,
+struct HostExecOpts {
+    #[clap(allow_hyphen_values = true)]
+    args: Vec<OsString>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     OutputEntrypoint,
-    /// Run the bootc container image within an ephemeral VM.
-    Run(RunOpts),
+    /// Execute a command in the host context
+    Hostexec(HostExecOpts),
 }
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run(opts) => {
-            hostexec::run(["podman", "inspect", &opts.image])?;
+        Commands::Hostexec(opts) => {
+            hostexec::run(opts.args)?;
         }
         Commands::OutputEntrypoint => {
             runscript::print(&mut std::io::stdout().lock())?;
