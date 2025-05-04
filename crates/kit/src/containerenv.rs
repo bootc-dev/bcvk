@@ -8,11 +8,12 @@ use cap_std_ext::cap_std;
 use cap_std_ext::cap_std::fs::Dir;
 use cap_std_ext::prelude::CapStdExtDirExt;
 use fn_error_context::context;
+use serde::{Deserialize, Serialize};
 
 /// Path is relative to container rootfs (assumed to be /)
 pub(crate) const PATH: &str = "run/.containerenv";
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ContainerExecutionInfo {
     pub(crate) engine: String,
     pub(crate) name: String,
@@ -22,15 +23,19 @@ pub(crate) struct ContainerExecutionInfo {
     pub(crate) rootless: Option<String>,
 }
 
+/// Return true if this environment is detected as a container
+pub fn is_container(rootfs: &Dir) -> Result<bool> {
+    let r = rootfs.try_exists(PATH)?;
+    Ok(r)
+}
+
 /// Load and parse the `/run/.containerenv` file.
 #[context("Querying container")]
-pub(crate) fn get_container_execution_info(rootfs: &Dir) -> Result<ContainerExecutionInfo> {
+pub(crate) fn get_container_execution_info(rootfs: &Dir) -> Result<Option<ContainerExecutionInfo>> {
     let f = match rootfs.open_optional(PATH)? {
         Some(f) => BufReader::new(f),
         None => {
-            anyhow::bail!(
-                "This command must be executed inside a podman container (missing /{PATH})"
-            )
+            return Ok(None);
         }
     };
     let mut r = ContainerExecutionInfo::default();
@@ -52,20 +57,22 @@ pub(crate) fn get_container_execution_info(rootfs: &Dir) -> Result<ContainerExec
             _ => {}
         }
     }
-    Ok(r)
+    Ok(Some(r))
 }
 
 /// Return information for the container environment
-pub(crate) fn get_cached_container_execution_info(rootfs: &Dir) -> Result<&ContainerExecutionInfo> {
-    static INFO: std::sync::OnceLock<ContainerExecutionInfo> = std::sync::OnceLock::new();
+pub(crate) fn get_cached_container_execution_info(
+    rootfs: &Dir,
+) -> Result<Option<&ContainerExecutionInfo>> {
+    static INFO: std::sync::OnceLock<Option<ContainerExecutionInfo>> = std::sync::OnceLock::new();
     if let Some(r) = INFO.get() {
-        return Ok(r);
+        return Ok(r.as_ref());
     }
     let r = get_container_execution_info(rootfs)?;
     // Discard duplicate init attempts
     let _ = INFO.set(r);
     // SAFETY: We know this was initialized
-    Ok(INFO.get().unwrap())
+    Ok(INFO.get().unwrap().as_ref())
 }
 
 /// Return a cached copy of the global rootfs

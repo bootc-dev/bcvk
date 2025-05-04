@@ -19,7 +19,8 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
     let config = config.unwrap_or_default();
 
     let rootfs = global_rootfs(cap_std::ambient_authority())?;
-    let info = get_cached_container_execution_info(&rootfs)?;
+    let info = get_cached_container_execution_info(&rootfs)?
+        .ok_or_else(|| anyhow::anyhow!("This command requires being executed in a container"))?;
     let containerid = &info.id;
     // A random suffix, 8 alphanumeric chars gives 62 ** 8 possibilities, so low chance of collision
     // And we only care about such collissions for *concurrent* processes bound to *the same*

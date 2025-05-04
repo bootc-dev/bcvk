@@ -10,8 +10,4 @@ $env.config = {
     show_banner: false
 }
 
-# A default overlay with our commands, but 
-use /usr/lib/bootc-kit/nu/bootckit.nu
-overlay use bootckit
-
 

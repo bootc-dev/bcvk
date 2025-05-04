@@ -1,11 +1,11 @@
-prefix ?= /usr
-
 all:
 	cargo xtask build
 
 install:
-	install -D -m 0755 target/release/bootc-kit $(DESTDIR)$(prefix)/libexec/bootc-kit-backend 
-	install -D -m 0755 -t $(DESTDIR)$(prefix)/lib/bootc-kit/nu nu/*.nu
+	install -D -m 0755 target/release/bootc-kit $(DESTDIR)/usr/libexec/bootc-kit-backend 
+	install -d -m 0755 $(DESTDIR)/usr/bin
+	ln -s ../lib/bootc-kit/nu/bootckit $(DESTDIR)/usr/bin/bootckit
+	install -D -m 0755 -t $(DESTDIR)/usr/lib/bootc-kit/nu nu/*
 
 makesudoinstall:
 	make

@@ -132,6 +132,8 @@ dependencies = [
  "indoc",
  "rand 0.9.1",
  "rustix",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "xshell",

@@ -12,6 +12,8 @@ fn-error-context = { version = "0.2" }
 bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "578063b24ca5b39498a70cbf91b2f0437916a29c" }
 thiserror = "1.0"
 rustix = { "version" = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
+serde = "1.0.199"
+serde_json = "1.0.116"
 tokio = { version = "1", features = ["full"] }
 xshell = { workspace = true }
 rand = { workspace = true }

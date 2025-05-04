@@ -1,0 +1,26 @@
+#!/usr/bin/nu
+source images.nu
+source entrypoint.nu
+source virtinstall.nu
+
+let bootckit_env = /usr/libexec/bootc-kit-backend detect-env | from json
+
+# Print a welcome message
+def "main welcome" [] {
+    print "Welcome to bootc-kit, an interactive shell for bootc development."
+    print 'This is an instance of nu (https://www.nushell.sh). Type `bootckit help` for help.'
+    if (!$bootckit.container) {
+        print '  NOTE: No container environment detected.'
+    } else if (!$bootckit_env.privileged) {
+        print '  NOTE: This container is running without --privileged, which will reduce functionality.'
+    }
+}
+
+def "main shell" [] {
+    main welcome
+    nu
+}
+
+export def main [] {
+    help bootckit
+}
