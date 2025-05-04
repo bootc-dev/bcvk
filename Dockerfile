@@ -1,17 +1,23 @@
 FROM registry.redhat.io/ubi9/ubi:latest as build
+# Only copy these to ensure layer caching works
+COPY dependencies.txt build-dependencies.txt /src
+WORKDIR /src
 RUN <<EORUN
 set -xeuo pipefail
-# Build dependencies
-dnf -y install cargo rustc git-core
-# And we'll inject nushell into the target, but in order to avoid
-# depsolving twice, download it here.
+# We'll inject nushell into the target, but in order to avoid
+# depsolving twice, download it and other runtime deps at build time.
 dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
 mkdir /out-rpms
 cd /out-rpms
-dnf download nu
+grep -vE -e '^#' /src/dependencies.txt | xargs dnf -y download
 EORUN
+RUN <<EORUN
+set -xeuo pipefail
+# Build dependencies
+grep -vE -e '^#' /src/build-dependencies.txt | xargs dnf -y install
+EORUN
+# Only now copy the full source code so source changes don't blow out the package caches
 COPY . /src
-WORKDIR /src
 # See https://www.reddit.com/r/rust/comments/126xeyx/exploring_the_problem_of_faster_cargo_docker/
 # We aren't using the full recommendations there, just the simple bits.
 RUN --mount=type=cache,target=/src/target \ 

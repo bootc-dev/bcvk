@@ -11,3 +11,6 @@ $env.PROMPT_COMMAND = {|| create_left_prompt }
 $env.config = {
     show_banner: false
 }
+
+# For convenience
+alias b = bootckit

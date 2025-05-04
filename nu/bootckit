@@ -1,4 +1,7 @@
 #!/usr/bin/nu
+
+use hostexec.nu
+
 source images.nu
 source entrypoint.nu
 source virtinstall.nu
@@ -11,8 +14,14 @@ def "main welcome" [] {
     print 'This is an instance of nu (https://www.nushell.sh). Type `bootckit help` for help.'
     if (not $bootckit_env.container) {
         print '  NOTE: No container environment detected.'
-    } else if (not $bootckit_env.privileged) {
-        print '  NOTE: This container is running without --privileged, which will reduce functionality.'
+        return
+    }
+    if (not $bootckit_env.privileged) {
+        print '  NOTE: This container is running without `--privileged`. Functionality will be reduced.'
+        return
+    }
+    if (not (hostexec check)) {
+        print '  WARN: Executing host command via `systemd-run` failed. Functionality will be reduced.'
     }
 }
 

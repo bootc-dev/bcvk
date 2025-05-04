@@ -32,7 +32,7 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
 
     let properties = properties.into_iter().flat_map(|p| ["-p".to_owned(), p]);
     let mut r = Command::new("systemd-run");
-    // Note that we need to specify this RootDirectory property to suppress heuristics
+    // Note that we need to specify this ExecSearchPath property to suppress heuristics
     // systemd-run has to search for the binary, which in the general case won't exist
     // in the container.
     r.args([
@@ -40,7 +40,7 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
         "--collect",
         "-u",
         unit.as_str(),
-        "--property=RootDirectory=/",
+        "--property=ExecSearchPath=/usr/bin",
     ]);
     if config.inherit_fds {
         r.arg("--pipe");
