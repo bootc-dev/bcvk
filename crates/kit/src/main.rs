@@ -4,9 +4,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 pub(crate) mod containerenv;
+mod envdetect;
 mod hostexec;
 mod vm;
-mod envdetect;
 
 #[derive(Parser)]
 struct Cli {
@@ -22,7 +22,7 @@ struct HostExecOpts {
 
 #[derive(Subcommand)]
 enum Commands {
-    DetectEnv,
+    InitEnvironment,
     /// Execute a command in the host context
     Hostexec(HostExecOpts),
 }
@@ -31,9 +31,12 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::DetectEnv => {
+        Commands::InitEnvironment => {
             let e = envdetect::Environment::new()?;
             serde_json::to_writer(std::io::stdout(), &e)?;
+            if e.container && e.privileged && e.pidhost {
+               hostexec::prepare()?;
+            }
         }
         Commands::Hostexec(opts) => {
             hostexec::run(opts.args)?;

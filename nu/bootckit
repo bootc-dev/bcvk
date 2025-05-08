@@ -6,7 +6,12 @@ source images.nu
 source entrypoint.nu
 source virtinstall.nu
 
-let bootckit_env = /usr/libexec/bootc-kit-backend detect-env | from json
+def init [] {
+    
+}
+
+// Always call this early on
+let bootckit_env = /usr/libexec/bootc-kit-backend init-environment | from json
 
 # Print a welcome message
 def "main welcome" [] {
@@ -18,6 +23,10 @@ def "main welcome" [] {
     }
     if (not $bootckit_env.privileged) {
         print '  NOTE: This container is running without `--privileged`. Functionality will be reduced.'
+        return
+    }
+    if (not $bootckit_env.pidhost) {
+        print '  NOTE: This container is running without `--pid=host`. Functionality will be reduced.'
         return
     }
     if (not (hostexec check)) {
