@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use anyhow::Result;
+use color_eyre::Result;
 use clap::{Parser, Subcommand};
 
 pub(crate) mod containerenv;

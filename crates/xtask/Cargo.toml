@@ -11,8 +11,11 @@ name = "xtask"
 path = "src/xtask.rs"
 
 [dependencies]
-anyhow = { workspace = true }
+color-eyre = { workspace = true }
 cfg-if = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-error = { workspace = true }
 xshell = { workspace = true }
 
 [lints]

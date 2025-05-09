@@ -5,8 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow =  { workspace = true }
 cap-std-ext = { version = "4" }
+color-eyre = { workspace = true }
 clap = { version = "4.4", features = ["derive"] }
 fn-error-context = { version = "0.2" }
 bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "578063b24ca5b39498a70cbf91b2f0437916a29c" }

@@ -3,10 +3,10 @@
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, OnceLock};
 
-use anyhow::Result;
 use cap_std_ext::cap_std;
 use cap_std_ext::cap_std::fs::Dir;
 use cap_std_ext::prelude::CapStdExtDirExt;
+use color_eyre::Result;
 use fn_error_context::context;
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,6 @@ pub fn is_container(rootfs: &Dir) -> Result<bool> {
 }
 
 /// Load and parse the `/run/.containerenv` file.
-#[context("Querying container")]
 pub(crate) fn get_container_execution_info(rootfs: &Dir) -> Result<Option<ContainerExecutionInfo>> {
     let f = match rootfs.open_optional(PATH)? {
         Some(f) => BufReader::new(f),

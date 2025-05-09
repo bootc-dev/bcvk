@@ -3,9 +3,12 @@ members = [ "crates/*"]
 resolver = "2"
 
 [workspace.dependencies]
-anyhow = "1"
+color-eyre = "0.6"
 cfg-if = "1.0.0"
 rand = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-error = { version = "0.2.0" }
 xshell = "0.2.7"
 
 [workspace.lints.rust]
@@ -27,3 +30,6 @@ todo = "deny"
 # to trigger, and among the least valuable to fix.
 needless_borrow = "allow"
 needless_borrows_for_generic_args = "allow"
+
+[profile.dev.package.backtrace]
+opt-level = 3

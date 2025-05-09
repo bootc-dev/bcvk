@@ -2,7 +2,7 @@
 
 use std::{os::unix::fs::MetadataExt, path::Path};
 
-use anyhow::{Context, Result};
+use color_eyre::{eyre::Context, Result};
 
 use cap_std_ext::cap_std;
 use serde::{Deserialize, Serialize};

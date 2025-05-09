@@ -3,20 +3,36 @@
 
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use color_eyre::eyre::{eyre, Context, Error, Report};
+use color_eyre::Result;
+use tracing::instrument;
 use xshell::{cmd, Shell};
-
-fn main() {
-    if let Err(e) = try_main() {
-        eprintln!("error: {e:?}");
-        std::process::exit(1);
-    }
-}
 
 #[allow(clippy::type_complexity)]
 const TASKS: &[(&str, fn(&Shell) -> Result<()>)] = &[("build", build)];
 
-fn try_main() -> Result<()> {
+fn install_tracing() {
+    use tracing_error::ErrorLayer;
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
+    let fmt_layer = fmt::layer().with_target(false);
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .with(ErrorLayer::default())
+        .init();
+}
+
+#[instrument]
+fn main() -> Result<(), Report> {
+    install_tracing();
+    color_eyre::install()?;
     // Ensure our working directory is the toplevel
     {
         let toplevel_path = Command::new("git")
@@ -24,7 +40,7 @@ fn try_main() -> Result<()> {
             .output()
             .context("Invoking git rev-parse")?;
         if !toplevel_path.status.success() {
-            anyhow::bail!("Failed to invoke git rev-parse");
+            return Err(eyre!("Failed to invoke git rev-parse"));
         }
         let path = String::from_utf8(toplevel_path.stdout)?;
         std::env::set_current_dir(path.trim()).context("Changing to toplevel")?;
@@ -45,6 +61,7 @@ fn try_main() -> Result<()> {
     Ok(())
 }
 
+#[instrument(skip(sh), name = "build")]
 fn build(sh: &Shell) -> Result<()> {
     cmd!(sh, "cargo build -p bootc-kit --release").run()?;
     cfg_if::cfg_if! {

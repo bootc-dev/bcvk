@@ -3,8 +3,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::process::Command;
 use std::{collections::HashMap, ffi::OsString};
 
-use anyhow::Result;
 use cap_std_ext::cap_std;
+use color_eyre::eyre::eyre;
+use color_eyre::Result;
 use rand::distr::SampleString;
 
 use crate::containerenv::{get_cached_container_execution_info, global_rootfs};
@@ -23,16 +24,15 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
     let rootfs = global_rootfs(cap_std::ambient_authority())?;
     let hostenv = crate::envdetect::Environment::new()?;
     if !hostenv.container {
-        anyhow::bail!("This command requires being executed in a container")
+        return Err(eyre!("This command requires being executed in a container"));
     }
     if !hostenv.privileged {
-        anyhow::bail!("This command requires running with --privileged")
+        return Err(eyre!("This command requires running with --privileged"));
     }
     // This should be filled if run with --privileged and we're in a container
-    let info = get_cached_container_execution_info(&rootfs)?
-        .ok_or_else(|| anyhow::anyhow!("Failed to load /run/.containerenv"))?;
+    let info = get_cached_container_execution_info(&rootfs)?.unwrap();
     if !hostenv.pidhost {
-        anyhow::bail!("This command requires running with --pid=host")
+        return Err(eyre!("This command requires running with --pid=host"));
     }
     let containerid = &info.id;
     // A random suffix, 8 alphanumeric chars gives 62 ** 8 possibilities, so low chance of collision
@@ -82,7 +82,7 @@ where
     c.args(args.into_iter().map(|c| c.into()));
     let st = c.status()?;
     if !st.success() {
-        anyhow::bail!("{st:?}");
+        return Err(eyre!("{st:?}"));
     }
     Ok(())
 }
@@ -115,14 +115,12 @@ pub fn prepare() -> Result<()> {
     let o = c.output()?;
     let st = o.status;
     if !st.success() {
-        anyhow::bail!("{st:?}");
+        return Err(eyre!("{st:?}"));
     }
     let env = parse_env(&o.stdout);
     let Some(&home) = env.get(OsStr::new("HOME")) else {
-        anyhow::bail!("HOME is unset in host");
+        return Err(eyre!("HOME is unset in host"));
     };
-
-    
 
     Ok(())
 }
