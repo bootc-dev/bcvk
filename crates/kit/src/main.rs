@@ -3,10 +3,13 @@ use std::ffi::OsString;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
 use tracing::instrument;
+use virtinstall::VirtInstallOpts;
 
 pub(crate) mod containerenv;
 mod envdetect;
 mod hostexec;
+mod images;
+mod virtinstall;
 mod vm;
 
 #[derive(Parser)]
@@ -17,15 +20,22 @@ struct Cli {
 
 #[derive(Parser)]
 struct HostExecOpts {
+    /// Binary to run
+    bin: OsString,
+
+    /// Arguments to pass to the binary
     #[clap(allow_hyphen_values = true)]
     args: Vec<OsString>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    InitEnvironment,
     /// Execute a command in the host context
     Hostexec(HostExecOpts),
+    #[clap(subcommand)]
+    Images(images::ImagesOpts),
+    #[clap(subcommand)]
+    VirtInstall(VirtInstallOpts),
 }
 
 fn install_tracing() {
@@ -55,16 +65,11 @@ async fn main() -> Result<(), Report> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::InitEnvironment => {
-            let e = envdetect::Environment::new()?;
-            serde_json::to_writer(std::io::stdout(), &e)?;
-            if e.container && e.privileged && e.pidhost {
-                hostexec::prepare()?;
-            }
-        }
         Commands::Hostexec(opts) => {
-            hostexec::run(opts.args)?;
+            hostexec::run(opts.bin, opts.args)?;
         }
+        Commands::Images(opts) => opts.run()?,
+        Commands::VirtInstall(opts) => opts.run()?,
     }
     Ok(())
 }

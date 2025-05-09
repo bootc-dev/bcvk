@@ -1,36 +1,37 @@
 use std::ffi::OsStr;
+use std::io::BufRead;
 use std::os::unix::ffi::OsStrExt;
 use std::process::Command;
 use std::{collections::HashMap, ffi::OsString};
 
-use cap_std_ext::cap_std;
+use bootc_utils::CommandRunExt;
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use rand::distr::SampleString;
 
-use crate::containerenv::{get_cached_container_execution_info, global_rootfs};
-
 #[derive(Debug, Default)]
 pub struct SystemdConfig {
-    inherit_fds: bool,
+    detached: bool,
 }
 
 /// Generate a command instance which uses systemd-run to spawn the target
 /// command in the host environment. However, we use BindsTo= on our
 /// unit to ensure the lifetime of the command is bounded by the container.
-pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
+pub fn command(exe: impl AsRef<OsStr>, config: Option<SystemdConfig>) -> Result<Command> {
+    let exe = exe.as_ref();
     let config = config.unwrap_or_default();
 
-    let rootfs = global_rootfs(cap_std::ambient_authority())?;
-    let hostenv = crate::envdetect::Environment::new()?;
+    let hostenv = crate::envdetect::Environment::get_cached()?;
     if !hostenv.container {
-        return Err(eyre!("This command requires being executed in a container"));
+        return Ok(Command::new(exe));
     }
+    let Some(info) = hostenv.containerenv.as_ref() else {
+        return Err(eyre!("This command requires running with --privileged"));
+    };
     if !hostenv.privileged {
         return Err(eyre!("This command requires running with --privileged"));
     }
     // This should be filled if run with --privileged and we're in a container
-    let info = get_cached_container_execution_info(&rootfs)?.unwrap();
     if !hostenv.pidhost {
         return Err(eyre!("This command requires running with --pid=host"));
     }
@@ -55,7 +56,7 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
         unit.as_str(),
         "--property=ExecSearchPath=/usr/bin",
     ]);
-    if config.inherit_fds {
+    if !config.detached {
         r.arg("--pipe");
     }
     if info.rootless.is_some() {
@@ -63,62 +64,50 @@ pub fn command(config: Option<SystemdConfig>) -> Result<Command> {
     }
     r.args(properties);
     r.arg("--");
+    r.arg(exe);
     Ok(r)
 }
 
 /// Synchronously execute the provided command arguments on the host via `systemd-run`.
 /// File descriptors are inherited by default, and the command's result code is checked for errors.
 /// The default output streams (stdout and stderr) are inherited.
-pub fn run<I, T>(args: I) -> Result<()>
+pub fn run<I, T>(exe: impl AsRef<OsStr>, args: I) -> Result<()>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let config = SystemdConfig {
-        inherit_fds: true,
-        ..Default::default()
-    };
-    let mut c = command(Some(config))?;
+    let mut c = command(exe, None)?;
     c.args(args.into_iter().map(|c| c.into()));
-    let st = c.status()?;
-    if !st.success() {
-        return Err(eyre!("{st:?}"));
-    }
-    Ok(())
+    c.run().map_err(|e| eyre!("{e:?}"))
 }
 
 /// Parse the output of the `env` command
-fn parse_env(e: &[u8]) -> HashMap<&OsStr, &OsStr> {
-    e.split(|&c| c == b'\n')
-        .filter_map(|line| {
-            let mut split = line.split(|&c| c == b'=');
-            let Some(k) = split.next() else {
-                return None;
-            };
-            let Some(v) = split.next() else {
-                return None;
-            };
-            Some((OsStr::from_bytes(k), OsStr::from_bytes(v)))
-        })
-        .collect()
+fn parse_env(e: impl BufRead) -> Result<HashMap<OsString, OsString>> {
+    e.split(b'\n').try_fold(HashMap::new(), |mut r, line| {
+        let line = line?;
+        let mut split = line.split(|&c| c == b'=');
+        let Some(k) = split.next() else {
+            return Ok(r);
+        };
+        let Some(v) = split.next() else {
+            return Ok(r);
+        };
+        r.insert(
+            OsStr::from_bytes(k).to_owned(),
+            OsStr::from_bytes(v).to_owned(),
+        );
+        Ok(r)
+    })
 }
 
 /// Initialize bind mounts and setup
 #[allow(dead_code)]
 pub fn prepare() -> Result<()> {
-    let config = SystemdConfig {
-        inherit_fds: true,
-        ..Default::default()
-    };
-    let mut c = command(Some(config))?;
-    c.args(["env"]);
-    let o = c.output()?;
-    let st = o.status;
-    if !st.success() {
-        return Err(eyre!("{st:?}"));
-    }
-    let env = parse_env(&o.stdout);
-    let Some(&home) = env.get(OsStr::new("HOME")) else {
+    let o = command("env", None)?
+        .run_get_output()
+        .map_err(|e| eyre!(e))?;
+    let env = parse_env(o)?;
+    let Some(&home) = env.get(OsStr::new("HOME")).as_ref() else {
         return Err(eyre!("HOME is unset in host"));
     };
 
@@ -127,18 +116,21 @@ pub fn prepare() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
     fn test_parse_env() {
         let input = b"FOO=bar\nBAZ=quux\n";
-        let expected: HashMap<&OsStr, &OsStr> = [
+        let expected: HashMap<OsString, OsString> = [
             (OsStr::new("FOO"), OsStr::new("bar")),
             (OsStr::new("BAZ"), OsStr::new("quux")),
         ]
         .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
-        let actual = parse_env(input);
+        let actual = parse_env(Cursor::new(input)).unwrap();
         assert_eq!(actual, expected);
     }
 }

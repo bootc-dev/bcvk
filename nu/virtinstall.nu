@@ -120,7 +120,7 @@ export def "main libvirt install-srb" [
     let args = ["virt-install", 
         "--noautoconsole",
         $"--location=($location)",
-        --filesystem=/var/home/walters/.local/share/containers/storage/,host-container-storage,driver.type=virtiofs
+        
         --memorybacking=source.type=memfd,access.mode=shared
         
     ]
