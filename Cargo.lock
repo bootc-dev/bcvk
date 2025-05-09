@@ -136,6 +136,9 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
+ "tracing-error",
+ "tracing-subscriber",
  "xshell",
 ]
 

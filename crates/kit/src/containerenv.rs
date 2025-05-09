@@ -7,7 +7,6 @@ use cap_std_ext::cap_std;
 use cap_std_ext::cap_std::fs::Dir;
 use cap_std_ext::prelude::CapStdExtDirExt;
 use color_eyre::Result;
-use fn_error_context::context;
 use serde::{Deserialize, Serialize};
 
 /// Path is relative to container rootfs (assumed to be /)

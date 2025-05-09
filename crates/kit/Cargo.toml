@@ -15,6 +15,9 @@ rustix = { "version" = "1", features = ["thread", "net", "fs", "pipe", "system",
 serde = "1.0.199"
 serde_json = "1.0.116"
 tokio = { version = "1", features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-error = { workspace = true }
 xshell = { workspace = true }
 rand = { workspace = true }
 cfg-if = { workspace = true }

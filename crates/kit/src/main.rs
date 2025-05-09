@@ -1,7 +1,8 @@
 use std::ffi::OsString;
 
-use color_eyre::Result;
 use clap::{Parser, Subcommand};
+use color_eyre::{Report, Result};
+use tracing::instrument;
 
 pub(crate) mod containerenv;
 mod envdetect;
@@ -27,7 +28,30 @@ enum Commands {
     Hostexec(HostExecOpts),
 }
 
-async fn run() -> Result<()> {
+fn install_tracing() {
+    use tracing_error::ErrorLayer;
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
+    let fmt_layer = fmt::layer().with_target(false);
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .with(ErrorLayer::default())
+        .init();
+}
+
+#[tokio::main(flavor = "current_thread")]
+#[instrument]
+async fn main() -> Result<(), Report> {
+    install_tracing();
+    color_eyre::install()?;
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -35,7 +59,7 @@ async fn run() -> Result<()> {
             let e = envdetect::Environment::new()?;
             serde_json::to_writer(std::io::stdout(), &e)?;
             if e.container && e.privileged && e.pidhost {
-               hostexec::prepare()?;
+                hostexec::prepare()?;
             }
         }
         Commands::Hostexec(opts) => {
@@ -43,12 +67,4 @@ async fn run() -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    if let Err(e) = run().await {
-        eprintln!("error: {e:#}");
-        std::process::exit(1);
-    }
 }
