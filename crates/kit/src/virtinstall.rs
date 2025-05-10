@@ -112,7 +112,12 @@ pub struct FromSRBOpts {
     pub image: String,
 
     /// This virtual machine should not persist across host reboots
+    #[clap(long)]
     pub transient: bool,
+
+    /// Do not bind the container storage via virtiofs
+    #[clap(long)]
+    pub skip_bind_storage: bool,
 
     /// Instead of using a default cloud image associated
     /// with the container image OS, use this libvirt volume
@@ -312,9 +317,11 @@ impl FromSRBOpts {
             None
         };
         // We always pass through the user's container storage
-        vinstall.arg(format!(
-            "--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs"
-        ));
+        if !self.skip_bind_storage
+            vinstall.arg(format!(
+                "--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs"
+            ));
+        }
         if let Some(key) = self.sshkey.as_deref() {
             let cred = sshcred::credential_for_root_ssh(key)?;
             qemu_commandline.push(format!("-smbios type=11,value={cred}"));
