@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
+use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -18,7 +19,7 @@ use crate::{hostexec, images, sshcred};
 const VIRTIOFS_MOUNT: &str = "host-container-storage";
 const USER_STORAGE: &str = ".local/share/containers/storage";
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 enum LibvirtConnection {
     Session,
@@ -109,6 +110,9 @@ pub struct FromSRBOpts {
 
     /// Name of the image to install
     pub image: String,
+
+    /// This virtual machine should not persist across host reboots
+    pub transient: bool,
 
     /// Instead of using a default cloud image associated
     /// with the container image OS, use this libvirt volume
@@ -253,6 +257,11 @@ impl FromSRBOpts {
         let image = self.image.as_str();
         let libvirt_opts = &self.libvirt_opts;
 
+        // For session installs, it's a pain to deal with the TCP port allocation
+        // across reboots, so just make the domain always transient.
+        let transient =
+            self.transient || self.libvirt_opts.connection == LibvirtConnection::Session;
+
         println!("Installing via system-reinstall-bootc: {image}");
 
         let _inspect = images::inspect(image)?;
@@ -269,27 +278,58 @@ impl FromSRBOpts {
         };
         let volpath = vol_path(libvirt_opts, volname)?;
 
+        let mut qemu_commandline = Vec::new();
         let mut vinstall = hostexec::command("virt-install", None)?;
         vinstall.args([
             "--import",
             "--noautoconsole",
             "--memorybacking=source.type=memfd,access.mode=shared",
         ]);
+        vinstall.args(transient.then_some("--transient"));
         vinstall.arg(format!("--os-variant={}", os.osinfo_name()));
         let home = std::env::var("HOME").context("Querying $HOME")?;
         vinstall.args(self.name.map(|name| format!("--name={name}")));
+        vinstall.arg(format!(
+            "--metadata=description=bootc-kit cloud installation of {image}"
+        ));
         vinstall.arg(format!("--memory={}", self.memory));
         vinstall.arg(format!("--vcpus={}", self.vcpus));
-        vinstall.arg(format!("--disk=size={},backing_store={volpath}", self.size));
+        if transient {
+            vinstall.arg(format!("--disk=size={},backing_store={volpath}", self.size));
+        } else {
+            vinstall.arg(format!(
+                "--disk=transient,vol={}/{volname}",
+                libvirt_storage_pool()
+            ));
+        }
+        // Handle usermode port forwarding
+        let port = if self.libvirt_opts.connection == LibvirtConnection::Session {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let port = listener.local_addr()?.port();
+            qemu_commandline.push(format!("-netdev user,id=u0,hostfwd=tcp::{port}-:22"));
+            Some(listener)
+        } else {
+            None
+        };
+        // We always pass through the user's container storage
         vinstall.arg(format!(
             "--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs"
         ));
         if let Some(key) = self.sshkey.as_deref() {
             let cred = sshcred::credential_for_root_ssh(key)?;
-            vinstall.arg(format!("--qemu-commandline=-smbios type=11,value={cred}"));
+            qemu_commandline.push(format!("-smbios type=11,value={cred}"));
         }
+        let qemu_commandline = qemu_commandline.join(" ");
+        if !qemu_commandline.is_empty() {
+            // Note that the way this is implemented through virt-install won't handle spaces in arguments,
+            // but we really shouldn't have any of those.
+            vinstall.arg(format!("--qemu-commandline={qemu_commandline}"));
+        }
+        // Pass through user-provided args
         vinstall.args(self.vinstarg);
         println!("+ {}", vinstall.to_string_pretty());
+        // Drop listener at the last moment to reduce race window
+        drop(port);
         vinstall
             .run()
             .map_err(|e| eyre!("Failed to run virt-install: {e}"))?;
