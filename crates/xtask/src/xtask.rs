@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-use color_eyre::eyre::{eyre, Context, Error, Report};
+use color_eyre::eyre::{eyre, Context, Report};
 use color_eyre::Result;
 use tracing::instrument;
 use xshell::{cmd, Shell};

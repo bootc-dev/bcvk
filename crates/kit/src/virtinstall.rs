@@ -1,51 +1,298 @@
+use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+
+use bootc_utils::CommandRunExt;
 use clap::Parser;
-use color_eyre::{eyre::Context, Result};
-use xshell::cmd;
+use color_eyre::{
+    eyre::{eyre, Context},
+    Result,
+};
+use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::images;
+use tracing::instrument;
 
-const FEDORA_CLOUD: &str = "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2";
+use crate::{hostexec, images, sshcred};
+
 const VIRTIOFS_MOUNT: &str = "host-container-storage";
 const USER_STORAGE: &str = ".local/share/containers/storage";
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+enum LibvirtConnection {
+    Session,
+    System,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub(crate) struct LibvirtGenericOpts {
+    /// Connection to libvirt
+    #[clap(long, default_value = "session")]
+    connection: LibvirtConnection,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub(crate) enum OperatingSystem {
+    Fedora,
+    CentOSStream10,
+}
+
+impl OperatingSystem {
+    fn cloud_url(&self) -> &'static str {
+        match self {
+            Self::Fedora => "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2",
+            Self::CentOSStream10 => todo!(),
+        }
+    }
+
+    fn libvirt_name(&self) -> &'static str {
+        match self {
+            Self::Fedora => "fedora-42-cloud.qcow2",
+            Self::CentOSStream10 => "centos-stream-10-cloud.qcow2",
+        }
+    }
+
+    fn osinfo_name(&self) -> &'static str {
+        match self {
+            OperatingSystem::Fedora => "fedora41",
+            OperatingSystem::CentOSStream10 => "centos-stream10",
+        }
+    }
+
+    fn from_osrelease(osrelease: &HashMap<String, String>) -> Option<Self> {
+        let Some(id) = osrelease.get("ID") else {
+            return None;
+        };
+        if id == "fedora" {
+            return Some(Self::Fedora);
+        }
+        let id_like = osrelease
+            .get("ID_LIKE")
+            .into_iter()
+            .flat_map(|v| v.split_ascii_whitespace())
+            .collect::<Vec<&str>>();
+        if id_like.contains(&"rhel") {
+            return Some(Self::CentOSStream10);
+        } else if id_like.contains(&"fedora") {
+            return Some(Self::Fedora);
+        } else {
+            None
+        }
+    }
+}
+
+fn libvirt_storage_pool() -> &'static str {
+    static POOL: OnceLock<String> = OnceLock::new();
+    POOL.get_or_init(|| {
+        std::env::var("LIBVIRT_STORAGE_POOL").unwrap_or_else(|_| "default".to_string())
+    })
+}
+
 #[derive(clap::Subcommand, Debug)]
-pub enum VirtInstallOpts {
+pub(crate) enum VirtInstallOpts {
+    SyncCloudImage {
+        #[clap(flatten)]
+        libvirt_opts: LibvirtGenericOpts,
+        os: OperatingSystem,
+        #[clap(long)]
+        force: bool,
+    },
     FromSRB(FromSRBOpts),
 }
 
 #[derive(Parser, Debug)]
 pub struct FromSRBOpts {
+    #[clap(flatten)]
+    libvirt_opts: LibvirtGenericOpts,
+
     /// Name of the image to install
     pub image: String,
 
+    /// Instead of using a default cloud image associated
+    /// with the container image OS, use this libvirt volume
+    /// which should hold an image.
+    #[clap(long)]
+    pub base_volume: Option<String>,
+
     /// Name for the virtual machine
+    #[clap(long)]
     pub name: Option<String>,
+
+    /// Path to SSH key
+    #[clap(long)]
+    pub sshkey: Option<String>,
+
+    /// Size of the root volume in GiB
+    #[clap(long, default_value_t = 10)]
+    pub size: u32,
+
+    #[clap(long, default_value_t = 2)]
+    pub vcpus: u32,
+
+    #[clap(long, default_value = "4096")]
+    pub memory: u32,
+
+    /// Pass through this argument to virt-install
+    #[clap(long, short = 'a')]
+    pub vinstarg: Vec<String>,
 }
 
 impl VirtInstallOpts {
     pub fn run(self) -> Result<()> {
         match self {
+            VirtInstallOpts::SyncCloudImage {
+                libvirt_opts,
+                os,
+                force,
+            } => sync(&libvirt_opts, &os, force),
             VirtInstallOpts::FromSRB(opts) => opts.run(),
         }
     }
 }
 
+fn virsh_command(libvirt_opts: &LibvirtGenericOpts) -> Command {
+    let conn = match libvirt_opts.connection {
+        LibvirtConnection::Session => "qemu:///session",
+        LibvirtConnection::System => "qemu:///system",
+    };
+    let mut r = Command::new("virsh");
+    r.args(["-c", conn]);
+    r
+}
+
+#[instrument(skip(libvirt_opts))]
+fn sync(libvirt_opts: &LibvirtGenericOpts, os: &OperatingSystem, force: bool) -> Result<()> {
+    let vol = os.libvirt_name();
+    let exists = virsh_command(&libvirt_opts)
+        .args(["vol-info", "--pool", libvirt_storage_pool(), vol])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?
+        .success();
+    if exists {
+        if !force {
+            tracing::debug!("Volume already present: {vol}");
+            return Ok(());
+        } else {
+            virsh_command(&libvirt_opts)
+                .args(["vol-delete", "--pool", libvirt_storage_pool(), vol])
+                .run()
+                .map_err(|e| eyre!("Failed to delete volume: {e}"))?;
+        }
+    }
+
+    let url = os.cloud_url();
+    tracing::debug!("Fetching {url}");
+    let r = reqwest::blocking::get(url)
+        .and_then(|v| v.error_for_status())
+        .wrap_err_with(|| format!("Fetching {url}"))?;
+    let Some(size) = r.content_length() else {
+        return Err(eyre!("No content length"));
+    };
+    tracing::debug!("size={size}");
+    let size_str = format!("{size}");
+    virsh_command(&libvirt_opts)
+        .args([
+            "vol-create-as",
+            "--format",
+            "qcow2",
+            libvirt_storage_pool(),
+            vol,
+            size_str.as_str(),
+        ])
+        .run()
+        .map_err(|e| eyre!("Failed to create volume: {e}"))?;
+    let tempdir = tempfile::tempdir()?;
+    let tempdir = tempdir.path().to_str().unwrap();
+    // Indirect through a named pipe because libvirt uploads want a file,
+    // but we don't want to download the whole thing and then upload to libvirt
+    let fifopath = &format!("{tempdir}/libvirt-upload.fifo");
+    Command::new("mkfifo")
+        .arg(fifopath)
+        .run()
+        .map_err(|e| eyre!("Creating fifo: {e}"))?;
+    let mut uploader = virsh_command(&libvirt_opts)
+        .args(["vol-upload", vol, fifopath.as_str(), libvirt_storage_pool()])
+        .stdout(Stdio::null())
+        .spawn()?;
+    let mut fifo = OpenOptions::new()
+        .write(true)
+        .open(&fifopath)
+        .wrap_err("Opening fifo")?;
+    let pb = ProgressBar::new(size);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes})",
+        )
+        .unwrap()
+        .progress_chars("#>-"),
+    );
+    let mut r = pb.wrap_read(r);
+    std::io::copy(&mut r, &mut fifo).wrap_err("Fetching and uploading to libvirt")?;
+    drop(fifo);
+    pb.finish_and_clear();
+    let st = uploader.wait()?;
+    if !st.success() {
+        return Err(eyre!("Failed to upload to libvirt: {st:?}"));
+    }
+    Ok(())
+}
+
+fn vol_path(opts: &LibvirtGenericOpts, name: &str) -> Result<String> {
+    let r = virsh_command(opts)
+        .args(["vol-path", name, libvirt_storage_pool()])
+        .run_get_string()
+        .map_err(|e| eyre!("Failed to query volume path: {e}"))?;
+    Ok(r.trim().to_owned())
+}
+
 impl FromSRBOpts {
     pub fn run(self) -> Result<()> {
-        println!("Installing via system-reinstall-bootc: {}", self.image);
-        let inspect = images::inspect(&self.image)?;
-        let osrelease = images::query_osrelease(&self.image)?;
-        let sh = xshell::Shell::new()?;
+        let image = self.image.as_str();
+        let libvirt_opts = &self.libvirt_opts;
+
+        println!("Installing via system-reinstall-bootc: {image}");
+
+        let _inspect = images::inspect(image)?;
+        let osrelease = images::query_osrelease(image)?;
+        let os = OperatingSystem::from_osrelease(&osrelease)
+            .ok_or_else(|| eyre!("Failed to determine compatible cloud image from {image}"))?;
+
+        let volname = if let Some(base) = self.base_volume.as_deref() {
+            base
+        } else {
+            // Ensure we have a cloud image corresponding to this OS
+            sync(&self.libvirt_opts, &os, false)?;
+            os.libvirt_name()
+        };
+        let volpath = vol_path(libvirt_opts, volname)?;
+
+        let mut vinstall = hostexec::command("virt-install", None)?;
+        vinstall.args([
+            "--import",
+            "--noautoconsole",
+            "--memorybacking=source.type=memfd,access.mode=shared",
+        ]);
+        vinstall.arg(format!("--os-variant={}", os.osinfo_name()));
         let home = std::env::var("HOME").context("Querying $HOME")?;
-        let name = self.name.map(|name| format!("--name={name}"));
-        let filesystem =
-            format!("--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs");
-        let location = "TODO";
-        cmd!(
-            sh,
-            "virt-install --noautoconsole --location={location} {name...} {filesystem}"
-        )
-        .run()?;
+        vinstall.args(self.name.map(|name| format!("--name={name}")));
+        vinstall.arg(format!("--memory={}", self.memory));
+        vinstall.arg(format!("--vcpus={}", self.vcpus));
+        vinstall.arg(format!("--disk=size={},backing_store={volpath}", self.size));
+        vinstall.arg(format!(
+            "--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs"
+        ));
+        if let Some(key) = self.sshkey.as_deref() {
+            let cred = sshcred::credential_for_root_ssh(key)?;
+            vinstall.arg(format!("--qemu-commandline=-smbios type=11,value={cred}"));
+        }
+        vinstall.args(self.vinstarg);
+        println!("+ {}", vinstall.to_string_pretty());
+        vinstall
+            .run()
+            .map_err(|e| eyre!("Failed to run virt-install: {e}"))?;
         Ok(())
     }
 }

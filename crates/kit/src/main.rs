@@ -9,6 +9,7 @@ pub(crate) mod containerenv;
 mod envdetect;
 mod hostexec;
 mod images;
+mod sshcred;
 mod virtinstall;
 mod vm;
 
@@ -56,9 +57,8 @@ fn install_tracing() {
         .init();
 }
 
-#[tokio::main(flavor = "current_thread")]
 #[instrument]
-async fn main() -> Result<(), Report> {
+fn main() -> Result<(), Report> {
     install_tracing();
     color_eyre::install()?;
 

@@ -107,11 +107,11 @@ pub fn prepare() -> Result<()> {
         .run_get_output()
         .map_err(|e| eyre!(e))?;
     let env = parse_env(o)?;
-    let Some(&home) = env.get(OsStr::new("HOME")).as_ref() else {
+    let Some(&_home) = env.get(OsStr::new("HOME")).as_ref() else {
         return Err(eyre!("HOME is unset in host"));
     };
 
-    Ok(())
+    todo!()
 }
 
 #[cfg(test)]

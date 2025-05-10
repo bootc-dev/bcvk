@@ -9,9 +9,11 @@ cap-std-ext = { version = "4" }
 chrono = { version = "0.4", features = ["serde"] }
 color-eyre = { workspace = true }
 clap = { version = "4.4", features = ["derive"] }
+data-encoding = { version = "2.9" }
 fn-error-context = { version = "0.2" }
-bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "578063b24ca5b39498a70cbf91b2f0437916a29c" }
-bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "578063b24ca5b39498a70cbf91b2f0437916a29c" }
+bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+indicatif = "0.17"
 thiserror = "1.0"
 rustix = { "version" = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 serde = "1.0.199"
@@ -21,7 +23,12 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-error = { workspace = true }
 shlex = "1"
+reqwest = { version = "0.12", features = ["blocking"] }
+tempfile = "3"
 xshell = { workspace = true }
 rand = { workspace = true }
 cfg-if = { workspace = true }
 indoc = "2.0.6"
+
+[dev-dependencies]
+similar-asserts = "1.5"

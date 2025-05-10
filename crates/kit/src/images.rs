@@ -31,10 +31,10 @@ impl ImagesOpts {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Image {
-    pub names: Vec<String>,
+    pub names: Option<Vec<String>>,
     pub id: String,
     pub size: u64,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(crate) fn inspect(name: &str) -> Result<Image> {
