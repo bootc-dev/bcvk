@@ -22,7 +22,7 @@ COPY . /src
 # We aren't using the full recommendations there, just the simple bits.
 RUN --mount=type=cache,target=/src/target \ 
     --mount=type=cache,target=/root \
-    make && make install install-nushell-config DESTDIR=/out
+    make && make install DESTDIR=/out
 
 FROM registry.redhat.io/ubi9/ubi:latest
 # Install target dependencies we downloaded in the build phase.

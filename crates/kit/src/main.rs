@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::path::Path;
 
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
@@ -6,6 +7,7 @@ use tracing::instrument;
 use virtinstall::VirtInstallOpts;
 
 pub(crate) mod containerenv;
+mod entrypoint;
 mod envdetect;
 mod hostexec;
 mod images;
@@ -19,6 +21,13 @@ mod vm;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Parser)]
+struct EntrypointOpts {
+    /// Path where to write the entrypoint script
+    #[clap(long)]
+    output: Option<String>,
 }
 
 #[derive(Parser)]
@@ -43,6 +52,8 @@ enum Commands {
     Init(init::InitOpts),
     /// Run a bootc container in an ephemeral VM
     RunRmVm(runrmvm::RunRmVmOpts),
+    /// Generate an entrypoint script
+    Entrypoint(EntrypointOpts),
 }
 
 fn install_tracing() {
@@ -78,6 +89,13 @@ fn main() -> Result<(), Report> {
         Commands::VirtInstall(opts) => opts.run()?,
         Commands::Init(opts) => opts.run()?,
         Commands::RunRmVm(opts) => opts.run()?,
+        Commands::Entrypoint(opts) => {
+            if let Some(path) = opts.output {
+                entrypoint::generate_entrypoint_script(Path::new(&path))?;
+            } else {
+                entrypoint::print_entrypoint_script()?;
+            }
+        },
     }
     Ok(())
 }

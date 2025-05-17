@@ -171,7 +171,7 @@ args+=(--read-only --read-only-tmpfs)
 # Default to passing through the current working directory.
 args+=(-v $(pwd):/run/context -w /run/context)
 # And spawn the container.
-exec podman run ${args[@]} "${BOOTC_KIT_IMAGE}" "$@"
+exec podman run ${args[@]} "${BOOTC_KIT_IMAGE}" bootc-kit "$@"
 "#;
     
     file.write_all(script_content.as_bytes()).map_err(|e| eyre!("Failed to write alias script: {}", e))?;
