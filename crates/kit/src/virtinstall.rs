@@ -26,11 +26,17 @@ enum LibvirtConnection {
     System,
 }
 
-#[derive(Debug, Clone, clap::Args)]
+#[derive(Debug, Clone, Default, clap::Args)]
 pub(crate) struct LibvirtGenericOpts {
     /// Connection to libvirt
     #[clap(long, default_value = "session")]
     connection: LibvirtConnection,
+}
+
+impl Default for LibvirtConnection {
+    fn default() -> Self {
+        Self::Session
+    }
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -106,7 +112,7 @@ pub(crate) enum VirtInstallOpts {
 #[derive(Parser, Debug)]
 pub struct FromSRBOpts {
     #[clap(flatten)]
-    libvirt_opts: LibvirtGenericOpts,
+    pub libvirt_opts: LibvirtGenericOpts,
 
     /// Name of the image to install
     pub image: String,

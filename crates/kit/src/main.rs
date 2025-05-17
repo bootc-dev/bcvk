@@ -9,6 +9,8 @@ pub(crate) mod containerenv;
 mod envdetect;
 mod hostexec;
 mod images;
+mod init;
+mod runrmvm;
 mod sshcred;
 mod virtinstall;
 mod vm;
@@ -37,6 +39,10 @@ enum Commands {
     Images(images::ImagesOpts),
     #[clap(subcommand)]
     VirtInstall(VirtInstallOpts),
+    /// Initialize bootc-kit infrastructure
+    Init(init::InitOpts),
+    /// Run a bootc container in an ephemeral VM
+    RunRmVm(runrmvm::RunRmVmOpts),
 }
 
 fn install_tracing() {
@@ -70,6 +76,8 @@ fn main() -> Result<(), Report> {
         }
         Commands::Images(opts) => opts.run()?,
         Commands::VirtInstall(opts) => opts.run()?,
+        Commands::Init(opts) => opts.run()?,
+        Commands::RunRmVm(opts) => opts.run()?,
     }
     Ok(())
 }

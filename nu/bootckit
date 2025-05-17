@@ -7,7 +7,14 @@ source entrypoint.nu
 source virtinstall.nu
 
 def init [] {
-    
+    print "Initializing bootc-kit..."
+    /usr/libexec/bootc-kit-backend Init
+    print "Initialization completed."
+}
+
+def "run-rmvm" [image: string] {
+    print ("Running bootc container " + $image + " in an ephemeral VM...")
+    /usr/libexec/bootc-kit-backend RunRmVm $image
 }
 
 // Always call this early on

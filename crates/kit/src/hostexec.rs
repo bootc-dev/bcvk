@@ -101,17 +101,42 @@ fn parse_env(e: impl BufRead) -> Result<HashMap<OsString, OsString>> {
 }
 
 /// Initialize bind mounts and setup
-#[allow(dead_code)]
 pub fn prepare() -> Result<()> {
     let o = command("env", None)?
         .run_get_output()
         .map_err(|e| eyre!(e))?;
     let env = parse_env(o)?;
-    let Some(&_home) = env.get(OsStr::new("HOME")).as_ref() else {
+    let Some(home) = env.get(OsStr::new("HOME")).map(|h| h.to_string_lossy().to_string()) else {
         return Err(eyre!("HOME is unset in host"));
     };
 
-    todo!()
+    // Make sure libvirt is installed and running
+    let libvirt_status = command("systemctl", None)?
+        .args(["is-active", "libvirtd"])
+        .output()
+        .map_err(|e| eyre!("Checking libvirtd status: {}", e))?;
+
+    if !libvirt_status.status.success() {
+        println!("libvirtd is not running. Trying to start it...");
+        // Try to start libvirtd
+        let start_result = command("systemctl", None)?
+            .args(["start", "libvirtd"])
+            .run();
+
+        if let Err(e) = start_result {
+            println!("Warning: Failed to start libvirtd: {}", e);
+            println!("Some VM-related functionality may not work.");
+        }
+    }
+
+    // Make sure ~/.local/share/containers directory exists for container storage
+    let container_storage = format!("{}/{}", home, ".local/share/containers");
+    command("mkdir", None)?
+        .args(["-p", &container_storage])
+        .run()
+        .map_err(|e| eyre!("Creating container storage directory: {}", e))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
