@@ -317,8 +317,8 @@ impl FromSRBOpts {
             None
         };
         // We always pass through the user's container storage
-        if !self.skip_bind_storage
-            vinstall.arg(format!(
+        if !self.skip_bind_storage {
+        vinstall.arg(format!(
                 "--filesystem={home}/{USER_STORAGE},{VIRTIOFS_MOUNT},driver.type=virtiofs"
             ));
         }
