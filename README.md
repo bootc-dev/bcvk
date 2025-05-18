@@ -11,29 +11,30 @@ where needed such as libvirt.
 
 ## Usage
 
-There are a default set of required 
+There are a default set of required privileges passed to the container image;
+this can get tedious to type, so the `entrypoint` command can be used to print
+a bash script which you can install.
 
 ### Initialize
 
 ```bash
-# First, generate an entrypoint script for easy access
-podman run --rm -ti --privileged --pid=host ghcr.io/bootc-dev/kit bootc-kit entrypoint --output ~/bin/bootc-kit-wrapper
-
-# Now you can use the wrapper to initialize the infrastructure
-~/bin/bootc-kit-wrapper init
+# Output the entrypoint script (you need to ensure ~/.local/bin/ is in $PATH).
+podman run --rm ghcr.io/bootc-dev/kit entrypoint > ~/.local/bin/bck && chmod a+x ~/.local/bin/bck
 ```
 
-This sets up some core infrastructure, such as running an instance of
-https://github.com/cgwalters/cstor-dist
+From here after, `bck` will be used as an alias for this entrypoint script.
+However, again it is not required.
 
-During initialization, you'll be prompted to set up a shell script alias in
-`~/.local/bin/bck` or another location of your choosing to make accessing
-bootc-kit easier.
+### List bootc images
+
+Verify this works to show your bootc images:
+
+`bck images list`
 
 ### Run a bootc container in an ephemeral VM
 
 ```bash
-~/bin/bootc-kit-wrapper run-rmvm <image>
+bck run-rmvm <image>
 ```
 
 This creates an ephemeral VM instantiated from the provided bootc container

@@ -32,6 +32,9 @@ fn ensure_hostexec_initialized() -> Result<Option<&'static ContainerExecutionInf
         return Err(eyre!("This command requires running with --pid=host"));
     }
 
+    // Needed for systemd-run
+    bootc_mount::ensure_mirrored_host_mount("/run/systemd").map_err(|e| eyre!("{e:?}"))?;
+
     Ok(Some(info))
 }
 
