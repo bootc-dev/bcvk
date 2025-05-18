@@ -24,11 +24,7 @@ struct Cli {
 }
 
 #[derive(Parser)]
-struct EntrypointOpts {
-    /// Path where to write the entrypoint script
-    #[clap(long)]
-    output: Option<String>,
-}
+struct EntrypointOpts {}
 
 #[derive(Parser)]
 struct HostExecOpts {
@@ -89,13 +85,9 @@ fn main() -> Result<(), Report> {
         Commands::VirtInstall(opts) => opts.run()?,
         Commands::Init(opts) => opts.run()?,
         Commands::RunRmVm(opts) => opts.run()?,
-        Commands::Entrypoint(opts) => {
-            if let Some(path) = opts.output {
-                entrypoint::generate_entrypoint_script(Path::new(&path))?;
-            } else {
-                entrypoint::print_entrypoint_script()?;
-            }
-        },
+        Commands::Entrypoint(_opts) => {
+            entrypoint::print_entrypoint_script()?;
+        }
     }
     Ok(())
 }

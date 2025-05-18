@@ -28,6 +28,6 @@ FROM registry.redhat.io/ubi9/ubi:latest
 # Install target dependencies we downloaded in the build phase.
 RUN --mount=type=bind,from=build,target=/build rpm -ivh /build/out-rpms/*.rpm
 COPY --from=build /out/ /
-ENTRYPOINT ["bootckit"]
+ENTRYPOINT ["bootc-kit"]
 CMD ["shell"]
 

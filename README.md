@@ -61,4 +61,5 @@ This project aims to implement
 Related projects and content:
 
 - https://github.com/coreos/coreos-assembler/
-- https://github.com/ublue-os/bluefin-lts/blob/main/Justfile
+- 
+
