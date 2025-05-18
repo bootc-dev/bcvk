@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{Report, Result};
 use tracing::instrument;
@@ -36,6 +37,17 @@ struct HostExecOpts {
     args: Vec<OsString>,
 }
 
+#[derive(Parser)]
+struct DebugInternalsOpts {
+    #[command(subcommand)]
+    command: DebugInternalsCmds,
+}
+
+#[derive(Subcommand)]
+enum DebugInternalsCmds {
+    OpenTree { path: std::path::PathBuf },
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Execute a command in the host context
@@ -50,6 +62,8 @@ enum Commands {
     RunRmVm(runrmvm::RunRmVmOpts),
     /// Generate an entrypoint script
     Entrypoint(EntrypointOpts),
+    #[clap(hide = true)]
+    DebugInternals(DebugInternalsOpts),
 }
 
 fn install_tracing() {
@@ -88,6 +102,18 @@ fn main() -> Result<(), Report> {
         Commands::Entrypoint(_opts) => {
             entrypoint::print_entrypoint_script()?;
         }
+        Commands::DebugInternals(opts) => match opts.command {
+            DebugInternalsCmds::OpenTree { path } => {
+                let fd = rustix::mount::open_tree(
+                    rustix::fs::CWD,
+                    path,
+                    rustix::mount::OpenTreeFlags::OPEN_TREE_CLOEXEC
+                        | rustix::mount::OpenTreeFlags::OPEN_TREE_CLONE,
+                )?;
+                let fd = Dir::reopen_dir(&fd)?;
+                eprintln!("{:?}", fd.entries()?.into_iter().collect::<Vec<_>>());
+            }
+        },
     }
     Ok(())
 }
