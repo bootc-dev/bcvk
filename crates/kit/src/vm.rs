@@ -15,7 +15,7 @@ pub fn check_libvirt_available() -> Result<bool> {
         .args(["is-active", "libvirtd"])
         .output()
         .map_err(|e| eyre!("Checking if libvirtd is running: {}", e))?;
-    
+
     Ok(status.status.success())
 }
 
@@ -26,7 +26,7 @@ pub fn vm_exists(name: &str) -> Result<bool> {
         .args(["list", "--all", "--name"])
         .output()
         .map_err(|e| eyre!("Listing VMs: {}", e))?;
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().any(|line| line.trim() == name))
 }
@@ -38,11 +38,11 @@ pub fn get_vm_state(name: &str) -> Result<String> {
         .args(["domstate", name])
         .output()
         .map_err(|e| eyre!("Getting VM state: {}", e))?;
-    
+
     if !output.status.success() {
         return Err(eyre!("Failed to get state for VM {}", name));
     }
-    
+
     let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(state)
 }
@@ -54,20 +54,20 @@ pub fn ensure_vm_running(name: &str) -> Result<()> {
     if !vm_exists(name)? {
         return Err(eyre!("VM {} does not exist", name));
     }
-    
+
     // Check the VM state
     let state = get_vm_state(name)?;
     if state == "running" {
         return Ok(());
     }
-    
+
     // Start the VM
     println!("Starting VM {}...", name);
     hostexec::command("virsh", None)?
         .args(["start", name])
         .run()
         .map_err(|e| eyre!("Starting VM {}: {}", name, e))?;
-    
+
     Ok(())
 }
 
@@ -78,13 +78,13 @@ pub fn stop_vm(name: &str, force: bool) -> Result<()> {
     if !vm_exists(name)? {
         return Err(eyre!("VM {} does not exist", name));
     }
-    
+
     // Check the VM state
     let state = get_vm_state(name)?;
     if state != "running" {
         return Ok(());
     }
-    
+
     // Stop the VM
     if force {
         println!("Forcing VM {} to stop...", name);
@@ -99,7 +99,7 @@ pub fn stop_vm(name: &str, force: bool) -> Result<()> {
             .run()
             .map_err(|e| eyre!("Shutting down VM {}: {}", name, e))?;
     }
-    
+
     Ok(())
 }
 
@@ -110,20 +110,20 @@ pub fn delete_vm(name: &str) -> Result<()> {
     if !vm_exists(name)? {
         return Err(eyre!("VM {} does not exist", name));
     }
-    
+
     // If the VM is running, stop it first
     let state = get_vm_state(name)?;
     if state == "running" {
         stop_vm(name, true)?;
     }
-    
+
     // Undefine the VM
     println!("Deleting VM {}...", name);
     hostexec::command("virsh", None)?
         .args(["undefine", name, "--remove-all-storage"])
         .run()
         .map_err(|e| eyre!("Deleting VM {}: {}", name, e))?;
-    
+
     Ok(())
 }
 
@@ -134,20 +134,21 @@ pub fn get_vm_ip(name: &str) -> Result<Option<String>> {
         .args(["domifaddr", name])
         .output()
         .map_err(|e| eyre!("Getting VM IP address: {}", e))?;
-    
+
     if !output.status.success() {
         return Err(eyre!("Failed to get IP address for VM {}", name));
     }
-    
+
     // Parse the output to find the IP address
     // Example output:
     // Name       MAC address          Protocol     Address
     // -------------------------------------------------------
     // vnet0      52:54:00:01:02:03    ipv4         192.168.122.2/24
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    for line in stdout.lines().skip(2) { // Skip header lines
+
+    for line in stdout.lines().skip(2) {
+        // Skip header lines
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 4 {
             let addr = parts[3];
@@ -156,6 +157,6 @@ pub fn get_vm_ip(name: &str) -> Result<Option<String>> {
             }
         }
     }
-    
+
     Ok(None) // No IP address found
 }

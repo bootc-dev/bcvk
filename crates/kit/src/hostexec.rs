@@ -9,21 +9,17 @@ use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use rand::distr::SampleString;
 
+use crate::containerenv::ContainerExecutionInfo;
+
 #[derive(Debug, Default)]
 pub struct SystemdConfig {
     detached: bool,
 }
 
-/// Generate a command instance which uses systemd-run to spawn the target
-/// command in the host environment. However, we use BindsTo= on our
-/// unit to ensure the lifetime of the command is bounded by the container.
-pub fn command(exe: impl AsRef<OsStr>, config: Option<SystemdConfig>) -> Result<Command> {
-    let exe = exe.as_ref();
-    let config = config.unwrap_or_default();
-
+fn ensure_hostexec_initialized() -> Result<Option<&'static ContainerExecutionInfo>> {
     let hostenv = crate::envdetect::Environment::get_cached()?;
     if !hostenv.container {
-        return Ok(Command::new(exe));
+        return Ok(None);
     }
     let Some(info) = hostenv.containerenv.as_ref() else {
         return Err(eyre!("This command requires running with --privileged"));
@@ -35,6 +31,21 @@ pub fn command(exe: impl AsRef<OsStr>, config: Option<SystemdConfig>) -> Result<
     if !hostenv.pidhost {
         return Err(eyre!("This command requires running with --pid=host"));
     }
+
+    Ok(Some(info))
+}
+
+/// Generate a command instance which uses systemd-run to spawn the target
+/// command in the host environment. However, we use BindsTo= on our
+/// unit to ensure the lifetime of the command is bounded by the container.
+pub fn command(exe: impl AsRef<OsStr>, config: Option<SystemdConfig>) -> Result<Command> {
+    let exe = exe.as_ref();
+    let config = config.unwrap_or_default();
+
+    let Some(info) = ensure_hostexec_initialized()? else {
+        return Ok(Command::new(exe));
+    };
+
     let containerid = &info.id;
     // A random suffix, 8 alphanumeric chars gives 62 ** 8 possibilities, so low chance of collision
     // And we only care about such collissions for *concurrent* processes bound to *the same*
@@ -79,6 +90,11 @@ where
     let mut c = command(exe, None)?;
     c.args(args.into_iter().map(|c| c.into()));
     c.run().map_err(|e| eyre!("{e:?}"))
+}
+
+/// Run podman synchronously in the host namespace
+pub fn podman() -> Result<Command> {
+    command("podman", None)
 }
 
 /// Parse the output of the `env` command
