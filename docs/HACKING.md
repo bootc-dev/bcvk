@@ -5,7 +5,8 @@
   the project compiles and unit tests work. This assumes these tools are in the current
   host environment.
 - The actual build process though is via `just build-container`
-  as the primary way this project runs is via podman.
+  as the primary way this project runs is via podman, and then use
+  `just test-integration` to run the integration tests.
 
 ## Running
 

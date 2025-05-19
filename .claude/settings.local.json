@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(just:*)"
+      "Bash(bck images list:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   }

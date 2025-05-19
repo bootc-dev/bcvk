@@ -16,9 +16,13 @@ apply-fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
-# Run tests
+# Run unit tests
 test:
     cargo test --all-features
+
+# Run integration tests
+test-integration:
+    cargo run -p integration-tests
 
 # Check the project for errors
 check:

@@ -12,17 +12,31 @@ use crate::hostexec;
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum ImagesOpts {
-    List,
+    /// List available bootc images
+    List {
+        /// Output as JSON
+        #[clap(long)]
+        json: bool,
+    },
 }
 
 impl ImagesOpts {
     pub(crate) fn run(self) -> Result<()> {
         match self {
-            ImagesOpts::List => {
-                let r = hostexec::command("podman", None)?
-                    .args(["images", "--filter=label=containers.bootc=1"])
-                    .exec();
-                Err(r.into())
+            ImagesOpts::List { json } => {
+                if json {
+                    // Use the existing list function that returns JSON
+                    let images = list()?;
+                    let json_output = serde_json::to_string_pretty(&images)?;
+                    println!("{}", json_output);
+                    Ok(())
+                } else {
+                    // Use the standard podman images command for table output
+                    let r = hostexec::command("podman", None)?
+                        .args(["images", "--filter=label=containers.bootc=1"])
+                        .exec();
+                    Err(r.into())
+                }
             }
         }
     }
@@ -34,6 +48,8 @@ pub struct Image {
     pub names: Option<Vec<String>>,
     pub id: String,
     pub size: u64,
+    #[serde(default)]
+    #[serde(with = "chrono::serde::ts_seconds_option")]
     pub created: Option<chrono::DateTime<chrono::Utc>>,
 }
 
