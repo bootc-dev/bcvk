@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::path::Path;
 
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};

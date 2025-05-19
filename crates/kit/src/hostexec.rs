@@ -32,9 +32,6 @@ fn ensure_hostexec_initialized() -> Result<Option<&'static ContainerExecutionInf
         return Err(eyre!("This command requires running with --pid=host"));
     }
 
-    // Needed for systemd-run
-    bootc_mount::ensure_mirrored_host_mount("/run/systemd").map_err(|e| eyre!("{e:?}"))?;
-
     Ok(Some(info))
 }
 
@@ -101,6 +98,7 @@ pub fn podman() -> Result<Command> {
 }
 
 /// Parse the output of the `env` command
+#[allow(dead_code)]
 fn parse_env(e: impl BufRead) -> Result<HashMap<OsString, OsString>> {
     e.split(b'\n').try_fold(HashMap::new(), |mut r, line| {
         let line = line?;
@@ -117,22 +115,6 @@ fn parse_env(e: impl BufRead) -> Result<HashMap<OsString, OsString>> {
         );
         Ok(r)
     })
-}
-
-/// Initialize bind mounts and setup
-pub fn prepare() -> Result<()> {
-    let o = command("env", None)?
-        .run_get_output()
-        .map_err(|e| eyre!(e))?;
-    let env = parse_env(o)?;
-    let Some(home) = env
-        .get(OsStr::new("HOME"))
-        .map(|h| h.to_string_lossy().to_string())
-    else {
-        return Err(eyre!("HOME is unset in host"));
-    };
-
-    Ok(())
 }
 
 #[cfg(test)]

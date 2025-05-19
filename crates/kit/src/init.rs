@@ -3,20 +3,12 @@
 //! This initializes core infrastructure, like setting up cstor-dist and
 //! configuring shell aliases for easier access.
 
-use std::fs::{create_dir_all, OpenOptions};
-use std::io::{self, Write};
-use std::path::Path;
-
 use bootc_utils::CommandRunExt;
 use color_eyre::{eyre::eyre, Result};
 use tracing::instrument;
 
 use crate::hostexec;
 
-/// Name of the alias script we'll offer to create
-const ALIAS_SCRIPT_NAME: &str = "bck";
-/// Default location for the alias script
-const DEFAULT_ALIAS_PATH: &str = ".local/bin";
 /// Default cstor-dist image
 const DEFAULT_CSTOR_DIST_IMAGE: &str = "ghcr.io/cgwalters/cstor-dist:latest";
 /// Environment variable to override the cstor-dist image
