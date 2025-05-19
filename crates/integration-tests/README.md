@@ -23,15 +23,15 @@ Example:
 ```rust
 fn test_new_feature(sh: &Shell) -> Result<()> {
     println!("Running test: new feature");
-    
+
     // Run command
     let output = cmd!(sh, "bck new-feature").output()?;
-    
+
     // Check result
     if !output.status.success() {
         return Err(eyre!("Failed to run 'bck new-feature'"));
     }
-    
+
     println!("✅ Test passed: new feature");
     Ok(())
 }
