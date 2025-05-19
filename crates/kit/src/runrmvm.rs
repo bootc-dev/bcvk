@@ -61,8 +61,8 @@ impl RunRmVmOpts {
             return Err(eyre!("SSH key not found: {}", sshkey_path));
         }
 
-        // Read the SSH key
-        let _key_content = std::fs::read_to_string(&sshkey_path)
+        // Verify we can read the SSH key
+        std::fs::read_to_string(&sshkey_path)
             .map_err(|e| eyre!("Reading SSH key from {}: {}", sshkey_path, e))?;
 
         // Create a temporary directory for VM-related files

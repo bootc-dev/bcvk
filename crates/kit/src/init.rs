@@ -20,15 +20,7 @@ const CSTOR_DIST_PORT_ENV: &str = "CSTOR_DIST_PORT";
 
 /// Options for the init command
 #[derive(Debug, Clone, clap::Args)]
-pub(crate) struct InitOpts {
-    /// Skip the prompt to set up shell alias
-    #[clap(long)]
-    skip_alias_prompt: bool,
-
-    /// Path where to write the shell alias (default: ~/.local/bin/bck)
-    #[clap(long)]
-    alias_path: Option<String>,
-}
+pub(crate) struct InitOpts {}
 
 impl InitOpts {
     #[instrument]

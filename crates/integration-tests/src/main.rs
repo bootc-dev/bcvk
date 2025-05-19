@@ -88,8 +88,9 @@ fn test_markdown_no_trailing_whitespace() -> Result<()> {
     }
 
     // Start checking from the project root
-    let project_root = Path::new("/var/home/walters/src/github/cgwalters/bootc-kit");
-    check_dir(project_root, &mut violations)?;
+    let project_root =
+        std::env::current_dir().map_err(|e| eyre!("Failed to get current directory: {}", e))?;
+    check_dir(&project_root, &mut violations)?;
 
     if violations.is_empty() {
         println!("✅ Test passed: No trailing whitespace in Markdown files");

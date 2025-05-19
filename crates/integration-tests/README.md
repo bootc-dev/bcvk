@@ -7,7 +7,7 @@ This crate contains integration tests for the bootc-kit project.
 To run the integration tests, use:
 
 ```
-just integration-test
+just test-integration
 ```
 
 ## Adding New Tests
