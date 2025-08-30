@@ -7,6 +7,7 @@ NEVER execute `sudo <anything>` without explicit permission.
 
 # Writing commits
 
-Without explicit permission, don't create git commits, and DO NOT `git push`.
+DO NOT run `git push` without permission.
 
+When the user says "to auto commit", attempt to create 
 

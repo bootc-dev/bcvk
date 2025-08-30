@@ -10,7 +10,8 @@
       "Bash(gh pr view:*)",
       "Bash(cargo check:*)",
       "WebFetch(domain:github.com)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(cargo build:*)"
     ],
     "deny": []
   }

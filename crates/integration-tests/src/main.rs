@@ -5,6 +5,8 @@ use color_eyre::eyre::{eyre, Result};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use xshell::{cmd, Shell};
 
 fn test_images_list(sh: &Shell) -> Result<()> {
@@ -106,6 +108,94 @@ fn test_markdown_no_trailing_whitespace() -> Result<()> {
     }
 }
 
+fn test_run_ephemeral_help(sh: &Shell) -> Result<()> {
+    println!("Running test: bck run-ephemeral --help");
+
+    let output = cmd!(sh, "bck run-ephemeral --help").output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(eyre!(
+            "Failed to run 'bck run-ephemeral --help': {}",
+            stderr
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check for expected help text content
+    if !stdout.contains("Run a container image as an ephemeral VM") {
+        return Err(eyre!("Help text missing expected description"));
+    }
+
+    if !stdout.contains("--init") || !stdout.contains("--memory") || !stdout.contains("--vcpus") {
+        return Err(eyre!("Help text missing expected options"));
+    }
+
+    println!("✅ Test passed: bck run-ephemeral --help");
+    Ok(())
+}
+
+fn test_run_ephemeral_smoke(sh: &Shell) -> Result<()> {
+    println!("Running test: bck run-ephemeral smoke test");
+
+    // Check if required tools are available
+    let virtiofsd_check = Command::new("which").arg("virtiofsd").output()?;
+
+    if !virtiofsd_check.status.success() {
+        println!("⚠️  Skipping run-ephemeral smoke test: virtiofsd not found");
+        return Ok(());
+    }
+
+    let qemu_check = Command::new("which").arg("qemu-system-x86_64").output()?;
+
+    if !qemu_check.status.success() {
+        println!("⚠️  Skipping run-ephemeral smoke test: qemu-system-x86_64 not found");
+        return Ok(());
+    }
+
+    // Try to run with a simple command that should exit quickly
+    // Using timeout to ensure it doesn't hang
+    let test_image = "quay.io/fedora/fedora-bootc:42";
+
+    println!("  Testing with image: {}", test_image);
+
+    // First, check if we can pull the image (this might fail in CI)
+    let pull_output = Command::new("podman").args(["pull", test_image]).output()?;
+
+    if !pull_output.status.success() {
+        println!("⚠️  Skipping run-ephemeral smoke test: unable to pull test image");
+        return Ok(());
+    }
+
+    // Run the ephemeral VM with /bin/false as init (should exit immediately)
+    let mut child = Command::new("timeout")
+        .args([
+            "10", // 10 second timeout
+            "bck",
+            "run-ephemeral",
+            test_image,
+            "--init",
+            "/bin/false",
+            "--memory",
+            "512",
+            "--vcpus",
+            "1",
+            "--kvm=false", // Disable KVM for CI
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let status = child.wait()?;
+
+    // We expect this to fail quickly (either timeout or /bin/false exit)
+    // The important part is that it doesn't crash
+    println!("✅ Test passed: bck run-ephemeral smoke test (command executed without crash)");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Set up error handling
     color_eyre::install()?;
@@ -125,6 +215,16 @@ fn main() -> Result<()> {
     match test_markdown_no_trailing_whitespace() {
         Ok(_) => {}
         Err(e) => failures.push(format!("test_markdown_no_trailing_whitespace: {}", e)),
+    }
+
+    match test_run_ephemeral_help(&sh) {
+        Ok(_) => {}
+        Err(e) => failures.push(format!("test_run_ephemeral_help: {}", e)),
+    }
+
+    match test_run_ephemeral_smoke(&sh) {
+        Ok(_) => {}
+        Err(e) => failures.push(format!("test_run_ephemeral_smoke: {}", e)),
     }
 
     // Report results

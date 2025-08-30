@@ -1,9 +1,6 @@
-use std::fs::File;
 use std::io::Write;
-use std::path::Path;
-use std::process::Command;
 
-use clap::Parser;
+use bootc_utils::CommandRunExt as _;
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use tracing::instrument;

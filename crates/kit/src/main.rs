@@ -14,6 +14,7 @@ mod images;
 mod init;
 mod libvirt;
 mod podman;
+mod run_ephemeral;
 mod sshcred;
 mod utils;
 mod virtinstall;
@@ -62,6 +63,8 @@ enum Commands {
     Init(init::InitOpts),
     /// Generate an entrypoint script
     Entrypoint(EntrypointOpts),
+    /// Run a container image as an ephemeral VM with direct kernel boot
+    RunEphemeral(run_ephemeral::RunEphemeralOpts),
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
 }
@@ -100,6 +103,9 @@ fn main() -> Result<(), Report> {
         Commands::Init(opts) => opts.run()?,
         Commands::Entrypoint(_opts) => {
             entrypoint::print_entrypoint_script()?;
+        }
+        Commands::RunEphemeral(opts) => {
+            run_ephemeral::run(opts)?;
         }
         Commands::DebugInternals(opts) => match opts.command {
             DebugInternalsCmds::OpenTree { path } => {

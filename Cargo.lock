@@ -194,6 +194,7 @@ dependencies = [
  "tracing",
  "tracing-error",
  "tracing-subscriber",
+ "uuid",
  "virt",
  "virt-sys",
  "xshell",
