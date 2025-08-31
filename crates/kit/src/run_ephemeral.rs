@@ -36,6 +36,21 @@ pub struct RunEphemeralOpts {
     /// Enable debug mode (drop into shell instead of running QEMU)
     #[clap(long)]
     pub debug: bool,
+
+    /// Bind mount a host directory (read-write) into the VM at /mnt/<name>
+    /// Format: <host-path>:<name> or <host-path> (uses basename as name)
+    #[clap(long = "bind", value_name = "HOST_PATH[:NAME]")]
+    pub bind_mounts: Vec<String>,
+
+    /// Bind mount a host directory (read-only) into the VM at /mnt/<name>
+    /// Format: <host-path>:<name> or <host-path> (uses basename as name)
+    #[clap(long = "ro-bind", value_name = "HOST_PATH[:NAME]")]
+    pub ro_bind_mounts: Vec<String>,
+
+    /// Directory containing systemd units to inject into /etc/systemd/system
+    /// The directory should contain 'system/' subdirectory with .service files
+    #[clap(long = "systemd-units")]
+    pub systemd_units_dir: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -82,6 +97,41 @@ fn run_qemu_in_container(opts: &RunEphemeralOpts) -> Result<std::process::ExitSt
     let self_exe = std::env::current_exe()?;
     let self_exe = self_exe.as_str()?;
 
+    // Parse mount arguments (both bind and ro-bind)
+    let mut host_mounts = Vec::new();
+    
+    // Parse writable bind mounts
+    for mount_spec in &opts.bind_mounts {
+        let (host_path, mount_name) = if let Some((path, name)) = mount_spec.split_once(':') {
+            (path.to_string(), name.to_string())
+        } else {
+            let path = mount_spec.clone();
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("mount"))
+                .to_string_lossy()
+                .to_string();
+            (path, name)
+        };
+        host_mounts.push((host_path, mount_name, false)); // false = writable
+    }
+    
+    // Parse read-only bind mounts
+    for mount_spec in &opts.ro_bind_mounts {
+        let (host_path, mount_name) = if let Some((path, name)) = mount_spec.split_once(':') {
+            (path.to_string(), name.to_string())
+        } else {
+            let path = mount_spec.clone();
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("mount"))
+                .to_string_lossy()
+                .to_string();
+            (path, name)
+        };
+        host_mounts.push((host_path, mount_name, true)); // true = read-only
+    }
+
     // Run the container with the setup script
     let mut cmd = Command::new("podman");
     cmd.arg("run");
@@ -110,12 +160,27 @@ fn run_qemu_in_container(opts: &RunEphemeralOpts) -> Result<std::process::ExitSt
         "-v",
         &format!("{self_exe}:/run/selfexe:ro"),
         // And bind mount in the pristine image (without any mounts on top)
-        // that we'll use as a mount source for virtiofs.
+        // that we'll use as a mount source for virtiofs. Mount as rw for testing.
         &format!(
-            "--mount=type=image,source={},target=/run/source-image",
+            "--mount=type=image,source={},target=/run/source-image,rw=true",
             opts.image.as_str()
         ),
     ]);
+
+    // Add host directory mounts to the container
+    for (host_path, mount_name, is_readonly) in &host_mounts {
+        let mount_spec = if *is_readonly {
+            format!("{}:/run/host-mounts/{}:ro", host_path, mount_name)
+        } else {
+            format!("{}:/run/host-mounts/{}", host_path, mount_name)
+        };
+        cmd.args(["-v", &mount_spec]);
+    }
+    
+    // Mount systemd units directory if specified
+    if let Some(ref units_dir) = opts.systemd_units_dir {
+        cmd.args(["-v", &format!("{}:/run/systemd-units:ro", units_dir)]);
+    }
 
     // Set debug mode environment variable if requested
     if opts.debug {
@@ -138,6 +203,7 @@ fn run_qemu_in_container(opts: &RunEphemeralOpts) -> Result<std::process::ExitSt
     if !opts.no_console {
         cmd.args(["-e", "BOOTC_CONSOLE=1"]);
     }
+
 
     let status = cmd
         .args([&opts.image, "/run/entrypoint"])
@@ -171,6 +237,63 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     Ok(())
 }
 
+fn inject_systemd_units() -> Result<()> {
+    use std::fs;
+    
+    info!("Injecting systemd units from /run/systemd-units");
+    
+    let source_units = "/run/systemd-units/system";
+    let target_units = "/run/source-image/etc/systemd/system";
+    
+    if !std::path::Path::new(source_units).exists() {
+        info!("No system/ directory found in systemd-units, skipping unit injection");
+        return Ok(());
+    }
+    
+    // Create target directories
+    fs::create_dir_all(target_units)?;
+    fs::create_dir_all(&format!("{}/default.target.wants", target_units))?;
+    
+    // Copy all .service files
+    for entry in fs::read_dir(source_units)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().map_or(false, |ext| ext == "service") {
+            let filename = path.file_name().unwrap().to_string_lossy();
+            let target_path = format!("{}/{}", target_units, filename);
+            fs::copy(&path, &target_path)?;
+            info!("Copied systemd unit: {}", filename);
+        }
+    }
+    
+    // Copy wants directory if it exists
+    let source_wants = "/run/systemd-units/system/default.target.wants";
+    let target_wants = &format!("{}/default.target.wants", target_units);
+    
+    if std::path::Path::new(source_wants).exists() {
+        for entry in fs::read_dir(source_wants)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_symlink() || path.is_file() {
+                let filename = path.file_name().unwrap().to_string_lossy();
+                let target_path = format!("{}/{}", target_wants, filename);
+                
+                if path.is_symlink() {
+                    let link_target = fs::read_link(&path)?;
+                    let _ = fs::remove_file(&target_path); // Remove if exists
+                    std::os::unix::fs::symlink(link_target, &target_path)?;
+                } else {
+                    fs::copy(&path, &target_path)?;
+                }
+                info!("Copied systemd wants link: {}", filename);
+            }
+        }
+    }
+    
+    info!("Systemd unit injection complete");
+    Ok(())
+}
+
 pub(crate) fn run_impl(opts: RunEphemeralImplOpts) -> Result<()> {
     use crate::qemu;
     use crate::virtiofsd;
@@ -182,6 +305,11 @@ pub(crate) fn run_impl(opts: RunEphemeralImplOpts) -> Result<()> {
 
     // Check if we're in debug mode
     let debug_mode = std::env::var("DEBUG_MODE").unwrap_or_default() == "true";
+    
+    // Copy systemd units if provided
+    if std::path::Path::new("/run/systemd-units").exists() {
+        inject_systemd_units()?;
+    }
 
     // Find kernel and initramfs from the container image (not the host)
     let modules_dir = Path::new("/run/source-image/usr/lib/modules");
@@ -249,7 +377,84 @@ pub(crate) fn run_impl(opts: RunEphemeralImplOpts) -> Result<()> {
         return Err(eyre!("Failed to bind mount initramfs"));
     }
 
-    // Start virtiofsd in background
+    // Create mount points in a writable location for host mounts
+    if std::path::Path::new("/run/host-mounts").exists() {
+        // Create writable mount directory
+        let mnt_dir = "/run/host-mount-overlay";
+        fs::create_dir_all(mnt_dir)?;
+        
+        for entry in fs::read_dir("/run/host-mounts")? {
+            let entry = entry?;
+            let mount_name = entry.file_name();
+            let mount_target = format!("{}/{}", mnt_dir, mount_name.to_string_lossy());
+            
+            // Determine if this mount should be read-only by checking if the container mount is ro
+            let source_path = entry.path();
+            
+            // Check if this directory is mounted as read-only using findmnt
+            let mount_name = entry.file_name();
+            let mount_name_str = mount_name.to_string_lossy();
+            let mount_path = format!("/run/host-mounts/{}", mount_name_str);
+            let is_readonly = Command::new("findmnt")
+                .args(["-n", "-o", "OPTIONS", &mount_path])
+                .output()
+                .map(|output| {
+                    let options = String::from_utf8_lossy(&output.stdout);
+                    options.contains("ro")
+                })
+                .unwrap_or(false);
+            
+            let mode = if is_readonly { "read-only" } else { "read-write" };
+            info!("Mounting host directory {} to {} ({})", source_path.display(), mount_target, mode);
+            
+            // Create mount point
+            fs::create_dir_all(&mount_target)?;
+            
+            // Bind mount the host directory
+            let mut mount_cmd = Command::new("mount");
+            if is_readonly {
+                mount_cmd.args([
+                    "--bind",
+                    "-o",
+                    "ro",
+                    &source_path.to_string_lossy(),
+                    &mount_target,
+                ]);
+            } else {
+                mount_cmd.args([
+                    "--bind",
+                    &source_path.to_string_lossy(),
+                    &mount_target,
+                ]);
+            }
+            
+            let status = mount_cmd.status().context("Failed to bind mount host directory")?;
+            if !status.success() {
+                return Err(eyre!("Failed to bind mount host directory: {}", mount_target));
+            }
+        }
+        
+        // Mount the host directories to a location accessible by virtiofsd
+        // We'll create the final mount points directly in the shared directory
+        let shared_mnt = "/run/inner-shared/mnt";
+        fs::create_dir_all(shared_mnt)?;
+        
+        let mut mount_cmd = Command::new("mount");
+        mount_cmd.args([
+            "--bind",
+            mnt_dir,
+            shared_mnt,
+        ]);
+        let status = mount_cmd.status().context("Failed to bind mount host mount overlay to shared")?;
+        if !status.success() {
+            return Err(eyre!("Failed to bind mount host mount overlay to {}", shared_mnt));
+        }
+        
+        info!("Successfully mounted host directories to {}", shared_mnt);
+    }
+
+    // Start virtiofsd in background using the source image directly
+    // If we have host mounts, we'll need QEMU to mount them separately
     let virtiofsd_config = virtiofsd::VirtiofsdConfig::default();
     let mut virtiofsd = virtiofsd::spawn_virtiofsd(&virtiofsd_config)?;
 
