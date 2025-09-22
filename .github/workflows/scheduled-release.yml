@@ -1,0 +1,112 @@
+name: Create Release PR
+
+on:
+  schedule:
+    # Run every 3 weeks on Monday at 8:00 AM UTC
+    # Note: GitHub Actions doesn't support "every 3 weeks" directly,
+    # so we use a workaround by running weekly and checking if it's been 3 weeks
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.2.0). Leave empty to auto-increment.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-release-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if it's time for a release
+        id: check_schedule
+        run: |
+          # For manual workflow dispatch, always proceed
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          START_DATE="2025-09-22" # start of a 3 week sprint
+          START_TIMESTAMP=$(date -d "$START_DATE" +%s)
+          CURRENT_TIMESTAMP=$(date +%s)
+          # Add 12 hour buffer (43200 seconds) to account for scheduling delays
+          ADJUSTED_TIMESTAMP=$((CURRENT_TIMESTAMP + 43200))
+          DAYS_SINCE_START=$(( (ADJUSTED_TIMESTAMP - START_TIMESTAMP) / 86400 ))
+          WEEKS_SINCE_START=$(( DAYS_SINCE_START / 7 ))
+
+          echo "Days since start date ($START_DATE): $DAYS_SINCE_START"
+          echo "Weeks since start date: $WEEKS_SINCE_START"
+
+          # Release every 3 weeks
+          if [ $WEEKS_SINCE_START -gt 0 ] && [ $((WEEKS_SINCE_START % 3)) -eq 0 ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Rust
+        if: steps.check_schedule.outputs.should_release == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-edit
+        if: steps.check_schedule.outputs.should_release == 'true'
+        run: cargo install cargo-edit
+
+      - name: Generate release changes
+        id: create_commit
+        if: steps.check_schedule.outputs.should_release == 'true'
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          # If version is provided via workflow dispatch, validate and use it
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+            # Validate version format strictly
+            if ! echo "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' >/dev/null; then
+              echo "Error: Invalid version format. Expected X.Y.Z (e.g., 0.2.0)"
+              exit 1
+            fi
+            cargo set-version --manifest-path crates/kit/Cargo.toml --package bcvk "$VERSION"
+          else
+            # default to bump the minor since that is most common
+            cargo set-version --manifest-path crates/kit/Cargo.toml --package bcvk --bump minor
+            VERSION=$(cargo read-manifest --manifest-path crates/kit/Cargo.toml | jq -r '.version')
+          fi
+
+          cargo update --workspace
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        env:
+          VERSION: ${{ steps.create_commit.outputs.VERSION }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Release ${{ env.VERSION }}"
+          commit-message: "Release ${{ env.VERSION }}"
+          branch: "release-${{ env.VERSION }}"
+          delete-branch: true
+          labels: release
+          body: |
+            ## Release ${{ env.VERSION }}
+
+            This is an automated release PR created by the scheduled release workflow.
+
+            ### Release Process
+
+            1. Review the changes in this PR
+            2. Ensure all tests pass
+            3. Merge the PR
+            4. The release tag will be automatically created when this PR is merged
+
+            The release workflow will automatically trigger when the tag is pushed.

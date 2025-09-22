@@ -1,42 +1,92 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
-      - 'v*.*.*-*'
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
 
 jobs:
-  create-release:
-    name: Create GitHub Release
+  release:
+    name: Create Release
+    if: |
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'release'))
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ steps.get-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Get version from tag
-        id: get-version
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: extract_version
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          # Extract version from crates/kit/Cargo.toml
+          VERSION=$(cargo read-manifest --manifest-path crates/kit/Cargo.toml | jq -r '.version')
+
+          # Validate version format
+          if ! echo "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' >/dev/null; then
+            echo "Error: Invalid version format in Cargo.toml: $VERSION"
+            exit 1
+          fi
+
+          echo "Extracted version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-      
+          echo "TAG_NAME=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          TAG_NAME="v$VERSION"
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists"
+            exit 0
+          fi
+
+          git tag -a -m "Release $VERSION" "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+          echo "Successfully created and pushed tag $TAG_NAME"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y just pkg-config go-md2man libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-build
+
+      - name: Build and archive
+        run: |
+          just build
+          just archive
+        env:
+          CARGO_PROFILE_RELEASE_LTO: true
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          TAG_NAME="${{ steps.extract_version.outputs.TAG_NAME }}"
           PRERELEASE=""
           if [[ "$VERSION" == *"-"* ]]; then
             PRERELEASE="--prerelease"
           fi
           
-          gh release create "${{ github.ref_name }}" \
-            --title "Release ${{ github.ref_name }}" \
-            --notes "Release ${{ github.ref_name }}
+          gh release create "$TAG_NAME" \
+            --title "Release $TAG_NAME" \
+            --notes "Release $TAG_NAME
           
           ## Installation
           
@@ -44,7 +94,7 @@ jobs:
           
           ### Linux x86_64 (glibc)
           \`\`\`bash
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/bcvk-x86_64-unknown-linux-gnu.tar.gz
+          curl -LO https://github.com/${{ github.repository }}/releases/download/$TAG_NAME/bcvk-x86_64-unknown-linux-gnu.tar.gz
           tar xzf bcvk-x86_64-unknown-linux-gnu.tar.gz
           sudo mv bcvk-x86_64-unknown-linux-gnu /usr/local/bin/bcvk
           \`\`\`
@@ -56,35 +106,6 @@ jobs:
           " \
           $PRERELEASE
 
-  build-release-binaries:
-    name: Build release binaries
-    needs: create-release
-    runs-on: ubuntu-24.04
-
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y just pkg-config go-md2man libssl-dev
-      
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: release-build
-      
-      - name: Build and archive
-        run: |
-          just build
-          just archive
-        env:
-          CARGO_PROFILE_RELEASE_LTO: true
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
-      
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -92,5 +113,5 @@ jobs:
           cd target
           for file in bcvk-*.tar.gz bcvk-*.tar.gz.sha256; do
             echo "Uploading $file"
-            gh release upload "${{ github.ref_name }}" "$file" --clobber
+            gh release upload "${{ steps.extract_version.outputs.TAG_NAME }}" "$file" --clobber
           done
