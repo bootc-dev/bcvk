@@ -10,6 +10,19 @@ use color_eyre::{eyre::eyre, Result};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Configuration for a virtiofs filesystem mount
+#[derive(Debug, Clone)]
+pub struct VirtiofsFilesystem {
+    /// Host directory to share
+    pub source_dir: String,
+    /// Unique tag identifier for the filesystem
+    pub tag: String,
+    /// Whether the filesystem is read-only
+    /// TODO: change libvirt to detect this
+    #[allow(dead_code)]
+    pub readonly: bool,
+}
+
 /// Builder for creating libvirt domain XML configurations
 #[derive(Debug)]
 pub struct DomainBuilder {
@@ -23,6 +36,7 @@ pub struct DomainBuilder {
     kernel_args: Option<String>,
     metadata: HashMap<String, String>,
     qemu_args: Vec<String>,
+    virtiofs_filesystems: Vec<VirtiofsFilesystem>,
 }
 
 impl Default for DomainBuilder {
@@ -45,6 +59,7 @@ impl DomainBuilder {
             kernel_args: None,
             metadata: HashMap::new(),
             qemu_args: Vec::new(),
+            virtiofs_filesystems: Vec::new(),
         }
     }
 
@@ -99,6 +114,12 @@ impl DomainBuilder {
     /// Add QEMU command line arguments
     pub fn with_qemu_args(mut self, args: Vec<String>) -> Self {
         self.qemu_args = args;
+        self
+    }
+
+    /// Add a virtiofs filesystem mount
+    pub fn with_virtiofs_filesystem(mut self, filesystem: VirtiofsFilesystem) -> Self {
+        self.virtiofs_filesystems.push(filesystem);
         self
     }
 
@@ -164,6 +185,15 @@ impl DomainBuilder {
         }
 
         xml.push_str("\n  </os>");
+
+        // Add memory backing for shared memory support (required for virtiofs)
+        xml.push_str(
+            r#"
+  <memoryBacking>
+    <source type="memfd"/>
+    <access mode="shared"/>
+  </memoryBacking>"#,
+        );
 
         // Architecture-specific features
         xml.push_str(arch_config.xml_features());
@@ -275,6 +305,29 @@ impl DomainBuilder {
     </video>"#,
                 vnc_port
             ));
+        }
+
+        // Virtiofs filesystems
+        for filesystem in &self.virtiofs_filesystems {
+            xml.push_str(&format!(
+                r#"
+    <filesystem type="mount" accessmode="passthrough">
+      <driver type="virtiofs" queue="1024"/>
+      <source dir="{}"/>
+      <target dir="{}"/>"#,
+                filesystem.source_dir, filesystem.tag
+            ));
+            // TODO: detect libvirt version for this
+            //         if filesystem.readonly {
+            //             xml.push_str(
+            //                 r#"
+            //   <readonly/>"#,
+            //             );
+            //         }
+            xml.push_str(
+                r#"
+    </filesystem>"#,
+            );
         }
 
         xml.push_str("\n  </devices>");

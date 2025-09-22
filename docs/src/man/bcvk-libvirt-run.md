@@ -69,6 +69,10 @@ Run a bootable container as a persistent VM
 
     Automatically SSH into the VM after creation
 
+**--bind-storage-ro**
+
+    Mount host container storage (RO) at /run/virtiofs-mnt-hoststorage
+
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES
@@ -92,6 +96,10 @@ Create a VM with volume mount:
 Create a VM and automatically SSH into it:
 
     bcvk libvirt run --name testvm --ssh quay.io/fedora/fedora-bootc:42
+
+Create a VM with access to host container storage for bootc upgrade:
+
+    bcvk libvirt run --name upgrade-test --bind-storage-ro quay.io/fedora/fedora-bootc:42
 
 Server management workflow:
 

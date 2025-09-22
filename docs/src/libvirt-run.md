@@ -131,6 +131,34 @@ bcvk libvirt run \
 - Persistent development state
 - Host integration capabilities
 
+### Container Storage Integration
+
+```bash
+# Create VM with access to host container storage for bootc upgrades
+bcvk libvirt run \
+  --name upgrade-test \
+  --bind-storage-ro \
+  --ssh \
+  quay.io/fedora/fedora-bootc:42
+```
+
+With this, a virtiofs mount named `hoststorage` is provisioned. There isn't
+yet automatic mounting, but you can inject code to do so that performs
+`mkdir /run/hoststorage && mount -t virtiofs hoststorage /run/hoststorage`.
+
+Then on your host system after you've done a `podman build` that results in a new image `localhost/bootc`,
+in the guest system you can point bootc to use it via e.g.
+```
+env STORAGE_OPTS=additionalimagestore=/run/hoststorage bootc switch --transport containers-storage localhost/bootc
+```
+
+You currently need to add the `STORAGE_OPTS` each time you invoke `bootc` - but there after e.g.
+```
+env STORAGE_OPTS=additionalimagestore=/run/hoststorage bootc upgrade
+```
+
+will work.
+
 ## Resource Management Concepts
 
 ### CPU Allocation

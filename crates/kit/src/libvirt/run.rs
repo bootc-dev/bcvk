@@ -12,6 +12,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::common_opts::MemoryOpts;
 use crate::domain_list::DomainLister;
+use crate::libvirt::domain::VirtiofsFilesystem;
 use crate::utils::parse_memory_to_mb;
 
 /// Options for creating and running a bootable container VM
@@ -58,6 +59,10 @@ pub struct LibvirtRunOpts {
     /// Automatically SSH into the VM after creation
     #[clap(long)]
     pub ssh: bool,
+
+    /// Mount host container storage (RO) at /run/virtiofs-mnt-hoststorage
+    #[clap(long = "bind-storage-ro")]
+    pub bind_storage_ro: bool,
 }
 
 /// Execute the libvirt run command
@@ -376,7 +381,7 @@ fn create_libvirt_domain_from_disk(
     let memory = parse_memory_to_mb(&opts.memory.memory)?;
 
     // Build domain XML using the existing DomainBuilder with bootc metadata and SSH keys
-    let domain_xml = DomainBuilder::new()
+    let mut domain_builder = DomainBuilder::new()
         .with_name(domain_name)
         .with_memory(memory.into())
         .with_vcpus(opts.cpus)
@@ -390,7 +395,33 @@ fn create_libvirt_domain_from_disk(
         .with_metadata("bootc:network", &opts.network)
         .with_metadata("bootc:ssh-generated", "true")
         .with_metadata("bootc:ssh-private-key-base64", &private_key_base64)
-        .with_metadata("bootc:ssh-port", &ssh_port.to_string())
+        .with_metadata("bootc:ssh-port", &ssh_port.to_string());
+
+    // Add container storage mount if requested
+    if opts.bind_storage_ro {
+        let storage_path = crate::utils::detect_container_storage_path()
+            .context("Failed to detect container storage path.")?;
+        crate::utils::validate_container_storage_path(&storage_path)
+            .context("Container storage validation failed")?;
+
+        debug!(
+            "Adding container storage from {} as hoststorage virtiofs mount",
+            storage_path
+        );
+
+        let virtiofs_fs = VirtiofsFilesystem {
+            source_dir: storage_path.to_string(),
+            tag: "hoststorage".to_string(),
+            readonly: true,
+        };
+
+        domain_builder = domain_builder
+            .with_virtiofs_filesystem(virtiofs_fs)
+            .with_metadata("bootc:bind-storage-ro", "true")
+            .with_metadata("bootc:storage-path", storage_path.as_str());
+    }
+
+    let domain_xml = domain_builder
         .with_qemu_args(vec![
             "-smbios".to_string(),
             format!("type=11,value={}", smbios_cred),

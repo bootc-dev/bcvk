@@ -204,6 +204,10 @@ fn main() {
             tests::libvirt_verb::test_libvirt_error_handling();
             Ok(())
         }),
+        Trial::test("libvirt_bind_storage_ro", || {
+            tests::libvirt_verb::test_libvirt_bind_storage_ro();
+            Ok(())
+        }),
     ];
 
     // Run the tests and exit with the result
