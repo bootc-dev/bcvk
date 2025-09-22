@@ -44,6 +44,7 @@ libc = "0.2"
 camino = "1.1.12"
 comfy-table = "7.1"
 strum = { version = "0.26", features = ["derive"] }
+quick-xml = "0.36"
 
 [dev-dependencies]
 similar-asserts = "1.5"

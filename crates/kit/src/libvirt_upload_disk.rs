@@ -6,6 +6,7 @@
 use crate::common_opts::MemoryOpts;
 use crate::install_options::InstallOptions;
 use crate::to_disk::{run as to_disk, ToDiskOpts};
+use crate::xml_utils::{self, XmlWriter};
 use crate::{images, utils};
 use camino::Utf8Path;
 use clap::Parser;
@@ -153,20 +154,23 @@ impl LibvirtUploadDiskOpts {
 
         debug!("Adding container image metadata to volume");
 
-        // Create XML with metadata
-        let metadata_xml = format!(
-            r#"<metadata>
-  <bootc:container xmlns:bootc="https://github.com/containers/bootc">
-    <bootc:source-image>{}</bootc:source-image>
-    <bootc:filesystem>{}</bootc:filesystem>
-    <bootc:created>{}</bootc:created>
-    <bootc:bcvk-version>1.0.0</bootc:bcvk-version>
-  </bootc:container>
-</metadata>"#,
-            self.source_image,
+        // Create XML with metadata using XmlWriter
+        let mut writer = XmlWriter::new();
+        writer.start_element("metadata", &[])?;
+        writer.start_element(
+            "bootc:container",
+            &[("xmlns:bootc", "https://github.com/containers/bootc")],
+        )?;
+        writer.write_text_element("bootc:source-image", &self.source_image)?;
+        writer.write_text_element(
+            "bootc:filesystem",
             self.install.filesystem.as_deref().unwrap_or("default"),
-            chrono::Utc::now().to_rfc3339()
-        );
+        )?;
+        writer.write_text_element("bootc:created", &chrono::Utc::now().to_rfc3339())?;
+        writer.write_text_element("bootc:bcvk-version", "1.0.0")?;
+        writer.end_element("bootc:container")?;
+        writer.end_element("metadata")?;
+        let metadata_xml = writer.into_string()?;
 
         // Write metadata to temp file
         let temp_metadata = std::env::temp_dir().join("volume-metadata.xml");
@@ -193,31 +197,54 @@ impl LibvirtUploadDiskOpts {
             .output()?;
 
         if output.status.success() {
-            let mut xml = String::from_utf8(output.stdout)?;
+            let xml = String::from_utf8(output.stdout)?;
 
-            // Insert metadata before closing </volume> tag
-            let metadata = format!(
-                r#"  <metadata>
-    <bootc:container xmlns:bootc="https://github.com/containers/bootc">
-      <bootc:source-image>{}</bootc:source-image>
-      <bootc:filesystem>{}</bootc:filesystem>
-      <bootc:created>{}</bootc:created>
-      <bootc:bcvk-version>1.0.0</bootc:bcvk-version>
-    </bootc:container>
-  </metadata>
-</volume>"#,
-                self.source_image,
+            // Parse the existing volume XML using DOM parser
+            let dom = xml_utils::parse_xml_dom(&xml)?;
+
+            // Create new XML with metadata using XmlWriter
+            let mut writer = XmlWriter::new();
+
+            // Start volume element with attributes from original
+            let volume_attrs = dom
+                .attributes
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>();
+            writer.start_element("volume", &volume_attrs)?;
+
+            // Copy existing elements (name, capacity, allocation, target, etc.)
+            for child in &dom.children {
+                if child.name != "metadata" {
+                    write_xml_node(&mut writer, child)?;
+                }
+            }
+
+            // Add bootc metadata
+            writer.start_element("metadata", &[])?;
+            writer.start_element(
+                "bootc:container",
+                &[("xmlns:bootc", "https://github.com/containers/bootc")],
+            )?;
+            writer.write_text_element("bootc:source-image", &self.source_image)?;
+            writer.write_text_element(
+                "bootc:filesystem",
                 self.install.filesystem.as_deref().unwrap_or("default"),
-                chrono::Utc::now().to_rfc3339()
-            );
+            )?;
+            writer.write_text_element("bootc:created", &chrono::Utc::now().to_rfc3339())?;
+            writer.write_text_element("bootc:bcvk-version", "1.0.0")?;
+            writer.end_element("bootc:container")?;
+            writer.end_element("metadata")?;
 
-            xml = xml.replace("</volume>", &metadata);
+            // Close volume element
+            writer.end_element("volume")?;
+            let new_xml = writer.into_string()?;
 
             // Save modified XML
             let temp_xml = std::env::temp_dir().join("volume-with-metadata.xml");
-            std::fs::write(&temp_xml, xml)?;
+            std::fs::write(&temp_xml, new_xml)?;
 
-            debug!("Added metadata to volume XML");
+            debug!("Added metadata to volume XML using DOM parser");
         }
 
         // Clean up temp file
@@ -295,6 +322,35 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
         std::fs::remove_file(&temp_disk)?;
     } else if opts.keep_temp {
         debug!("Keeping temporary disk at: {:?}", temp_disk);
+    }
+
+    Ok(())
+}
+
+/// Helper function to recursively write an XML node and its children using XmlWriter
+fn write_xml_node(writer: &mut XmlWriter, node: &xml_utils::XmlNode) -> Result<()> {
+    let attrs = node
+        .attributes
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect::<Vec<_>>();
+
+    if node.children.is_empty() && node.text.is_empty() {
+        // Empty element
+        writer.write_empty_element(&node.name, &attrs)?;
+    } else if node.children.is_empty() {
+        // Simple text element
+        writer.write_text_element_with_attrs(&node.name, &node.text, &attrs)?;
+    } else {
+        // Element with children
+        writer.start_element(&node.name, &attrs)?;
+        if !node.text.is_empty() {
+            writer.write_text(&node.text)?;
+        }
+        for child in &node.children {
+            write_xml_node(writer, child)?;
+        }
+        writer.end_element(&node.name)?;
     }
 
     Ok(())

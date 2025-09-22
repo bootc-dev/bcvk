@@ -6,6 +6,7 @@
 use crate::arch::ArchConfig;
 use crate::common_opts::DEFAULT_MEMORY_USER_STR;
 use crate::run_ephemeral::default_vcpus;
+use crate::xml_utils::XmlWriter;
 use color_eyre::{eyre::eyre, Result};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -116,99 +117,74 @@ impl DomainBuilder {
         // Detect architecture configuration
         let arch_config = ArchConfig::detect()?;
 
-        let mut xml = if self.qemu_args.is_empty() {
-            format!(
-                r#"<domain type="kvm">
-  <name>{}</name>
-  <uuid>{}</uuid>
-  <memory unit="MiB">{}</memory>
-  <currentMemory unit="MiB">{}</currentMemory>
-  <vcpu>{}</vcpu>
-  <os>
-    <type arch="{}" machine="{}">{}</type>
-    <boot dev="hd"/>"#,
-                name,
-                uuid,
-                memory,
-                memory,
-                vcpus,
-                arch_config.arch,
-                arch_config.machine,
-                arch_config.os_type
-            )
+        let mut writer = XmlWriter::new();
+
+        // Root domain element
+        let domain_attrs = if self.qemu_args.is_empty() {
+            vec![("type", "kvm")]
         } else {
-            format!(
-                r#"<domain type="kvm" xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
-  <name>{}</name>
-  <uuid>{}</uuid>
-  <memory unit="MiB">{}</memory>
-  <currentMemory unit="MiB">{}</currentMemory>
-  <vcpu>{}</vcpu>
-  <os>
-    <type arch="{}" machine="{}">{}</type>
-    <boot dev="hd"/>"#,
-                name,
-                uuid,
-                memory,
-                memory,
-                vcpus,
-                arch_config.arch,
-                arch_config.machine,
-                arch_config.os_type
-            )
+            vec![
+                ("type", "kvm"),
+                ("xmlns:qemu", "http://libvirt.org/schemas/domain/qemu/1.0"),
+            ]
         };
+        writer.start_element("domain", &domain_attrs)?;
+
+        // Basic domain information
+        writer.write_text_element("name", &name)?;
+        writer.write_text_element("uuid", &uuid)?;
+        writer.write_text_element_with_attrs("memory", &memory.to_string(), &[("unit", "MiB")])?;
+        writer.write_text_element_with_attrs(
+            "currentMemory",
+            &memory.to_string(),
+            &[("unit", "MiB")],
+        )?;
+        writer.write_text_element("vcpu", &vcpus.to_string())?;
+
+        // OS section
+        writer.start_element("os", &[])?;
+        writer.write_text_element_with_attrs(
+            "type",
+            &arch_config.os_type,
+            &[
+                ("arch", &arch_config.arch),
+                ("machine", &arch_config.machine),
+            ],
+        )?;
+        writer.write_empty_element("boot", &[("dev", "hd")])?;
 
         // Add kernel arguments if specified (for direct boot)
         if let Some(ref kargs) = self.kernel_args {
-            xml.push_str(&format!("\n    <cmdline>{}</cmdline>", kargs));
+            writer.write_text_element("cmdline", kargs)?;
         }
 
-        xml.push_str("\n  </os>");
+        writer.end_element("os")?;
 
         // Architecture-specific features
-        xml.push_str(arch_config.xml_features());
+        arch_config.write_features(&mut writer)?;
 
         // Architecture-specific CPU configuration
-        xml.push_str(&format!(
-            r#"
-  <cpu mode="{}"/>"#,
-            arch_config.cpu_mode()
-        ));
+        writer.write_empty_element("cpu", &[("mode", arch_config.cpu_mode())])?;
 
         // Clock and lifecycle configuration
-        xml.push_str(
-            r#"
-  <clock offset="utc">"#,
-        );
+        writer.start_element("clock", &[("offset", "utc")])?;
+        arch_config.write_timers(&mut writer)?;
+        writer.end_element("clock")?;
 
-        // Architecture-specific timers
-        xml.push_str(arch_config.xml_timers());
-
-        xml.push_str(
-            r#"
-  </clock>
-  <on_poweroff>destroy</on_poweroff>
-  <on_reboot>restart</on_reboot>
-  <on_crash>destroy</on_crash>"#,
-        );
+        writer.write_text_element("on_poweroff", "destroy")?;
+        writer.write_text_element("on_reboot", "restart")?;
+        writer.write_text_element("on_crash", "destroy")?;
 
         // Devices section
-        xml.push_str("\n  <devices>");
-
-        // Let libvirt automatically detect the appropriate emulator
-        // based on the architecture and domain type
+        writer.start_element("devices", &[])?;
 
         // Disk
         if let Some(ref disk_path) = self.disk_path {
-            xml.push_str(&format!(
-                r#"
-    <disk type="file" device="disk">
-      <driver name="qemu" type="raw"/>
-      <source file="{}"/>
-      <target dev="vda" bus="virtio"/>
-    </disk>"#,
-                disk_path
-            ));
+            writer.start_element("disk", &[("type", "file"), ("device", "disk")])?;
+            writer.write_empty_element("driver", &[("name", "qemu"), ("type", "raw")])?;
+            writer.write_empty_element("source", &[("file", disk_path)])?;
+            writer.write_empty_element("target", &[("dev", "vda"), ("bus", "virtio")])?;
+            writer.end_element("disk")?;
         }
 
         // Network
@@ -223,94 +199,86 @@ impl DomainBuilder {
             }
             "user" => {
                 // User-mode networking (NAT) - no network name required
-                xml.push_str(
-                    r#"
-    <interface type="user">
-      <model type="virtio"/>
-    </interface>"#,
-                );
+                writer.start_element("interface", &[("type", "user")])?;
+                writer.write_empty_element("model", &[("type", "virtio")])?;
+                writer.end_element("interface")?;
             }
             network if network.starts_with("bridge=") => {
                 let bridge_name = &network[7..]; // Remove "bridge=" prefix
-                xml.push_str(&format!(
-                    r#"
-    <interface type="bridge">
-      <source bridge="{}"/>
-      <model type="virtio"/>
-    </interface>"#,
-                    bridge_name
-                ));
+                writer.start_element("interface", &[("type", "bridge")])?;
+                writer.write_empty_element("source", &[("bridge", bridge_name)])?;
+                writer.write_empty_element("model", &[("type", "virtio")])?;
+                writer.end_element("interface")?;
             }
             _ => {
                 // Assume it's a network name
-                xml.push_str(&format!(
-                    r#"
-    <interface type="network">
-      <source network="{}"/>
-      <model type="virtio"/>
-    </interface>"#,
-                    network_config
-                ));
+                writer.start_element("interface", &[("type", "network")])?;
+                writer.write_empty_element("source", &[("network", network_config)])?;
+                writer.write_empty_element("model", &[("type", "virtio")])?;
+                writer.end_element("interface")?;
             }
         }
 
         // Serial console
-        xml.push_str(
-            r#"
-    <serial type="pty">
-      <target port="0"/>
-    </serial>
-    <console type="pty">
-      <target type="serial" port="0"/>
-    </console>"#,
-        );
+        writer.start_element("serial", &[("type", "pty")])?;
+        writer.write_empty_element("target", &[("port", "0")])?;
+        writer.end_element("serial")?;
+
+        writer.start_element("console", &[("type", "pty")])?;
+        writer.write_empty_element("target", &[("type", "serial"), ("port", "0")])?;
+        writer.end_element("console")?;
 
         // VNC graphics if enabled
         if let Some(vnc_port) = self.vnc_port {
-            xml.push_str(&format!(
-                r#"
-    <graphics type="vnc" port="{}" listen="127.0.0.1"/>
-    <video>
-      <model type="vga"/>
-    </video>"#,
-                vnc_port
-            ));
+            writer.write_empty_element(
+                "graphics",
+                &[
+                    ("type", "vnc"),
+                    ("port", &vnc_port.to_string()),
+                    ("listen", "127.0.0.1"),
+                ],
+            )?;
+            writer.start_element("video", &[])?;
+            writer.write_empty_element("model", &[("type", "vga")])?;
+            writer.end_element("video")?;
         }
 
-        xml.push_str("\n  </devices>");
+        writer.end_element("devices")?;
 
         // QEMU commandline section (if we have QEMU args)
         if !self.qemu_args.is_empty() {
-            xml.push_str("\n  <qemu:commandline>");
+            writer.start_element("qemu:commandline", &[])?;
             for arg in &self.qemu_args {
-                xml.push_str(&format!("\n    <qemu:arg value='{}'/>", arg));
+                writer.write_empty_element("qemu:arg", &[("value", arg)])?;
             }
-            xml.push_str("\n  </qemu:commandline>");
+            writer.end_element("qemu:commandline")?;
         }
 
         // Metadata section
         if !self.metadata.is_empty() {
-            xml.push_str("\n  <metadata>");
-            xml.push_str(
-                "\n    <bootc:container xmlns:bootc=\"https://github.com/containers/bootc\">",
-            );
+            writer.start_element("metadata", &[])?;
+            writer.start_element(
+                "bootc:container",
+                &[("xmlns:bootc", "https://github.com/containers/bootc")],
+            )?;
 
             for (key, value) in &self.metadata {
-                // Strip bootc: prefix if present for cleaner XML
-                let clean_key = key.strip_prefix("bootc:").unwrap_or(key);
-                xml.push_str(&format!(
-                    "\n      <bootc:{}>{}</bootc:{}>",
-                    clean_key, value, clean_key
-                ));
+                // Ensure the key has the bootc: prefix
+                let element_name = if key.starts_with("bootc:") {
+                    key.clone()
+                } else {
+                    format!("bootc:{}", key)
+                };
+                writer.write_text_element(&element_name, value)?;
             }
 
-            xml.push_str("\n    </bootc:container>");
-            xml.push_str("\n  </metadata>");
+            writer.end_element("bootc:container")?;
+            writer.end_element("metadata")?;
         }
 
-        xml.push_str("\n</domain>");
+        writer.end_element("domain")?;
 
-        Ok(xml)
+        writer.into_string()
     }
 }
 
@@ -411,7 +379,8 @@ mod tests {
         match host_arch {
             "x86_64" => {
                 assert!(xml.contains("machine=\"q35\""));
-                assert!(xml.contains("vmport state='off'")); // x86_64-specific feature
+                assert!(xml.contains("vmport")); // x86_64-specific feature
+                assert!(xml.contains("state=\"off\"")); // vmport should be disabled
             }
             "aarch64" => {
                 assert!(xml.contains("machine=\"virt\""));
@@ -425,6 +394,6 @@ mod tests {
         // Should contain architecture-specific features and timers
         assert!(xml.contains("<features>"));
         assert!(xml.contains("<acpi/>"));
-        assert!(xml.contains("<timer name='rtc'"));
+        assert!(xml.contains("<timer name=\"rtc\""));
     }
 }

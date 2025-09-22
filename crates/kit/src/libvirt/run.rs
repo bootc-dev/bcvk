@@ -13,6 +13,7 @@ use std::hash::{Hash, Hasher};
 use crate::common_opts::MemoryOpts;
 use crate::domain_list::DomainLister;
 use crate::utils::parse_memory_to_mb;
+use crate::xml_utils;
 
 /// Options for creating and running a bootable container VM
 #[derive(Debug, Parser)]
@@ -188,16 +189,13 @@ fn get_libvirt_storage_pool_path() -> Result<Utf8PathBuf> {
 
     let xml = String::from_utf8(output.stdout).with_context(|| "Invalid UTF-8 in virsh output")?;
 
-    // Extract path from XML
-    // Looking for: <path>/some/path</path>
-    let start_tag = "<path>";
-    let end_tag = "</path>";
+    // Parse XML using DOM parser and extract path element
+    let dom = xml_utils::parse_xml_dom(&xml).with_context(|| "Failed to parse storage pool XML")?;
 
-    if let Some(start_pos) = xml.find(start_tag) {
-        let start = start_pos + start_tag.len();
-        if let Some(end_pos) = xml[start..].find(end_tag) {
-            let path_str = &xml[start..start + end_pos];
-            return Ok(Utf8PathBuf::from(path_str.trim()));
+    if let Some(path_node) = dom.find("path") {
+        let path_str = path_node.text_content().trim();
+        if !path_str.is_empty() {
+            return Ok(Utf8PathBuf::from(path_str));
         }
     }
 

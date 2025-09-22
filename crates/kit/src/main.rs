@@ -32,6 +32,7 @@ mod supervisor_status;
 pub(crate) mod systemd;
 mod to_disk;
 mod utils;
+mod xml_utils;
 
 pub const CONTAINER_STATEDIR: &str = "/var/lib/bcvk";
 

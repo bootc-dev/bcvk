@@ -4,6 +4,7 @@
 //! with SSH key injection, automatically retrieving SSH credentials from domain XML
 //! metadata and establishing connection using embedded private keys.
 
+use crate::xml_utils;
 use base64::Engine;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
@@ -98,22 +99,27 @@ impl LibvirtSshOpts {
         let xml = String::from_utf8(output.stdout)?;
         debug!("Domain XML for SSH extraction: {}", xml);
 
+        // Parse XML once for all metadata extraction
+        let dom = xml_utils::parse_xml_dom(&xml)
+            .map_err(|e| eyre!("Failed to parse domain XML: {}", e))?;
+
         // Extract SSH metadata from bootc:container section
         // First try the new base64 encoded format
-        let private_key = if let Some(encoded_key) =
-            extract_xml_metadata(&xml, "ssh-private-key-base64")
+        let private_key = if let Some(encoded_key_node) =
+            dom.find_with_namespace("ssh-private-key-base64")
         {
+            let encoded_key = encoded_key_node.text_content();
             debug!("Found base64 encoded SSH private key");
             // Decode base64 encoded private key
             let decoded_bytes = base64::engine::general_purpose::STANDARD
-                .decode(&encoded_key)
+                .decode(encoded_key)
                 .map_err(|e| eyre!("Failed to decode base64 SSH private key: {}", e))?;
 
             String::from_utf8(decoded_bytes)
                 .map_err(|e| eyre!("SSH private key contains invalid UTF-8: {}", e))?
-        } else if let Some(legacy_key) = extract_xml_metadata(&xml, "ssh-private-key") {
+        } else if let Some(legacy_key_node) = dom.find_with_namespace("ssh-private-key") {
             debug!("Found legacy plain text SSH private key");
-            legacy_key
+            legacy_key_node.text_content().to_string()
         } else {
             return Err(eyre!("No SSH private key found in domain '{}' metadata. Domain was not created with --generate-ssh-key or --ssh-key.", self.domain_name));
         };
@@ -170,7 +176,7 @@ impl LibvirtSshOpts {
             ));
         }
 
-        let ssh_port_str = extract_xml_metadata(&xml, "ssh-port").ok_or_else(|| {
+        let ssh_port_str = dom.find_with_namespace("ssh-port").ok_or_else(|| {
             eyre!(
                 "No SSH port found in domain '{}' metadata",
                 self.domain_name
@@ -178,12 +184,14 @@ impl LibvirtSshOpts {
         })?;
 
         let ssh_port = ssh_port_str
+            .text_content()
             .parse::<u16>()
-            .map_err(|e| eyre!("Invalid SSH port '{}': {}", ssh_port_str, e))?;
+            .map_err(|e| eyre!("Invalid SSH port '{}': {}", ssh_port_str.text_content(), e))?;
 
-        let is_generated = extract_xml_metadata(&xml, "ssh-generated")
-            .unwrap_or_else(|| "false".to_string())
-            == "true";
+        let is_generated = dom
+            .find_with_namespace("ssh-generated")
+            .map(|node| node.text_content() == "true")
+            .unwrap_or(false);
 
         Ok(DomainSshConfig {
             private_key_content: private_key,
@@ -320,21 +328,6 @@ impl LibvirtSshOpts {
     }
 }
 
-/// Extract metadata value from domain XML bootc:container section
-fn extract_xml_metadata(xml: &str, key: &str) -> Option<String> {
-    let start_tag = format!("<bootc:{}>", key);
-    let end_tag = format!("</bootc:{}>", key);
-
-    if let Some(start_pos) = xml.find(&start_tag) {
-        let start = start_pos + start_tag.len();
-        if let Some(end_pos) = xml[start..].find(&end_tag) {
-            let value = &xml[start..start + end_pos];
-            return Some(value.trim().to_string());
-        }
-    }
-    None
-}
-
 /// Execute the libvirt SSH command
 pub fn run(opts: LibvirtSshOpts) -> Result<()> {
     debug!("Connecting to libvirt domain: {}", opts.domain_name);
@@ -369,7 +362,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_xml_metadata() {
+    fn test_ssh_metadata_extraction() {
         let xml = r#"
 <domain>
   <metadata>
@@ -382,21 +375,30 @@ mod tests {
 </domain>
         "#;
 
+        let dom = xml_utils::parse_xml_dom(xml).unwrap();
+
         assert_eq!(
-            extract_xml_metadata(xml, "ssh-private-key"),
+            dom.find_with_namespace("ssh-private-key")
+                .map(|n| n.text_content().to_string()),
             Some("-----BEGIN OPENSSH PRIVATE KEY-----".to_string())
         );
 
         assert_eq!(
-            extract_xml_metadata(xml, "ssh-port"),
+            dom.find_with_namespace("ssh-port")
+                .map(|n| n.text_content().to_string()),
             Some("2222".to_string())
         );
 
         assert_eq!(
-            extract_xml_metadata(xml, "ssh-generated"),
+            dom.find_with_namespace("ssh-generated")
+                .map(|n| n.text_content().to_string()),
             Some("true".to_string())
         );
 
-        assert_eq!(extract_xml_metadata(xml, "nonexistent"), None);
+        assert_eq!(
+            dom.find_with_namespace("nonexistent")
+                .map(|n| n.text_content().to_string()),
+            None
+        );
     }
 }

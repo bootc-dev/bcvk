@@ -3,6 +3,7 @@
 //! This module provides functionality to discover and list bootc volumes
 //! with their container image metadata and creation information.
 
+use crate::xml_utils;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use comfy_table::{presets::UTF8_FULL, Table};
@@ -190,8 +191,12 @@ impl LibvirtListVolumesOpts {
             let xml = String::from_utf8(xml_output.stdout)?;
             debug!("Volume XML for {}: {}", volume_name, xml);
 
+            // Parse XML once and search for metadata
+            let dom = xml_utils::parse_xml_dom(&xml)?;
+
             // First try to extract metadata from description field (new format)
-            if let Some(description) = extract_xml_value(&xml, "description") {
+            if let Some(description_node) = dom.find("description") {
+                let description = description_node.text_content();
                 if description.starts_with("bcvk volume: ") {
                     // Parse JSON metadata from description
                     let json_str = description.strip_prefix("bcvk volume: ").unwrap_or("");
@@ -214,9 +219,15 @@ impl LibvirtListVolumesOpts {
 
             // Fallback to old metadata format (bootc: namespace)
             if source_image.is_none() {
-                source_image = extract_xml_value(&xml, "bootc:source-image");
-                source_digest = extract_xml_value(&xml, "bootc:source-digest");
-                created = extract_xml_value(&xml, "bootc:created");
+                source_image = dom
+                    .find("bootc:source-image")
+                    .map(|n| n.text_content().to_string());
+                source_digest = dom
+                    .find("bootc:source-digest")
+                    .map(|n| n.text_content().to_string());
+                created = dom
+                    .find("bootc:created")
+                    .map(|n| n.text_content().to_string());
             }
         }
 
@@ -333,19 +344,6 @@ impl LibvirtListVolumesOpts {
 }
 
 /// Extract value from XML element (simple string parsing)
-fn extract_xml_value(xml: &str, element: &str) -> Option<String> {
-    let start_tag = format!("<{}>", element);
-    let end_tag = format!("</{}>", element);
-
-    if let Some(start_pos) = xml.find(&start_tag) {
-        let start = start_pos + start_tag.len();
-        if let Some(end_pos) = xml[start..].find(&end_tag) {
-            let value = &xml[start..start + end_pos];
-            return Some(value.trim().to_string());
-        }
-    }
-    None
-}
 
 /// Parse virsh size format (e.g., "5.00 GiB") to bytes
 fn parse_virsh_size(size_str: &str) -> Option<u64> {

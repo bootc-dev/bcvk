@@ -12,6 +12,7 @@ use crate::libvirt::upload::LibvirtUploadOpts;
 use crate::run_ephemeral::default_vcpus;
 use crate::ssh::generate_ssh_keypair;
 use crate::sshcred::smbios_cred_for_root_ssh;
+use crate::xml_utils;
 use base64::Engine;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
@@ -297,9 +298,15 @@ impl LibvirtCreateOpts {
         let xml = String::from_utf8(output.stdout)?;
         debug!("Volume XML: {}", xml);
 
-        // Parse XML to extract bootc metadata
-        // For simplicity, using string parsing - could use proper XML parser
-        let source_image = extract_xml_value(&xml, "bootc:source-image");
+        // Parse XML to extract bootc metadata using DOM parser
+        let dom = xml_utils::parse_xml_dom(&xml)
+            .map_err(|e| eyre!("Failed to parse volume XML: {}", e))?;
+
+        let source_image = dom
+            .find("bootc:source-image")
+            .or_else(|| dom.find("source-image"))
+            .map(|node| node.text_content().to_string());
+
         Ok(BootcVolumeMetadata { source_image })
     }
 
@@ -666,21 +673,6 @@ impl LibvirtCreateOpts {
 
         Ok(())
     }
-}
-
-/// Extract value from XML element (simple string parsing)
-fn extract_xml_value(xml: &str, element: &str) -> Option<String> {
-    let start_tag = format!("<{}>", element);
-    let end_tag = format!("</{}>", element);
-
-    if let Some(start_pos) = xml.find(&start_tag) {
-        let start = start_pos + start_tag.len();
-        if let Some(end_pos) = xml[start..].find(&end_tag) {
-            let value = &xml[start..start + end_pos];
-            return Some(value.trim().to_string());
-        }
-    }
-    None
 }
 
 /// Execute the libvirt domain creation process
