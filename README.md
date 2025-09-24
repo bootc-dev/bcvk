@@ -17,7 +17,7 @@ in the host environment.
 
 ```bash
 bcvk ephemeral run -d --rm -K --name mytestvm quay.io/fedora/fedora-bootc:42
-bcvk ssh mytestvm
+bcvk ephemeral ssh mytestvm
 ```
 
 Or to fully streamline the above and have the VM automatically terminate when you exit
