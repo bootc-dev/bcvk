@@ -126,7 +126,7 @@ pub fn test_run_ephemeral_ssh_system_command() {
 
     eprintln!("Testing ephemeral run-ssh with system command...");
 
-    // Run ephemeral SSH with systemctl command
+    // Run ephemeral SSH with systemctl command - using /bin/sh -c for shell operators
     let output = Command::new("timeout")
         .args([
             "60s",
@@ -137,10 +137,9 @@ pub fn test_run_ephemeral_ssh_system_command() {
             INTEGRATION_TEST_LABEL,
             &get_test_image(),
             "--",
-            "systemctl",
-            "is-system-running",
-            "||",
-            "true", // Allow non-zero exit for degraded state
+            "/bin/sh",
+            "-c",
+            "systemctl is-system-running || true", // Shell command with operator
         ])
         .output()
         .expect("Failed to run bcvk ephemeral run-ssh");

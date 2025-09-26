@@ -59,10 +59,6 @@ Upload bootc disk images to libvirt with metadata annotations
 
     Additional kernel arguments for installation
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

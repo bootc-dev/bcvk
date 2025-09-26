@@ -36,6 +36,14 @@ pub struct LibvirtSshOpts {
     /// SSH connection timeout in seconds
     #[clap(long, default_value = "30")]
     pub timeout: u32,
+
+    /// SSH log level
+    #[clap(long, default_value = "ERROR")]
+    pub log_level: String,
+
+    /// Extra SSH options in key=value format
+    #[clap(long)]
+    pub extra_options: Vec<String>,
 }
 
 /// SSH configuration extracted from domain metadata
@@ -245,36 +253,52 @@ impl LibvirtSshOpts {
         // Build SSH command
         let mut ssh_cmd = Command::new("ssh");
 
-        // Basic SSH options
+        // Add SSH key and port
         ssh_cmd
             .arg("-i")
             .arg(temp_key.path())
             .arg("-p")
-            .arg(ssh_config.ssh_port.to_string())
-            .args(["-o", "IdentitiesOnly=yes"])
-            .arg("-o")
-            .arg("PasswordAuthentication=no")
-            .arg("-o")
-            .arg("ConnectTimeout=30")
-            .arg("-o")
-            .arg("ServerAliveInterval=60");
+            .arg(ssh_config.ssh_port.to_string());
 
-        // Host key checking
-        if !self.strict_host_keys {
-            ssh_cmd
-                .arg("-o")
-                .arg("StrictHostKeyChecking=no")
-                .arg("-o")
-                .arg("UserKnownHostsFile=/dev/null");
+        // Parse extra options from key=value format
+        let mut parsed_extra_options = Vec::new();
+        for option in &self.extra_options {
+            if let Some((key, value)) = option.split_once('=') {
+                parsed_extra_options.push((key.to_string(), value.to_string()));
+            } else {
+                return Err(eyre!(
+                    "Invalid extra option format '{}'. Expected 'key=value'",
+                    option
+                ));
+            }
         }
+
+        // Apply common SSH options
+        let common_opts = crate::ssh::CommonSshOptions {
+            strict_host_keys: self.strict_host_keys,
+            connect_timeout: self.timeout,
+            server_alive_interval: 60,
+            log_level: self.log_level.clone(),
+            extra_options: parsed_extra_options,
+        };
+        common_opts.apply_to_command(&mut ssh_cmd);
 
         // Target host
         ssh_cmd.arg(format!("{}@127.0.0.1", self.user));
 
-        // Add command if specified
+        // Add command if specified - use the same argument escaping logic as container SSH
         if !self.command.is_empty() {
             ssh_cmd.arg("--");
-            ssh_cmd.args(&self.command);
+            if self.command.len() > 1 {
+                // Multiple arguments need proper shell escaping
+                let combined_command = crate::ssh::shell_escape_command(&self.command)
+                    .map_err(|e| eyre!("Failed to escape shell command: {}", e))?;
+                debug!("Combined escaped command: {}", combined_command);
+                ssh_cmd.arg(combined_command);
+            } else {
+                // Single argument can be passed directly
+                ssh_cmd.args(&self.command);
+            }
         }
 
         debug!("Executing SSH command: {:?}", ssh_cmd);

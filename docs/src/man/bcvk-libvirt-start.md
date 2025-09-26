@@ -23,10 +23,6 @@ Start a stopped libvirt domain
 
     Automatically SSH into the domain after starting
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

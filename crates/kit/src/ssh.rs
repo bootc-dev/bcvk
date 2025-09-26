@@ -9,6 +9,18 @@ use tracing::debug;
 
 use crate::CONTAINER_STATEDIR;
 
+/// Combine multiple command arguments into a properly escaped shell command string
+///
+/// This is necessary because SSH protocol sends commands as strings, not argument arrays.
+/// When bcvk receives multiple arguments like ["/bin/sh", "-c", "echo hello; sleep 5"],
+/// they must be combined into a single string that will be correctly interpreted by the
+/// remote shell.
+///
+/// Uses the `shlex` crate for robust POSIX shell escaping.
+pub fn shell_escape_command(args: &[String]) -> Result<String, shlex::QuoteError> {
+    shlex::try_join(args.iter().map(|s| s.as_str()))
+}
+
 /// Represents an SSH keypair with file paths and public key content
 #[derive(Debug, Clone)]
 pub struct SshKeyPair {
@@ -176,25 +188,76 @@ pub fn connect_via_container(container_name: &str, args: Vec<String>) -> Result<
 /// SSH connection configuration options
 #[derive(Debug, Clone)]
 pub struct SshConnectionOptions {
-    /// Connection timeout in seconds (default: 30)
-    pub connect_timeout: u32,
+    /// Common SSH options shared across implementations
+    pub common: CommonSshOptions,
     /// Enable/disable TTY allocation (default: true)
     pub allocate_tty: bool,
-    /// SSH log level (default: ERROR)
+    /// Suppress output to stdout/stderr (default: false)
+    pub suppress_output: bool,
+}
+
+/// Common SSH options that can be shared between different SSH implementations
+#[derive(Debug, Clone)]
+pub struct CommonSshOptions {
+    /// Use strict host key checking
+    pub strict_host_keys: bool,
+    /// SSH connection timeout in seconds
+    pub connect_timeout: u32,
+    /// Server alive interval in seconds
+    pub server_alive_interval: u32,
+    /// SSH log level
     pub log_level: String,
     /// Additional SSH options as key-value pairs
     pub extra_options: Vec<(String, String)>,
-    /// Suppress output to stdout/stderr (default: false)
-    pub suppress_output: bool,
+}
+
+impl Default for CommonSshOptions {
+    fn default() -> Self {
+        Self {
+            strict_host_keys: false,
+            connect_timeout: 30,
+            server_alive_interval: 60,
+            log_level: "ERROR".to_string(),
+            extra_options: vec![],
+        }
+    }
+}
+
+impl CommonSshOptions {
+    /// Apply these options to an SSH command
+    pub fn apply_to_command(&self, cmd: &mut std::process::Command) {
+        // Basic security options
+        cmd.args(["-o", "IdentitiesOnly=yes"]);
+        cmd.args(["-o", "PasswordAuthentication=no"]);
+        cmd.args(["-o", "KbdInteractiveAuthentication=no"]);
+        cmd.args(["-o", "GSSAPIAuthentication=no"]);
+
+        // Connection options
+        cmd.args(["-o", &format!("ConnectTimeout={}", self.connect_timeout)]);
+        cmd.args([
+            "-o",
+            &format!("ServerAliveInterval={}", self.server_alive_interval),
+        ]);
+        cmd.args(["-o", &format!("LogLevel={}", self.log_level)]);
+
+        // Host key checking
+        if !self.strict_host_keys {
+            cmd.args(["-o", "StrictHostKeyChecking=no"]);
+            cmd.args(["-o", "UserKnownHostsFile=/dev/null"]);
+        }
+
+        // Add extra SSH options
+        for (key, value) in &self.extra_options {
+            cmd.args(["-o", &format!("{}={}", key, value)]);
+        }
+    }
 }
 
 impl Default for SshConnectionOptions {
     fn default() -> Self {
         Self {
-            connect_timeout: 30,
+            common: CommonSshOptions::default(),
             allocate_tty: true,
-            log_level: "ERROR".to_string(),
-            extra_options: vec![],
             suppress_output: false,
         }
     }
@@ -204,10 +267,14 @@ impl SshConnectionOptions {
     /// Create options suitable for quick connectivity tests (short timeout, no TTY)
     pub fn for_connectivity_test() -> Self {
         Self {
-            connect_timeout: 2,
+            common: CommonSshOptions {
+                strict_host_keys: false,
+                connect_timeout: 2,
+                server_alive_interval: 60,
+                log_level: "ERROR".to_string(),
+                extra_options: vec![],
+            },
             allocate_tty: false,
-            log_level: "ERROR".to_string(),
-            extra_options: vec![],
             suppress_output: true,
         }
     }
@@ -251,25 +318,18 @@ pub fn connect_via_container_with_options(
         cmd.args(["exec", container_name, "ssh"]);
     }
 
-    // SSH key and security options
+    // SSH key
     let keypath = Utf8Path::new("/run/tmproot")
         .join(CONTAINER_STATEDIR.trim_start_matches('/'))
         .join("ssh");
     cmd.args(["-i", keypath.as_str()]);
-    cmd.args(["-o", "IdentitiesOnly=yes"]);
-    cmd.args(["-o", "PasswordAuthentication=no"]);
-    cmd.args(["-o", "KbdInteractiveAuthentication=no"]);
-    cmd.args(["-o", "GSSAPIAuthentication=no"]);
-    cmd.args(["-o", "StrictHostKeyChecking=no"]);
-    cmd.args(["-o", "UserKnownHostsFile=/dev/null"]);
 
-    // Configurable options
-    cmd.args(["-o", &format!("ConnectTimeout={}", options.connect_timeout)]);
-    cmd.args(["-o", &format!("LogLevel={}", options.log_level)]);
+    // Apply common SSH options
+    options.common.apply_to_command(&mut cmd);
 
-    // Add extra SSH options
-    for (key, value) in &options.extra_options {
-        cmd.args(["-o", &format!("{}={}", key, value)]);
+    // Container SSH always uses batch mode for non-interactive commands
+    if !options.allocate_tty {
+        cmd.args(["-o", "BatchMode=yes"]);
     }
 
     // Connect to VM via QEMU port forwarding on localhost
@@ -278,11 +338,32 @@ pub fn connect_via_container_with_options(
 
     // Add any additional arguments
     if !args.is_empty() {
+        debug!("Adding SSH arguments: {:?}", args);
         cmd.arg("--");
-        cmd.args(&args);
+
+        // If we have multiple arguments, we need to properly combine them into a single
+        // command string that will survive shell parsing on the remote side.
+        // This is because SSH protocol sends commands as strings, not argument arrays.
+        if args.len() > 1 {
+            // Combine arguments with proper shell escaping
+            let combined_command = shell_escape_command(&args)
+                .map_err(|e| eyre!("Failed to escape shell command: {}", e))?;
+            debug!("Combined escaped command: {}", combined_command);
+            cmd.arg(combined_command);
+        } else {
+            // Single argument can be passed directly
+            cmd.args(&args);
+        }
     }
 
     debug!("Executing: podman {:?}", cmd.get_args().collect::<Vec<_>>());
+    debug!(
+        "Full command line: podman {}",
+        cmd.get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
 
     // Suppress output if requested (useful for connectivity testing)
     if options.suppress_output {
@@ -336,36 +417,82 @@ mod tests {
     fn test_ssh_connection_options() {
         // Test default options
         let default_opts = SshConnectionOptions::default();
-        assert_eq!(default_opts.connect_timeout, 30);
+        assert_eq!(default_opts.common.connect_timeout, 30);
         assert!(default_opts.allocate_tty);
-        assert_eq!(default_opts.log_level, "ERROR");
-        assert!(default_opts.extra_options.is_empty());
+        assert_eq!(default_opts.common.log_level, "ERROR");
+        assert!(default_opts.common.extra_options.is_empty());
         assert!(!default_opts.suppress_output);
 
         // Test connectivity test options
         let test_opts = SshConnectionOptions::for_connectivity_test();
-        assert_eq!(test_opts.connect_timeout, 2);
+        assert_eq!(test_opts.common.connect_timeout, 2);
         assert!(!test_opts.allocate_tty);
-        assert_eq!(test_opts.log_level, "ERROR");
-        assert!(test_opts.extra_options.is_empty());
+        assert_eq!(test_opts.common.log_level, "ERROR");
+        assert!(test_opts.common.extra_options.is_empty());
         assert!(test_opts.suppress_output);
 
         // Test custom options
         let mut custom_opts = SshConnectionOptions::default();
-        custom_opts.connect_timeout = 10;
+        custom_opts.common.connect_timeout = 10;
         custom_opts.allocate_tty = false;
-        custom_opts.log_level = "DEBUG".to_string();
+        custom_opts.common.log_level = "DEBUG".to_string();
         custom_opts
+            .common
             .extra_options
             .push(("ServerAliveInterval".to_string(), "30".to_string()));
 
-        assert_eq!(custom_opts.connect_timeout, 10);
+        assert_eq!(custom_opts.common.connect_timeout, 10);
         assert!(!custom_opts.allocate_tty);
-        assert_eq!(custom_opts.log_level, "DEBUG");
-        assert_eq!(custom_opts.extra_options.len(), 1);
+        assert_eq!(custom_opts.common.log_level, "DEBUG");
+        assert_eq!(custom_opts.common.extra_options.len(), 1);
         assert_eq!(
-            custom_opts.extra_options[0],
+            custom_opts.common.extra_options[0],
             ("ServerAliveInterval".to_string(), "30".to_string())
         );
+    }
+
+    #[test]
+    fn test_shell_escape_command() {
+        // Single argument
+        assert_eq!(shell_escape_command(&["echo".to_string()]).unwrap(), "echo");
+
+        // Multiple simple arguments
+        assert_eq!(
+            shell_escape_command(&["/bin/sh".to_string(), "-c".to_string()]).unwrap(),
+            "/bin/sh -c"
+        );
+
+        // Arguments with special characters - shlex uses single quotes for POSIX compliance
+        let result = shell_escape_command(&[
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo hello; sleep 5; echo world".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(result, "/bin/sh -c 'echo hello; sleep 5; echo world'");
+
+        // Test that shlex properly handles quotes and spaces
+        let result2 = shell_escape_command(&[
+            "echo".to_string(),
+            "hello world".to_string(),
+            "it's working".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(result2, "echo 'hello world' \"it's working\"");
+
+        // Test edge case with single quotes - shlex uses double quotes
+        let result3 =
+            shell_escape_command(&["echo".to_string(), "don't do this".to_string()]).unwrap();
+        assert_eq!(result3, "echo \"don't do this\"");
+
+        // Test system command like in the integration test - shell operators get quoted
+        let result4 = shell_escape_command(&[
+            "systemctl".to_string(),
+            "is-system-running".to_string(),
+            "||".to_string(),
+            "true".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(result4, "systemctl is-system-running '||' true");
     }
 }

@@ -23,10 +23,6 @@ Stop a running libvirt domain
 
     Force stop the domain
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 **--timeout**=*TIMEOUT*
 
     Timeout in seconds for graceful shutdown

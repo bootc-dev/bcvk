@@ -23,10 +23,6 @@ Remove a libvirt domain and its resources
 
     Force removal without confirmation
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 **--stop**
 
     Remove domain even if it's running

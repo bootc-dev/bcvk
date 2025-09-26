@@ -166,7 +166,7 @@ pub fn run_ephemeral_ssh(opts: RunEphemeralSshOpts) -> Result<()> {
 
     // Execute SSH connection directly (no thread needed for this)
     // This allows SSH output to be properly forwarded to stdout/stderr
-    debug!("Connecting to SSH...");
+    debug!("Connecting to SSH with args: {:?}", opts.ssh_args);
     let status = ssh::connect_via_container_with_status(&container_name, opts.ssh_args)?;
     debug!("SSH connection completed");
 

@@ -23,10 +23,6 @@ List available bootc volumes with metadata
 
     Show all domains including stopped ones
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

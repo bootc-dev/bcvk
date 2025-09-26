@@ -23,10 +23,6 @@ Run a bootable container as a persistent VM
 
     Name for the VM (auto-generated if not specified)
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 **--memory**=*MEMORY*
 
     Memory size (e.g. 4G, 2048M, or plain number for MB)

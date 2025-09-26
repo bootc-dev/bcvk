@@ -25,10 +25,6 @@ Show detailed information about a libvirt domain
 
     Default: yaml
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

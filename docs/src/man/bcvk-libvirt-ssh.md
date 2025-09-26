@@ -23,10 +23,6 @@ SSH to libvirt domain with embedded SSH key
 
     Command to execute on remote host
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 **--user**=*USER*
 
     SSH username to use for connection (defaults to 'root')
@@ -42,6 +38,16 @@ SSH to libvirt domain with embedded SSH key
     SSH connection timeout in seconds
 
     Default: 30
+
+**--log-level**=*LOG_LEVEL*
+
+    SSH log level
+
+    Default: ERROR
+
+**--extra-options**=*EXTRA_OPTIONS*
+
+    Extra SSH options in key=value format
 
 <!-- END GENERATED OPTIONS -->
 

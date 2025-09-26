@@ -301,23 +301,6 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     return Err(cmd.exec()).context("execve");
 }
 
-/// Launch privileged container with QEMU+KVM for ephemeral VM and wait for completion.
-/// Unlike `run()`, this function waits for completion instead of using exec(), making it suitable
-/// for programmatic use where the caller needs to capture output and exit codes.
-pub fn run_synchronous(opts: RunEphemeralOpts) -> Result<()> {
-    let (mut cmd, temp_dir) = prepare_run_command_with_temp(opts)?;
-    // Keep temp_dir alive until command completes
-
-    // Use the same approach as run_detached but wait for completion instead of detaching
-    let status = cmd.status().context("Failed to execute podman command")?;
-    if !status.success() {
-        return Err(color_eyre::eyre::eyre!("ephemeral run failed {status:?}",));
-    }
-    // Explicitly drop temp_dir after successful completion
-    drop(temp_dir);
-    Ok(())
-}
-
 fn prepare_run_command_with_temp(
     opts: RunEphemeralOpts,
 ) -> Result<(std::process::Command, tempfile::TempDir)> {

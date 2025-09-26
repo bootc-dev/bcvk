@@ -53,10 +53,6 @@ Create and start domains from uploaded bootc volumes
 
     Enable VNC console access
 
-**-c**, **--connect**=*CONNECT*
-
-    Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
-
 **--vnc-port**=*VNC_PORT*
 
     VNC port (default: auto-assign)

@@ -156,6 +156,8 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
             command: vec![],
             strict_host_keys: false,
             timeout: 30,
+            log_level: "ERROR".to_string(),
+            extra_options: vec![],
         };
         crate::libvirt::ssh::run(global_opts, ssh_opts)
     } else {

@@ -73,14 +73,17 @@
 //!     quay.io/centos-bootc/centos-bootc:stream10 output.img
 //! ```
 
+use std::io::IsTerminal;
+
 use crate::install_options::InstallOptions;
-use crate::run_ephemeral::{run_synchronous as run_ephemeral, CommonVmOpts, RunEphemeralOpts};
-use crate::{images, utils};
+use crate::run_ephemeral::{run_detached, CommonVmOpts, RunEphemeralOpts};
+use crate::run_ephemeral_ssh::wait_for_ssh_ready;
+use crate::{images, ssh, utils};
 use camino::Utf8PathBuf;
 use clap::{Parser, ValueEnum};
-use color_eyre::eyre::Context;
+use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
-use std::borrow::Cow;
+use indoc::indoc;
 use tracing::debug;
 
 /// Supported disk image formats
@@ -162,43 +165,51 @@ impl ToDiskOpts {
         }
     }
 
-    /// Generate the complete bootc installation command
-    fn generate_bootc_install_command(&self) -> Vec<String> {
+    /// Generate the complete bootc installation command arguments for SSH execution
+    fn generate_bootc_install_command(&self) -> Result<Vec<String>> {
         let source_imgref = format!("containers-storage:{}", self.source_image);
 
-        let bootc_install = [
-            "env",
-            // This is the magic trick to pull the storage from the host
-            "STORAGE_OPTS=additionalimagestore=/run/virtiofs-mnt-hoststorage/",
-            "bootc",
-            "install",
-            "to-disk",
-            // Default to being a generic image here, if someone cares they can override this
-            "--generic-image",
-            // The default in newer versions, but support older ones too
-            "--skip-fetch-check",
-            "--source-imgref",
-        ]
-        .into_iter()
-        .map(Cow::Borrowed)
-        .chain(std::iter::once(source_imgref.into()))
-        .chain(self.install.to_bootc_args().into_iter().map(Cow::Owned))
-        .chain(std::iter::once(Cow::Borrowed(
-            "/dev/disk/by-id/virtio-output",
-        )))
-        .fold(String::new(), |mut acc, elt| {
-            if !acc.is_empty() {
-                acc.push(' ');
-            }
-            acc.push_str(&*elt);
-            acc
-        });
-        // TODO: make /var a tmpfs by default (actually make run-ephemeral more like a readonly bootc)
-        vec![
-            "mount -t tmpfs tmpfs /var/lib/containers".to_owned(),
-            "mount -t tmpfs tmpfs /var/tmp".to_owned(),
-            bootc_install,
-        ]
+        // Quote each bootc argument individually to prevent shell injection
+        let mut quoted_bootc_args = Vec::new();
+        for arg in self.install.to_bootc_args() {
+            let quoted = shlex::try_quote(&arg)
+                .map_err(|e| eyre!("Failed to quote bootc argument '{}': {}", arg, e))?;
+            quoted_bootc_args.push(quoted.to_string());
+        }
+        let bootc_args = quoted_bootc_args.join(" ");
+
+        // Quote the source image reference to prevent shell injection
+        let quoted_source_imgref = shlex::try_quote(&source_imgref)
+            .map_err(|e| eyre!("Failed to quote source imgref '{}': {}", source_imgref, e))?
+            .to_string();
+
+        // Create the complete script by substituting variables directly
+        let script = indoc! {r#"
+            set -euo pipefail
+            
+            echo "Setting up temporary filesystems..."
+            mount -t tmpfs tmpfs /var/lib/containers
+            mount -t tmpfs tmpfs /var/tmp
+            
+            echo "Starting bootc installation..."
+            echo "Source image: {SOURCE_IMGREF}"
+            echo "Additional args: {BOOTC_ARGS}"
+            
+            # Execute bootc installation
+            env STORAGE_OPTS=additionalimagestore=/run/virtiofs-mnt-hoststorage/ \
+                bootc install to-disk \
+                --generic-image \
+                --skip-fetch-check \
+                --source-imgref {SOURCE_IMGREF} \
+                {BOOTC_ARGS} \
+                /dev/disk/by-id/virtio-output
+            
+            echo "Installation completed successfully!"
+        "#}
+        .replace("{SOURCE_IMGREF}", &quoted_source_imgref)
+        .replace("{BOOTC_ARGS}", &bootc_args);
+
+        Ok(vec!["/bin/bash".to_string(), "-c".to_string(), script])
     }
 
     /// Calculate the optimal target disk size based on the source image or explicit size
@@ -230,7 +241,7 @@ impl ToDiskOpts {
     }
 }
 
-/// Execute a bootc installation using an ephemeral VM
+/// Execute a bootc installation using an ephemeral VM with SSH
 ///
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
@@ -290,10 +301,14 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
 
     // Phase 3: Installation command generation
     // Generate complete script including storage setup and bootc install
-    let bootc_install_command = opts.generate_bootc_install_command();
+    let bootc_install_command = opts.generate_bootc_install_command()?;
 
     // Phase 4: Ephemeral VM configuration
-    let common_opts = opts.common.clone();
+    let mut common_opts = opts.common.clone();
+    // Enable SSH key generation for SSH-based installation
+    common_opts.ssh_keygen = true;
+
+    let tty = std::io::stdout().is_terminal();
 
     // Configure VM for installation:
     // - Use source image as installer environment
@@ -304,7 +319,9 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         image: opts.get_installer_image().to_string(),
         common: common_opts,
         podman: crate::run_ephemeral::CommonPodmanOptions {
-            rm: true, // Clean up container after installation
+            rm: true,     // Clean up container after installation
+            detach: true, // Run in detached mode for SSH approach
+            tty,
             label: opts.label,
             ..Default::default()
         },
@@ -324,24 +341,41 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         )], // Attach target disk
     };
 
-    // Phase 5: Final VM configuration and execution
-    let mut final_opts = ephemeral_opts;
-    // Set the installation script to execute in the VM
-    final_opts.common.execute = bootc_install_command;
+    // Phase 5: SSH-based VM configuration and execution
+    // Launch VM in detached mode with SSH enabled
+    debug!("Starting ephemeral VM with SSH...");
+    let container_id = run_detached(ephemeral_opts)?;
+    debug!("Ephemeral VM started with container ID: {}", container_id);
 
-    // Ensure clean shutdown after installation completes
-    final_opts
-        .common
-        .kernel_args
-        .push("systemd.default_target=poweroff.target".to_string());
+    // Use the SSH approach for better TTY forwarding and output buffering
+    let result = (|| -> Result<()> {
+        // Wait for SSH to be ready
+        let progress_bar = crate::boot_progress::create_boot_progress_bar();
+        let progress_bar = wait_for_ssh_ready(
+            &container_id,
+            std::time::Duration::from_secs(60),
+            progress_bar,
+        )?;
+        progress_bar.finish_and_clear();
 
-    // Phase 6: Launch VM and execute installation
-    // The ephemeral VM will:
-    // 1. Boot using the bootc image
-    // 2. Mount host storage and target disk
-    // 3. Execute the installation script
-    // 4. Shut down automatically after completion
-    match run_ephemeral(final_opts) {
+        // Connect via SSH and execute the installation command
+        debug!(
+            "Executing installation via SSH: {:?}",
+            bootc_install_command
+        );
+        ssh::connect_via_container(&container_id, bootc_install_command)?;
+
+        Ok(())
+    })();
+
+    // Cleanup: stop and remove the container
+    debug!("Cleaning up ephemeral container...");
+    let _ = std::process::Command::new("podman")
+        .args(["rm", "-f", &container_id])
+        .output();
+
+    // Handle the result - remove disk file on failure
+    match result {
         Ok(()) => Ok(()),
         Err(e) => {
             let _ = std::fs::remove_file(&opts.target_disk);
