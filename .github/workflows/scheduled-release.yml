@@ -1,3 +1,5 @@
+# Keep this in sync with the code in bootc-dev/bootc
+
 name: Create Release PR
 
 on:

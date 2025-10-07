@@ -1,3 +1,4 @@
+# Keep this in sync with the code in bootc-dev/bootc
 name: Release
 
 on:
@@ -27,7 +28,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: false
 
       - name: Extract version
         id: extract_version
@@ -68,9 +68,10 @@ jobs:
 
           git tag -s -m "Release $VERSION" "$TAG_NAME"
           git push origin "$TAG_NAME"
-          git checkout "$TAG_NAME"
 
           echo "Successfully created and pushed tag $TAG_NAME"
+
+          git checkout "$TAG_NAME"
 
       - name: Install dependencies
         run: |
