@@ -88,11 +88,20 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRmOpts) ->
 
     println!("Removing VM '{}'...", opts.name);
 
-    // Remove libvirt domain
+    // Remove disk manually if it exists (unmanaged storage)
+    if let Some(ref disk_path) = domain_info.disk_path {
+        println!("  Removing disk image...");
+        if std::path::Path::new(disk_path).exists() {
+            std::fs::remove_file(disk_path)
+                .with_context(|| format!("Failed to remove disk file: {}", disk_path))?;
+        }
+    }
+
+    // Remove libvirt domain with nvram
     println!("  Removing libvirt domain...");
     let output = global_opts
         .virsh_command()
-        .args(&["undefine", &opts.name, "--remove-all-storage"])
+        .args(&["undefine", &opts.name, "--nvram"])
         .output()
         .with_context(|| "Failed to undefine libvirt domain")?;
 
