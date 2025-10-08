@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use color_eyre::Result;
-use serde::{Deserialize, Serialize};
 use tokio::signal::unix::SignalKind;
 use tracing::debug;
 
@@ -33,16 +32,6 @@ pub struct SshOpts {
 
 #[derive(Parser)]
 pub struct MonitorStatusOpts {}
-
-/// Configuration passed via BCK_CONFIG environment variable
-#[derive(Serialize, Deserialize)]
-pub struct ContainerConfig {
-    pub memory_mb: u32,
-    pub vcpus: u32,
-    pub console: bool,
-    pub extra_args: Option<String>,
-    // Future: SSH config, etc.
-}
 
 pub async fn run_ephemeral_in_container() -> Result<()> {
     // Parse BCK_CONFIG from environment

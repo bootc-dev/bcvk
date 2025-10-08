@@ -27,16 +27,6 @@ pub enum SupervisorState {
     Ready,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VmInfo {
-    /// Whether SSH is available
-    pub ssh_available: bool,
-    /// Port number for SSH if forwarded
-    pub ssh_port: Option<u16>,
-    /// IP address if available
-    pub ip_address: Option<String>,
-}
-
 impl SupervisorStatus {
     /// Create a new status with the given state
     pub fn new(state: SupervisorState) -> Self {

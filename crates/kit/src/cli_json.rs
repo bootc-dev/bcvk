@@ -1,6 +1,6 @@
 //! Export CLI structure as JSON for documentation generation
+#![cfg(feature = "docgen")]
 
-#[cfg(feature = "docgen")]
 use clap::Command;
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +36,6 @@ pub struct CliPositional {
 }
 
 /// Convert a clap Command to our JSON representation
-#[cfg(feature = "docgen")]
 pub fn command_to_json(cmd: &Command) -> CliCommand {
     let mut options = Vec::new();
     let mut positionals = Vec::new();
@@ -128,7 +127,6 @@ pub fn command_to_json(cmd: &Command) -> CliCommand {
 }
 
 /// Dump the complete CLI structure as JSON
-#[cfg(feature = "docgen")]
 pub fn dump_cli_json() -> color_eyre::Result<String> {
     use clap::CommandFactory;
 

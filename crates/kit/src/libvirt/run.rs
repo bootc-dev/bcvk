@@ -674,7 +674,7 @@ fn create_libvirt_domain_from_disk(
     if !opts.volumes.is_empty() {
         debug!("Processing {} volume mount(s)", opts.volumes.len());
 
-        for (idx, volume_str) in opts.volumes.iter().enumerate() {
+        for volume_str in opts.volumes.iter() {
             let (host_path, tag) = parse_volume_mount(volume_str)
                 .with_context(|| format!("Failed to parse volume mount '{}'", volume_str))?;
 
