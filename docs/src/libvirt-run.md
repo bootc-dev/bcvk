@@ -131,6 +131,43 @@ bcvk libvirt run \
 - Persistent development state
 - Host integration capabilities
 
+### Host Directory Mounting
+
+```bash
+# Create VM with host directory mounted into the guest
+bcvk libvirt run \
+  --name dev-environment \
+  --volume /home/chris/projects/foo:src \
+  --volume /home/chris/data:data \
+  --ssh \
+  quay.io/myapp/dev:latest
+```
+
+The `--volume` flag allows you to share directories from the host into the VM using virtiofs.
+The format is `--volume HOST_PATH:TAG`, where:
+- `HOST_PATH` must be an existing directory on the host
+- `TAG` is a virtiofs tag name you choose (used to mount the filesystem in the guest)
+
+After the VM is created, you'll need to mount the virtiofs filesystems in the guest. For example:
+
+```bash
+# In the guest VM
+mkdir -p /mnt/src
+mount -t virtiofs src /mnt/src
+
+mkdir -p /mnt/data
+mount -t virtiofs data /mnt/data
+```
+
+You can mount each virtiofs filesystem anywhere you like in the guest using its tag name.
+The bcvk command output will show you the tag names for each volume.
+
+**Benefits**:
+- Live file sharing between host and guest
+- No copying or synchronization needed
+- Near-native filesystem performance
+- Read-write access (use with caution)
+
 ### Container Storage Integration
 
 ```bash

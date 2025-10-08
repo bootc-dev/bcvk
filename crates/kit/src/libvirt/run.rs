@@ -193,6 +193,19 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
     println!("  Memory: {}", opts.memory.memory);
     println!("  CPUs: {}", opts.cpus);
 
+    // Display volume mount information if any
+    if !opts.volumes.is_empty() {
+        println!("\nVolume mounts:");
+        for volume_str in opts.volumes.iter() {
+            if let Ok((host_path, tag)) = parse_volume_mount(volume_str) {
+                println!(
+                    "  {} (tag: {}, mount with: mount -t virtiofs {} /your/mount/point)",
+                    host_path, tag, tag
+                );
+            }
+        }
+    }
+
     if opts.ssh {
         // Use the libvirt SSH functionality directly
         let ssh_opts = crate::libvirt::ssh::LibvirtSshOpts {
@@ -465,6 +478,46 @@ fn find_available_ssh_port() -> u16 {
     PORT_RANGE_START // Ultimate fallback
 }
 
+/// Parse a volume mount string in the format "host_path:tag"
+fn parse_volume_mount(volume_str: &str) -> Result<(String, String)> {
+    let parts: Vec<&str> = volume_str.splitn(2, ':').collect();
+
+    if parts.len() != 2 {
+        return Err(color_eyre::eyre::eyre!(
+            "Invalid volume format '{}'. Expected format: host_path:tag",
+            volume_str
+        ));
+    }
+
+    let host_path = parts[0].trim();
+    let tag = parts[1].trim();
+
+    if host_path.is_empty() || tag.is_empty() {
+        return Err(color_eyre::eyre::eyre!(
+            "Invalid volume format '{}'. Both host path and tag must be non-empty",
+            volume_str
+        ));
+    }
+
+    // Validate that the host path exists
+    let host_path_buf = std::path::Path::new(host_path);
+    if !host_path_buf.exists() {
+        return Err(color_eyre::eyre::eyre!(
+            "Host path '{}' does not exist",
+            host_path
+        ));
+    }
+
+    if !host_path_buf.is_dir() {
+        return Err(color_eyre::eyre::eyre!(
+            "Host path '{}' is not a directory",
+            host_path
+        ));
+    }
+
+    Ok((host_path.to_string(), tag.to_string()))
+}
+
 /// Check if the libvirt version supports readonly virtiofs filesystems
 /// Requires libvirt 11.0+ and modern QEMU with rust-based virtiofsd
 fn check_libvirt_readonly_support() -> Result<()> {
@@ -477,7 +530,7 @@ fn check_libvirt_readonly_support() -> Result<()> {
         match version {
             Some(v) => Err(color_eyre::eyre::eyre!(
                 "The --bind-storage-ro flag requires libvirt 11.0 or later for readonly virtiofs support. \
-                Current version: {}", 
+                Current version: {}",
                 v.full_version
             )),
             None => Err(color_eyre::eyre::eyre!(
@@ -486,6 +539,50 @@ fn check_libvirt_readonly_support() -> Result<()> {
                 Please ensure you have a compatible libvirt version installed."
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_volume_mount_valid() {
+        let result = parse_volume_mount("/tmp:mytag");
+        assert!(result.is_ok());
+        let (host, tag) = result.unwrap();
+        assert_eq!(host, "/tmp");
+        assert_eq!(tag, "mytag");
+    }
+
+    #[test]
+    fn test_parse_volume_mount_invalid_format() {
+        let result = parse_volume_mount("/tmp");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Expected format: host_path:tag"));
+    }
+
+    #[test]
+    fn test_parse_volume_mount_empty_parts() {
+        let result = parse_volume_mount(":mytag");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Both host path and tag must be non-empty"));
+    }
+
+    #[test]
+    fn test_parse_volume_mount_nonexistent_host() {
+        let result = parse_volume_mount("/nonexistent/path/that/does/not/exist:mytag");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not exist"));
     }
 }
 
@@ -601,6 +698,30 @@ fn create_libvirt_domain_from_disk(
         // Add secure boot keys path to metadata for reference
         domain_builder =
             domain_builder.with_metadata("bootc:secure-boot-keys", sb_config.key_dir.as_str());
+    }
+
+    // Add user-specified volume mounts
+    if !opts.volumes.is_empty() {
+        debug!("Processing {} volume mount(s)", opts.volumes.len());
+
+        for (idx, volume_str) in opts.volumes.iter().enumerate() {
+            let (host_path, tag) = parse_volume_mount(volume_str)
+                .with_context(|| format!("Failed to parse volume mount '{}'", volume_str))?;
+
+            debug!(
+                "Adding volume mount: {} (host) with tag '{}'",
+                host_path, tag
+            );
+
+            let virtiofs_fs = VirtiofsFilesystem {
+                source_dir: host_path.clone(),
+                tag: tag.clone(),
+                readonly: false,
+            };
+
+            domain_builder = domain_builder
+                .with_virtiofs_filesystem(virtiofs_fs);
+        }
     }
 
     // Add container storage mount if requested
