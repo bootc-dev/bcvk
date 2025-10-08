@@ -180,7 +180,7 @@ impl ToDiskOpts {
     }
 
     /// Generate the complete bootc installation command arguments for SSH execution
-    fn generate_bootc_install_command(&self) -> Result<Vec<String>> {
+    fn generate_bootc_install_command(&self, disk_size: u64) -> Result<Vec<String>> {
         let source_imgref = format!("containers-storage:{}", self.source_image);
 
         // Quote each bootc argument individually to prevent shell injection
@@ -206,14 +206,25 @@ impl ToDiskOpts {
             .map(|v| format!("--env=RUST_LOG={v}"))
             .unwrap_or_default();
 
+        // Size /var/tmp tmpfs to match swap size (disk_size)
+        // This avoids duplicating size calculation logic
+        let tmpfs_size_str = format!("size={}k", disk_size / 1024);
+        let tmpfs_size_quoted = shlex::try_quote(&tmpfs_size_str)
+            .map_err(|e| eyre!("Failed to quote tmpfs size: {}", e))?
+            .to_string();
+
         // Create the complete script by substituting variables directly
         let script = indoc! {r#"
             set -euo pipefail
-            
+
             echo "Setting up temporary filesystems..."
-            mount -t tmpfs tmpfs /var/lib/containers
-            mount -t tmpfs tmpfs /var/tmp
-            
+            # Mount /var/tmp as a large tmpfs, then symlink /var/lib/containers to it
+            # to consolidate temporary storage in one location
+            mount -t tmpfs -o {TMPFS_SIZE} tmpfs /var/tmp
+            mkdir -p /var/tmp/containers
+            rm /var/lib/containers -rf
+            ln -sr /var/tmp/containers /var/lib/containers
+
             echo "Starting bootc installation..."
             echo "Source image: {SOURCE_IMGREF}"
             echo "Additional args: {BOOTC_ARGS}"
@@ -237,9 +248,10 @@ impl ToDiskOpts {
                 --skip-fetch-check \
                 {BOOTC_ARGS} \
                 /dev/disk/by-id/virtio-output
-            
+
             echo "Installation completed successfully!"
         "#}
+        .replace("{TMPFS_SIZE}", &tmpfs_size_quoted)
         .replace("{SOURCE_IMGREF}", &quoted_source_imgref)
         .replace("{INSTALL_LOG}", &install_log)
         .replace("{BOOTC_ARGS}", &bootc_args);
@@ -371,7 +383,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
 
     // Phase 3: Installation command generation
     // Generate complete script including storage setup and bootc install
-    let bootc_install_command = opts.generate_bootc_install_command()?;
+    let bootc_install_command = opts.generate_bootc_install_command(disk_size)?;
 
     // Phase 4: Ephemeral VM configuration
     let mut common_opts = opts.additional.common.clone();
