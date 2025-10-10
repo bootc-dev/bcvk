@@ -135,24 +135,8 @@ impl DomainLister {
 
     /// Get domain XML metadata as parsed DOM
     pub fn get_domain_xml(&self, domain_name: &str) -> Result<xml_utils::XmlNode> {
-        let output = self
-            .virsh_command()
-            .args(&["dumpxml", domain_name])
-            .output()
-            .with_context(|| format!("Failed to dump XML for domain '{}'", domain_name))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(color_eyre::eyre::eyre!(
-                "Failed to get XML for domain '{}': {}",
-                domain_name,
-                stderr
-            ));
-        }
-
-        let xml = String::from_utf8(output.stdout)?;
-        xml_utils::parse_xml_dom(&xml)
-            .with_context(|| format!("Failed to parse XML for domain '{}'", domain_name))
+        crate::libvirt::run::run_virsh_xml(self.connect_uri.as_deref(), &["dumpxml", domain_name])
+            .context(format!("Failed to get XML for domain '{}'", domain_name))
     }
 
     /// Extract podman-bootc metadata from parsed domain XML

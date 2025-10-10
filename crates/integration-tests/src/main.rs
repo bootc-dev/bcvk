@@ -64,6 +64,18 @@ pub(crate) fn get_alternative_test_image() -> String {
     }
 }
 
+/// Get libvirt connection arguments for CLI commands
+///
+/// Returns ["--connect", "URI"] if LIBVIRT_DEFAULT_URI is set, otherwise empty vec.
+/// This uses the standard libvirt environment variable.
+pub(crate) fn get_libvirt_connect_args() -> Vec<String> {
+    if let Some(uri) = std::env::var("LIBVIRT_DEFAULT_URI").ok() {
+        vec!["--connect".to_string(), uri]
+    } else {
+        vec![]
+    }
+}
+
 /// Captured output from a command with decoded stdout/stderr strings
 pub(crate) struct CapturedOutput {
     pub output: Output,

@@ -4,10 +4,12 @@
 //! with SSH key injection, automatically retrieving SSH credentials from domain XML
 //! metadata and establishing connection using embedded private keys.
 
-use crate::xml_utils;
 use base64::Engine;
 use clap::Parser;
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{
+    eyre::{eyre, Context},
+    Result,
+};
 use std::fs::Permissions;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt as _;
@@ -85,21 +87,15 @@ impl LibvirtSshOpts {
         &self,
         global_opts: &crate::libvirt::LibvirtOptions,
     ) -> Result<DomainSshConfig> {
-        let output = global_opts
-            .virsh_command()
-            .args(&["dumpxml", &self.domain_name])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(eyre!("Failed to get domain XML for '{}'", self.domain_name));
-        }
-
-        let xml = String::from_utf8(output.stdout)?;
-        debug!("Domain XML for SSH extraction: {}", xml);
-
-        // Parse XML once for all metadata extraction
-        let dom = xml_utils::parse_xml_dom(&xml)
-            .map_err(|e| eyre!("Failed to parse domain XML: {}", e))?;
+        let dom = super::run::run_virsh_xml(
+            global_opts.connect.as_deref(),
+            &["dumpxml", &self.domain_name],
+        )
+        .context(format!(
+            "Failed to get domain XML for '{}'",
+            self.domain_name
+        ))?;
+        debug!("Domain XML retrieved for SSH extraction");
 
         // Extract SSH metadata from bootc:container section
         // First try the new base64 encoded format
@@ -382,6 +378,7 @@ pub fn run_ssh_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xml_utils;
 
     #[test]
     fn test_ssh_metadata_extraction() {

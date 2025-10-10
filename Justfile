@@ -25,10 +25,10 @@ test-integration *ARGS: build pull-test-images
     #!/usr/bin/env bash
     set -euo pipefail
     export BCVK_PATH=$(pwd)/target/release/bcvk
-    
+
     # Clean up any leftover containers before starting
     cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
-    
+
     # Run the tests
     if command -v cargo-nextest &> /dev/null; then
         cargo nextest run --release -P integration -p integration-tests {{ ARGS }}
@@ -37,11 +37,15 @@ test-integration *ARGS: build pull-test-images
         cargo test --release -p integration-tests -- {{ ARGS }}
         TEST_EXIT_CODE=$?
     fi
-    
+
     # Clean up containers after tests complete
     cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
-    
+
     exit $TEST_EXIT_CODE
+
+# Run integration tests with qemu:///system (tests rootless podman + system libvirt)
+test-integration-system *ARGS: build pull-test-images
+    env LIBVIRT_DEFAULT_URI=qemu:///system just test-integration {{ARGS}}
 
 # Clean up integration test containers
 test-cleanup:

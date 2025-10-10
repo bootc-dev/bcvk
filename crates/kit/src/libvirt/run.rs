@@ -26,6 +26,36 @@ pub(super) fn virsh_command(connect_uri: Option<&str>) -> Result<std::process::C
     Ok(cmd)
 }
 
+/// Run a virsh command that returns XML and parse it directly
+///
+/// This helper function consolidates the common pattern of:
+/// 1. Running a virsh command with arguments
+/// 2. Checking if the command succeeded
+/// 3. Parsing the XML output from the stdout bytes
+///
+/// # Arguments
+/// * `connect_uri` - Optional libvirt connection URI
+/// * `args` - Arguments to pass to virsh
+///
+/// # Returns
+/// The parsed XML as an XmlNode
+pub fn run_virsh_xml(connect_uri: Option<&str>, args: &[&str]) -> Result<xml_utils::XmlNode> {
+    let mut cmd = virsh_command(connect_uri)?;
+    cmd.args(args);
+
+    let output = cmd.output().context("Failed to run virsh")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(eyre::eyre!("virsh command failed: {}", stderr));
+    }
+
+    // Parse XML directly from bytes
+    let xml = std::str::from_utf8(&output.stdout).context("Invalid UTF-8 in virsh output")?;
+
+    xml_utils::parse_xml_dom(xml).context("Failed to parse XML")
+}
+
 /// Firmware type for virtual machines
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
@@ -343,24 +373,8 @@ pub fn get_libvirt_storage_pool_path(connect_uri: Option<&str>) -> Result<Utf8Pa
     // Ensure pool exists before querying
     ensure_default_pool(connect_uri)?;
 
-    let mut cmd = virsh_command(connect_uri)?;
-    cmd.args(&["pool-dumpxml", "default"]);
-    let output = cmd
-        .output()
-        .with_context(|| "Failed to query libvirt storage pool")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let uri_desc = connect_uri.unwrap_or("default connection");
-        return Err(color_eyre::eyre::eyre!(
-            "Failed to get default storage pool info for {}: {}",
-            uri_desc,
-            stderr
-        ));
-    }
-
-    let xml = String::from_utf8(output.stdout).with_context(|| "Invalid UTF-8 in virsh output")?;
-    let dom = xml_utils::parse_xml_dom(&xml).with_context(|| "Failed to parse storage pool XML")?;
+    let dom = run_virsh_xml(connect_uri, &["pool-dumpxml", "default"])
+        .context("Failed to get default storage pool info")?;
 
     if let Some(path_node) = dom.find("path") {
         let path_str = path_node.text_content().trim();

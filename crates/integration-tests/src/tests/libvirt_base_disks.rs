@@ -8,12 +8,13 @@
 
 use std::process::Command;
 
-use crate::{get_bck_command, get_test_image};
+use crate::{get_bck_command, get_libvirt_connect_args, get_test_image};
 
 /// Test that base disk is created and reused for multiple VMs
 pub fn test_base_disk_creation_and_reuse() {
     let bck = get_bck_command().unwrap();
     let test_image = get_test_image();
+    let connect_args = get_libvirt_connect_args();
 
     // Generate unique names for test VMs
     let timestamp = std::time::SystemTime::now()
@@ -33,20 +34,12 @@ pub fn test_base_disk_creation_and_reuse() {
 
     // Create first VM - this should create a new base disk
     println!("Creating first VM (should create base disk)...");
-    let vm1_output = Command::new("timeout")
-        .args([
-            "300s",
-            &bck,
-            "libvirt",
-            "run",
-            "--name",
-            &vm1_name,
-            "--filesystem",
-            "ext4",
-            &test_image,
-        ])
-        .output()
-        .expect("Failed to create first VM");
+    let mut vm1_cmd = Command::new("timeout");
+    vm1_cmd.args(["300s", &bck, "libvirt"]);
+    vm1_cmd.args(&connect_args);
+    vm1_cmd.arg("run");
+    vm1_cmd.args(["--name", &vm1_name, "--filesystem", "ext4", &test_image]);
+    let vm1_output = vm1_cmd.output().expect("Failed to create first VM");
 
     let vm1_stdout = String::from_utf8_lossy(&vm1_output.stdout);
     let vm1_stderr = String::from_utf8_lossy(&vm1_output.stderr);
@@ -69,20 +62,12 @@ pub fn test_base_disk_creation_and_reuse() {
 
     // Create second VM - this should reuse the base disk
     println!("Creating second VM (should reuse base disk)...");
-    let vm2_output = Command::new("timeout")
-        .args([
-            "300s",
-            &bck,
-            "libvirt",
-            "run",
-            "--name",
-            &vm2_name,
-            "--filesystem",
-            "ext4",
-            &test_image,
-        ])
-        .output()
-        .expect("Failed to create second VM");
+    let mut vm2_cmd = Command::new("timeout");
+    vm2_cmd.args(["300s", &bck, "libvirt"]);
+    vm2_cmd.args(&connect_args);
+    vm2_cmd.arg("run");
+    vm2_cmd.args(["--name", &vm2_name, "--filesystem", "ext4", &test_image]);
+    let vm2_output = vm2_cmd.output().expect("Failed to create second VM");
 
     let vm2_stdout = String::from_utf8_lossy(&vm2_output.stdout);
     let vm2_stderr = String::from_utf8_lossy(&vm2_output.stderr);
@@ -110,13 +95,15 @@ pub fn test_base_disk_creation_and_reuse() {
 /// Test base-disks list command
 pub fn test_base_disks_list_command() {
     let bck = get_bck_command().unwrap();
+    let connect_args = get_libvirt_connect_args();
 
     println!("Testing base-disks list command");
 
-    let output = Command::new(&bck)
-        .args(["libvirt", "base-disks", "list"])
-        .output()
-        .expect("Failed to run base-disks list");
+    let mut cmd = Command::new(&bck);
+    cmd.arg("libvirt");
+    cmd.args(&connect_args);
+    cmd.args(["base-disks", "list"]);
+    let output = cmd.output().expect("Failed to run base-disks list");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -149,11 +136,15 @@ pub fn test_base_disks_list_command() {
 /// Test base-disks prune command with dry-run
 pub fn test_base_disks_prune_dry_run() {
     let bck = get_bck_command().unwrap();
+    let connect_args = get_libvirt_connect_args();
 
     println!("Testing base-disks prune --dry-run command");
 
-    let output = Command::new(&bck)
-        .args(["libvirt", "base-disks", "prune", "--dry-run"])
+    let mut cmd = Command::new(&bck);
+    cmd.arg("libvirt");
+    cmd.args(&connect_args);
+    cmd.args(["base-disks", "prune", "--dry-run"]);
+    let output = cmd
         .output()
         .expect("Failed to run base-disks prune --dry-run");
 
@@ -185,6 +176,7 @@ pub fn test_base_disks_prune_dry_run() {
 pub fn test_vm_disk_references_base() {
     let bck = get_bck_command().unwrap();
     let test_image = get_test_image();
+    let connect_args = get_libvirt_connect_args();
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -197,20 +189,12 @@ pub fn test_vm_disk_references_base() {
     cleanup_domain(&vm_name);
 
     // Create VM
-    let output = Command::new("timeout")
-        .args([
-            "300s",
-            &bck,
-            "libvirt",
-            "run",
-            "--name",
-            &vm_name,
-            "--filesystem",
-            "ext4",
-            &test_image,
-        ])
-        .output()
-        .expect("Failed to create VM");
+    let mut vm_cmd = Command::new("timeout");
+    vm_cmd.args(["300s", &bck, "libvirt"]);
+    vm_cmd.args(&connect_args);
+    vm_cmd.arg("run");
+    vm_cmd.args(["--name", &vm_name, "--filesystem", "ext4", &test_image]);
+    let output = vm_cmd.output().expect("Failed to create VM");
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -220,10 +204,12 @@ pub fn test_vm_disk_references_base() {
     }
 
     // Get VM disk path from domain XML
-    let dumpxml_output = Command::new("virsh")
-        .args(&["dumpxml", &vm_name])
-        .output()
-        .expect("Failed to dump domain XML");
+    let mut dumpxml_cmd = Command::new("virsh");
+    for arg in &connect_args {
+        dumpxml_cmd.arg(arg);
+    }
+    dumpxml_cmd.args(&["dumpxml", &vm_name]);
+    let dumpxml_output = dumpxml_cmd.output().expect("Failed to dump domain XML");
 
     if !dumpxml_output.status.success() {
         cleanup_domain(&vm_name);
@@ -261,18 +247,24 @@ pub fn test_vm_disk_references_base() {
 
 /// Helper function to cleanup domain and its disk
 fn cleanup_domain(domain_name: &str) {
+    let connect_args = get_libvirt_connect_args();
     println!("Cleaning up domain: {}", domain_name);
 
     // Stop domain if running
-    let _ = Command::new("virsh")
-        .args(&["destroy", domain_name])
-        .output();
+    let mut destroy_cmd = Command::new("virsh");
+    for arg in &connect_args {
+        destroy_cmd.arg(arg);
+    }
+    destroy_cmd.args(&["destroy", domain_name]);
+    let _ = destroy_cmd.output();
 
     // Use bcvk libvirt rm for proper cleanup
     let bck = get_bck_command().unwrap();
-    let cleanup_output = Command::new(&bck)
-        .args(&["libvirt", "rm", domain_name, "--force", "--stop"])
-        .output();
+    let mut cleanup_cmd = Command::new(&bck);
+    cleanup_cmd.arg("libvirt");
+    cleanup_cmd.args(&connect_args);
+    cleanup_cmd.args(&["rm", domain_name, "--force", "--stop"]);
+    let cleanup_output = cleanup_cmd.output();
 
     if let Ok(output) = cleanup_output {
         if output.status.success() {

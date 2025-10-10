@@ -3,7 +3,6 @@
 //! This module provides functionality to discover and list bootc volumes
 //! with their container image metadata and creation information.
 
-use crate::xml_utils;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use comfy_table::{presets::UTF8_FULL, Table};
@@ -177,21 +176,15 @@ impl LibvirtListVolumesOpts {
         }
 
         // Get metadata from volume XML
-        let xml_output = self
-            .virsh_command(global_opts)
-            .args(&["vol-dumpxml", volume_name, "--pool", &self.pool])
-            .output()?;
-
         let mut source_image = None;
         let mut source_digest = None;
         let mut created = None;
 
-        if xml_output.status.success() {
-            let xml = String::from_utf8(xml_output.stdout)?;
-            debug!("Volume XML for {}: {}", volume_name, xml);
-
-            // Parse XML once and search for metadata
-            let dom = xml_utils::parse_xml_dom(&xml)?;
+        if let Ok(dom) = super::run::run_virsh_xml(
+            global_opts.connect.as_deref(),
+            &["vol-dumpxml", volume_name, "--pool", &self.pool],
+        ) {
+            debug!("Volume XML retrieved for {}", volume_name);
 
             // First try to extract metadata from description field (new format)
             if let Some(description_node) = dom.find("description") {
