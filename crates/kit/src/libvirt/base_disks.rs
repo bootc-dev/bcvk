@@ -120,8 +120,6 @@ fn create_base_disk(
                 memory: crate::common_opts::MemoryOpts {
                     memory: super::LIBVIRT_DEFAULT_MEMORY.to_string(),
                 },
-                vcpus: Some(super::LIBVIRT_DEFAULT_VCPUS),
-                ssh_keygen: false, // Base disks don't need SSH keys
                 ..Default::default()
             },
             ..Default::default()
