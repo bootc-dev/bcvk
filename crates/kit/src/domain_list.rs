@@ -4,6 +4,7 @@
 //! using libvirt as the source of truth instead of the VmRegistry cache.
 
 use crate::xml_utils;
+use base64::Engine;
 use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -28,6 +29,12 @@ pub struct PodmanBootcDomain {
     pub disk_path: Option<String>,
     /// User-defined labels for organizing domains
     pub labels: Vec<String>,
+    /// SSH port for connecting to the domain
+    pub ssh_port: Option<u16>,
+    /// Whether SSH credentials are available in metadata
+    pub has_ssh_key: bool,
+    /// SSH private key (available only when outputting JSON)
+    pub ssh_private_key: Option<String>,
 }
 
 impl PodmanBootcDomain {
@@ -204,6 +211,15 @@ impl DomainLister {
         // Extract disk path from first disk device
         let disk_path = extract_disk_path(&dom);
 
+        // Extract SSH port
+        let ssh_port = dom
+            .find_with_namespace("ssh-port")
+            .and_then(|node| node.text_content().parse::<u16>().ok());
+
+        // Extract SSH private key (either base64 or legacy format)
+        let ssh_private_key = extract_ssh_private_key(dom);
+        let has_ssh_key = ssh_private_key.is_some();
+
         Ok(Some(PodmanBootcDomainMetadata {
             source_image,
             created,
@@ -211,6 +227,9 @@ impl DomainLister {
             vcpus,
             disk_path,
             labels,
+            ssh_port,
+            has_ssh_key,
+            ssh_private_key,
         }))
     }
 
@@ -243,6 +262,9 @@ impl DomainLister {
                 .as_ref()
                 .map(|m| m.labels.clone())
                 .unwrap_or_default(),
+            ssh_port: metadata.as_ref().and_then(|m| m.ssh_port),
+            has_ssh_key: metadata.as_ref().map(|m| m.has_ssh_key).unwrap_or(false),
+            ssh_private_key: metadata.as_ref().and_then(|m| m.ssh_private_key.clone()),
         })
     }
 
@@ -305,6 +327,9 @@ struct PodmanBootcDomainMetadata {
     vcpus: Option<u32>,
     disk_path: Option<String>,
     labels: Vec<String>,
+    ssh_port: Option<u16>,
+    has_ssh_key: bool,
+    ssh_private_key: Option<String>,
 }
 
 /// Extract disk path from domain XML using DOM parser
@@ -334,6 +359,24 @@ fn find_disk_with_file_type(node: &xml_utils::XmlNode) -> Option<&xml_utils::Xml
     }
 
     None
+}
+
+/// Extract SSH private key from domain XML, handling both base64 and legacy formats
+fn extract_ssh_private_key(dom: &xml_utils::XmlNode) -> Option<String> {
+    if let Some(encoded_key_node) = dom.find_with_namespace("ssh-private-key-base64") {
+        let encoded_key = encoded_key_node.text_content();
+        // Strip whitespace/newlines from base64 before decoding
+        let encoded_key_clean: String =
+            encoded_key.chars().filter(|c| !c.is_whitespace()).collect();
+        // Decode base64 encoded private key
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded_key_clean.as_bytes())
+            .ok()
+            .and_then(|decoded_bytes| String::from_utf8(decoded_bytes).ok())
+    } else {
+        dom.find_with_namespace("ssh-private-key")
+            .map(|node| node.text_content().to_string())
+    }
 }
 
 #[cfg(test)]
@@ -406,6 +449,9 @@ mod tests {
             vcpus: None,
             disk_path: None,
             labels: vec![],
+            ssh_port: None,
+            has_ssh_key: false,
+            ssh_private_key: None,
         };
 
         assert!(domain.is_running());
@@ -421,6 +467,9 @@ mod tests {
             vcpus: None,
             disk_path: None,
             labels: vec![],
+            ssh_port: None,
+            has_ssh_key: false,
+            ssh_private_key: None,
         };
 
         assert!(!stopped_domain.is_running());

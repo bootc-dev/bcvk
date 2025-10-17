@@ -79,6 +79,140 @@ pub fn test_libvirt_list_json_output() {
     println!("libvirt list JSON output tested");
 }
 
+/// Test libvirt list JSON output includes SSH metadata
+pub fn test_libvirt_list_json_ssh_metadata() {
+    let test_image = get_test_image();
+
+    // Generate unique domain name for this test
+    let domain_name = format!(
+        "test-json-ssh-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+
+    println!(
+        "Testing libvirt list JSON output with SSH metadata for domain: {}",
+        domain_name
+    );
+
+    // Cleanup any existing domain with this name
+    cleanup_domain(&domain_name);
+
+    // Create domain with SSH key generation (default behavior)
+    println!("Creating libvirt domain with SSH key...");
+    let create_output = run_bcvk(&[
+        "libvirt",
+        "run",
+        "--name",
+        &domain_name,
+        "--label",
+        LIBVIRT_INTEGRATION_TEST_LABEL,
+        "--filesystem",
+        "ext4",
+        &test_image,
+    ])
+    .expect("Failed to run libvirt run");
+
+    println!("Create stdout: {}", create_output.stdout);
+    println!("Create stderr: {}", create_output.stderr);
+
+    if !create_output.success() {
+        cleanup_domain(&domain_name);
+        panic!("Failed to create domain with SSH: {}", create_output.stderr);
+    }
+
+    println!("Successfully created domain: {}", domain_name);
+
+    // List domains with JSON format
+    println!("Listing domains with JSON format...");
+    let bck = get_bck_command().unwrap();
+    let list_output = Command::new(&bck)
+        .args(["libvirt", "list", "--format", "json", "-a"])
+        .output()
+        .expect("Failed to run libvirt list --format json");
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    println!("List JSON output: {}", list_stdout);
+
+    // Cleanup domain before assertions
+    cleanup_domain(&domain_name);
+
+    // Check that the command succeeded
+    if !list_output.status.success() {
+        let stderr = String::from_utf8_lossy(&list_output.stderr);
+        panic!("libvirt list --format json failed: {}", stderr);
+    }
+
+    // Parse JSON output
+    let domains: Vec<serde_json::Value> =
+        serde_json::from_str(&list_stdout).expect("Failed to parse JSON output from libvirt list");
+
+    // Find our test domain in the output
+    let test_domain = domains
+        .iter()
+        .find(|d| d["name"].as_str() == Some(&domain_name))
+        .expect(&format!(
+            "Test domain '{}' not found in JSON output",
+            domain_name
+        ));
+
+    println!("Found test domain in JSON output: {:?}", test_domain);
+
+    // Verify SSH port is present and is a number
+    let ssh_port = test_domain["ssh_port"]
+        .as_u64()
+        .expect("ssh_port should be present and be a number");
+    assert!(
+        ssh_port > 0 && ssh_port < 65536,
+        "ssh_port should be a valid port number, got: {}",
+        ssh_port
+    );
+    println!("✓ ssh_port is present and valid: {}", ssh_port);
+
+    // Verify has_ssh_key is true
+    let has_ssh_key = test_domain["has_ssh_key"]
+        .as_bool()
+        .expect("has_ssh_key should be present and be a boolean");
+    assert!(
+        has_ssh_key,
+        "has_ssh_key should be true for domain created with SSH key"
+    );
+    println!("✓ has_ssh_key is true");
+
+    // Verify ssh_private_key is present and looks like a valid SSH key
+    let ssh_private_key = test_domain["ssh_private_key"]
+        .as_str()
+        .expect("ssh_private_key should be present and be a string");
+    assert!(
+        !ssh_private_key.is_empty(),
+        "ssh_private_key should not be empty"
+    );
+    assert!(
+        ssh_private_key.contains("-----BEGIN") && ssh_private_key.contains("PRIVATE KEY-----"),
+        "ssh_private_key should be a valid SSH private key format, got: {}",
+        &ssh_private_key[..std::cmp::min(100, ssh_private_key.len())]
+    );
+    assert!(
+        ssh_private_key.contains("-----END") && ssh_private_key.contains("PRIVATE KEY-----"),
+        "ssh_private_key should have proper end marker"
+    );
+
+    // Verify the key has proper newlines (not escaped \n)
+    assert!(
+        ssh_private_key.lines().count() > 1,
+        "ssh_private_key should have multiple lines, not escaped newlines"
+    );
+
+    println!(
+        "✓ ssh_private_key is present and valid (has {} lines)",
+        ssh_private_key.lines().count()
+    );
+
+    println!("✓ libvirt list JSON SSH metadata test passed");
+}
+
 /// Test domain resource configuration options
 pub fn test_libvirt_run_resource_options() {
     let bck = get_bck_command().unwrap();

@@ -12,6 +12,9 @@ use super::OutputFormat;
 /// Options for listing libvirt domains
 #[derive(Debug, Parser)]
 pub struct LibvirtListOpts {
+    /// Domain name to query (returns only this domain)
+    pub domain_name: Option<String>,
+
     /// Output format
     #[clap(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
@@ -37,7 +40,19 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtListOpts) 
         None => DomainLister::new(),
     };
 
-    let mut domains = if opts.all {
+    let mut domains = if let Some(ref domain_name) = opts.domain_name {
+        // Query specific domain by name
+        match lister.get_domain_info(domain_name) {
+            Ok(domain) => vec![domain],
+            Err(e) => {
+                return Err(color_eyre::eyre::eyre!(
+                    "Failed to get domain '{}': {}",
+                    domain_name,
+                    e
+                ));
+            }
+        }
+    } else if opts.all {
         lister
             .list_bootc_domains()
             .with_context(|| "Failed to list bootc domains from libvirt")?
@@ -69,7 +84,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtListOpts) 
 
             let mut table = Table::new();
             table.load_preset(UTF8_FULL);
-            table.set_header(vec!["NAME", "IMAGE", "STATUS", "MEMORY"]);
+            table.set_header(vec!["NAME", "IMAGE", "STATUS", "MEMORY", "SSH"]);
 
             for domain in &domains {
                 let image = match &domain.image {
@@ -86,7 +101,18 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtListOpts) 
                     Some(mem) => format!("{}MB", mem),
                     None => "unknown".to_string(),
                 };
-                table.add_row(vec![&domain.name, &image, &domain.status_string(), &memory]);
+                let ssh = match domain.ssh_port {
+                    Some(port) if domain.has_ssh_key => format!(":{}", port),
+                    Some(port) => format!(":{}*", port),
+                    None => "-".to_string(),
+                };
+                table.add_row(vec![
+                    &domain.name,
+                    &image,
+                    &domain.status_string(),
+                    &memory,
+                    &ssh,
+                ]);
             }
 
             println!("{}", table);
@@ -97,11 +123,20 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtListOpts) 
             );
         }
         OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&domains)
-                    .with_context(|| "Failed to serialize domains as JSON")?
-            );
+            // If querying a specific domain, return object directly instead of array
+            if opts.domain_name.is_some() && !domains.is_empty() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&domains[0])
+                        .with_context(|| "Failed to serialize domain as JSON")?
+                );
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&domains)
+                        .with_context(|| "Failed to serialize domains as JSON")?
+                );
+            }
         }
         OutputFormat::Yaml => {
             return Err(color_eyre::eyre::eyre!(

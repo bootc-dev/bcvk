@@ -251,6 +251,10 @@ fn main() {
             tests::libvirt_verb::test_libvirt_list_json_output();
             Ok(())
         }),
+        Trial::test("libvirt_list_json_ssh_metadata", || {
+            tests::libvirt_verb::test_libvirt_list_json_ssh_metadata();
+            Ok(())
+        }),
         Trial::test("libvirt_run_resource_options", || {
             tests::libvirt_verb::test_libvirt_run_resource_options();
             Ok(())
