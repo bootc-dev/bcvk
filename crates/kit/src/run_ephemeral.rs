@@ -816,6 +816,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
                 socket_path: socket_path.clone().into(),
                 shared_dir: source_path,
                 debug: false,
+                readonly: is_readonly,
             };
             additional_mounts.push((virtiofsd_config, tag.clone()));
 

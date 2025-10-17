@@ -898,6 +898,8 @@ pub struct VirtiofsConfig {
     /// Host directory to share
     pub shared_dir: Utf8PathBuf,
     pub debug: bool,
+    /// Mount as read-only
+    pub readonly: bool,
 }
 
 impl Default for VirtiofsConfig {
@@ -906,6 +908,8 @@ impl Default for VirtiofsConfig {
             socket_path: "/run/inner-shared/virtiofs.sock".into(),
             shared_dir: "/run/source-image".into(),
             debug: false,
+            // We don't need to write to this, there's a transient overlay
+            readonly: true,
         }
     }
 }
@@ -977,8 +981,8 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
         "--sandbox=none",
     ]);
 
-    // Only add --readonly if supported
-    if supports_readonly {
+    // Only add --readonly if requested and supported
+    if config.readonly && supports_readonly {
         cmd.arg("--readonly");
     }
 

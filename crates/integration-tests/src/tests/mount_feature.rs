@@ -20,22 +20,40 @@ use tempfile::TempDir;
 
 use crate::{get_test_image, run_bcvk, INTEGRATION_TEST_LABEL};
 
-/// Create a systemd unit that verifies a mount exists and contains expected content
+/// Create a systemd unit that verifies a mount exists and tests writability
 fn create_mount_verify_unit(
     unit_dir: &Utf8Path,
     mount_name: &str,
     expected_file: &str,
-    expected_content: &str,
+    expected_content: Option<&str>,
+    readonly: bool,
 ) -> std::io::Result<()> {
+    let (description, content_check, write_check, unit_prefix) = if readonly {
+        (
+            format!("Verify read-only mount {mount_name} and poweroff"),
+            format!("ExecStart=test -f /run/virtiofs-mnt-{mount_name}/{expected_file}"),
+            format!("ExecStart=/bin/sh -c '! echo test-write > /run/virtiofs-mnt-{mount_name}/write-test.txt 2>/dev/null'"),
+            "verify-ro-mount",
+        )
+    } else {
+        let content = expected_content.expect("expected_content required for writable mounts");
+        (
+            format!("Verify mount {mount_name} and poweroff"),
+            format!("ExecStart=grep -qF \"{content}\" /run/virtiofs-mnt-{mount_name}/{expected_file}"),
+            format!("ExecStart=/bin/sh -c 'echo test-write > /run/virtiofs-mnt-{mount_name}/write-test.txt'"),
+            "verify-mount",
+        )
+    };
+
     let unit_content = format!(
         r#"[Unit]
-Description=Verify mount {mount_name} and poweroff
+Description={description}
 RequiresMountsFor=/run/virtiofs-mnt-{mount_name}
 
 [Service]
 Type=oneshot
-ExecStart=grep -qF "{expected_content}" /run/virtiofs-mnt-{mount_name}/{expected_file}
-ExecStart=test -w /run/virtiofs-mnt-{mount_name}/{expected_file}
+{content_check}
+{write_check}
 ExecStart=echo ok mount verify {mount_name}
 ExecStart=systemctl poweroff
 StandardOutput=journal+console
@@ -43,34 +61,7 @@ StandardError=journal+console
 "#
     );
 
-    let unit_path = unit_dir.join(format!("verify-mount-{}.service", mount_name));
-    fs::write(&unit_path, unit_content)?;
-    Ok(())
-}
-
-/// Create a systemd unit that tries to write to a mount to verify read-only status
-fn create_ro_mount_verify_unit(
-    unit_dir: &Utf8Path,
-    mount_name: &str,
-    expected_file: &str,
-) -> std::io::Result<()> {
-    let unit_content = format!(
-        r#"[Unit]
-Description=Verify read-only mount {mount_name} and poweroff
-RequiresMountsFor=/run/virtiofs-mnt-{mount_name}
-
-[Service]
-Type=oneshot
-ExecStart=test -f /run/virtiofs-mnt-{mount_name}/{expected_file}
-ExecStart=test '!' -w /run/virtiofs-mnt-{mount_name}/{expected_file}
-ExecStart=echo ok mount verify {mount_name}
-ExecStart=systemctl poweroff
-StandardOutput=journal+console
-StandardError=journal+console
-"#
-    );
-
-    let unit_path = unit_dir.join(format!("verify-ro-mount-{}.service", mount_name));
+    let unit_path = unit_dir.join(format!("{unit_prefix}-{mount_name}.service"));
     fs::write(&unit_path, unit_content)?;
     Ok(())
 }
@@ -90,8 +81,14 @@ pub fn test_mount_feature_bind() {
     fs::create_dir(&system_dir).expect("Failed to create system directory");
 
     // Create verification unit
-    create_mount_verify_unit(&system_dir, "testmount", "test.txt", test_content)
-        .expect("Failed to create verify unit");
+    create_mount_verify_unit(
+        &system_dir,
+        "testmount",
+        "test.txt",
+        Some(test_content),
+        false,
+    )
+    .expect("Failed to create verify unit");
 
     println!("Testing bind mount with temp directory: {}", temp_dir_path);
 
@@ -135,7 +132,7 @@ pub fn test_mount_feature_ro_bind() {
     fs::create_dir(&system_dir).expect("Failed to create system directory");
 
     // Create verification unit for read-only mount
-    create_ro_mount_verify_unit(&system_dir, "romount", "readonly.txt")
+    create_mount_verify_unit(&system_dir, "romount", "readonly.txt", None, true)
         .expect("Failed to create verify unit");
 
     println!(
