@@ -12,6 +12,7 @@ use std::process::Command;
 use crate::{
     get_bck_command, get_test_image, run_bcvk, run_bcvk_nocapture, LIBVIRT_INTEGRATION_TEST_LABEL,
 };
+use bcvk::xml_utils::parse_xml_dom;
 
 /// Test libvirt list functionality (lists domains)
 pub fn test_libvirt_list_functionality() {
@@ -806,4 +807,158 @@ pub fn test_libvirt_error_handling() {
     }
 
     println!("libvirt error handling validated");
+}
+
+/// Test transient VM functionality
+pub fn test_libvirt_transient_vm() {
+    let test_image = get_test_image();
+
+    // Generate unique domain name for this test
+    let domain_name = format!(
+        "test-transient-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+
+    println!("Testing transient VM with domain: {}", domain_name);
+
+    // Cleanup any existing domain with this name
+    cleanup_domain(&domain_name);
+
+    // Create transient domain
+    println!("Creating transient libvirt domain...");
+    let create_output = run_bcvk(&[
+        "libvirt",
+        "run",
+        "--name",
+        &domain_name,
+        "--label",
+        LIBVIRT_INTEGRATION_TEST_LABEL,
+        "--transient",
+        "--filesystem",
+        "ext4",
+        &test_image,
+    ])
+    .expect("Failed to run libvirt run with --transient");
+
+    println!("Create stdout: {}", create_output.stdout);
+    println!("Create stderr: {}", create_output.stderr);
+
+    if !create_output.success() {
+        cleanup_domain(&domain_name);
+        panic!(
+            "Failed to create transient domain: {}",
+            create_output.stderr
+        );
+    }
+
+    println!("Successfully created transient domain: {}", domain_name);
+
+    // Verify domain is transient using virsh dominfo
+    println!("Verifying domain is marked as transient...");
+    let dominfo_output = Command::new("virsh")
+        .args(&["dominfo", &domain_name])
+        .output()
+        .expect("Failed to run virsh dominfo");
+
+    if !dominfo_output.status.success() {
+        cleanup_domain(&domain_name);
+        let stderr = String::from_utf8_lossy(&dominfo_output.stderr);
+        panic!("Failed to get domain info: {}", stderr);
+    }
+
+    let dominfo = String::from_utf8_lossy(&dominfo_output.stdout);
+    println!("Domain info:\n{}", dominfo);
+
+    // Verify "Persistent: no" appears in dominfo
+    assert!(
+        dominfo.contains("Persistent:") && dominfo.contains("no"),
+        "Domain should be marked as non-persistent (transient). dominfo: {}",
+        dominfo
+    );
+    println!("✓ Domain is correctly marked as transient (Persistent: no)");
+
+    // Verify domain XML contains transient disk element
+    println!("Checking domain XML for transient disk configuration...");
+    let dumpxml_output = Command::new("virsh")
+        .args(&["dumpxml", &domain_name])
+        .output()
+        .expect("Failed to dump domain XML");
+
+    let domain_xml = String::from_utf8_lossy(&dumpxml_output.stdout);
+
+    // Parse the XML properly using our XML parser
+    let xml_dom = parse_xml_dom(&domain_xml).expect("Failed to parse domain XML");
+
+    // Verify domain XML contains transient disk element
+    let has_transient = xml_dom.find("transient").is_some();
+    assert!(
+        has_transient,
+        "Domain XML should contain transient disk element"
+    );
+    println!("✓ Domain XML contains transient disk element");
+
+    // Extract the base disk path from the domain XML using proper XML parsing
+    let base_disk_path = xml_dom
+        .find("source")
+        .and_then(|source_node| source_node.attributes.get("file"))
+        .map(|s| s.to_string());
+
+    println!("Base disk path: {:?}", base_disk_path);
+
+    // Stop the domain (this should make it disappear since it's transient)
+    println!("Stopping transient domain (should disappear)...");
+    let destroy_output = Command::new("virsh")
+        .args(&["destroy", &domain_name])
+        .output()
+        .expect("Failed to run virsh destroy");
+
+    if !destroy_output.status.success() {
+        let stderr = String::from_utf8_lossy(&destroy_output.stderr);
+        panic!("Failed to stop domain: {}", stderr);
+    }
+
+    // Poll for domain disappearance with timeout
+    println!("Verifying domain has disappeared...");
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(10);
+    let mut domain_disappeared = false;
+
+    while start_time.elapsed() < timeout {
+        let list_output = Command::new("virsh")
+            .args(&["list", "--all", "--name"])
+            .output()
+            .expect("Failed to list domains");
+
+        let domain_list = String::from_utf8_lossy(&list_output.stdout);
+        if !domain_list.contains(&domain_name) {
+            domain_disappeared = true;
+            break;
+        }
+
+        // Wait briefly before checking again
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    assert!(
+        domain_disappeared,
+        "Transient domain should have disappeared after shutdown within {} seconds",
+        timeout.as_secs()
+    );
+    println!("✓ Transient domain disappeared after shutdown");
+
+    // Verify base disk still exists (only the overlay was removed)
+    if let Some(ref disk_path) = base_disk_path {
+        println!("Verifying base disk still exists: {}", disk_path);
+        let disk_exists = std::path::Path::new(disk_path).exists();
+        assert!(
+            disk_exists,
+            "Base disk should still exist after transient domain shutdown"
+        );
+        println!("✓ Base disk still exists (not deleted)");
+    }
+
+    println!("✓ Transient VM test passed");
 }

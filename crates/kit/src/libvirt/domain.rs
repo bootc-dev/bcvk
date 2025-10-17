@@ -31,6 +31,7 @@ pub struct DomainBuilder {
     memory: Option<u64>, // in MB
     vcpus: Option<u32>,
     disk_path: Option<String>,
+    transient_disk: bool, // Use transient disk with temporary overlay
     network: Option<String>,
     vnc_port: Option<u16>,
     kernel_args: Option<String>,
@@ -58,6 +59,7 @@ impl DomainBuilder {
             memory: None,
             vcpus: None,
             disk_path: None,
+            transient_disk: false,
             network: None,
             vnc_port: None,
             kernel_args: None,
@@ -92,6 +94,12 @@ impl DomainBuilder {
     /// Set disk path
     pub fn with_disk(mut self, disk_path: &str) -> Self {
         self.disk_path = Some(disk_path.to_string());
+        self
+    }
+
+    /// Enable transient disk (creates temporary overlay, base disk opened read-only)
+    pub fn with_transient_disk(mut self, transient: bool) -> Self {
+        self.transient_disk = transient;
         self
     }
 
@@ -305,6 +313,11 @@ impl DomainBuilder {
             writer.write_empty_element("driver", &[("name", "qemu"), ("type", disk_type)])?;
             writer.write_empty_element("source", &[("file", disk_path)])?;
             writer.write_empty_element("target", &[("dev", "vda"), ("bus", "virtio")])?;
+            if self.transient_disk {
+                // shareBacking='yes' allows multiple VMs to share the backing image
+                // Libvirt creates a temporary QCOW2 overlay for writes
+                writer.write_empty_element("transient", &[("shareBacking", "yes")])?;
+            }
             writer.end_element("disk")?;
         }
 

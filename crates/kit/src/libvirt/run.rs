@@ -1,7 +1,8 @@
-//! libvirt run command - run a bootable container as a persistent VM
+//! libvirt run command - run a bootable container as a VM
 //!
 //! This module provides the core functionality for creating and managing
-//! libvirt-based VMs from bootc container images.
+//! libvirt-based VMs from bootc container images. Supports both persistent
+//! VMs (survive shutdown) and transient VMs (disappear on shutdown).
 
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Parser, ValueEnum};
@@ -24,6 +25,19 @@ pub(super) fn virsh_command(connect_uri: Option<&str>) -> Result<std::process::C
         cmd.arg("-c").arg(uri);
     }
     Ok(cmd)
+}
+
+/// Run a virsh command and handle errors consistently
+pub(crate) fn run_virsh_cmd(connect_uri: Option<&str>, args: &[&str], err_msg: &str) -> Result<()> {
+    let output = virsh_command(connect_uri)?
+        .args(args)
+        .output()
+        .with_context(|| format!("Failed to run virsh command: {:?}", args))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!("{}: {}", err_msg, stderr));
+    }
+    Ok(())
 }
 
 /// Firmware type for virtual machines
@@ -102,6 +116,10 @@ pub struct LibvirtRunOpts {
     /// User-defined labels for organizing VMs (comma not allowed in labels)
     #[clap(long)]
     pub label: Vec<String>,
+
+    /// Create a transient VM that disappears on shutdown/reboot
+    #[clap(long)]
+    pub transient: bool,
 }
 
 impl LibvirtRunOpts {
@@ -168,12 +186,17 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
 
     println!("Using base disk image: {}", base_disk_path);
 
-    // Phase 2: Clone the base disk to create a VM-specific disk
-    let disk_path =
-        crate::libvirt::base_disks::clone_from_base(&base_disk_path, &vm_name, connect_uri)
-            .with_context(|| "Failed to clone VM disk from base")?;
-
-    println!("Created VM disk: {}", disk_path);
+    // Phase 2: Clone the base disk to create a VM-specific disk (or use base directly if transient)
+    let disk_path = if opts.transient {
+        println!("Transient mode: using base disk directly with overlay");
+        base_disk_path
+    } else {
+        let cloned_disk =
+            crate::libvirt::base_disks::clone_from_base(&base_disk_path, &vm_name, connect_uri)
+                .with_context(|| "Failed to clone VM disk from base")?;
+        println!("Created VM disk: {}", cloned_disk);
+        cloned_disk
+    };
 
     // Phase 3: Create libvirt domain
     println!("Creating libvirt domain...");
@@ -642,6 +665,7 @@ fn create_libvirt_domain_from_disk(
         .with_memory(memory.into())
         .with_vcpus(opts.cpus)
         .with_disk(disk_path.as_str())
+        .with_transient_disk(opts.transient)
         .with_network("none") // Use QEMU args for SSH networking instead
         .with_firmware(opts.firmware)
         .with_tpm(!opts.disable_tpm)
@@ -747,34 +771,28 @@ fn create_libvirt_domain_from_disk(
     let xml_path = format!("/tmp/{}.xml", domain_name);
     std::fs::write(&xml_path, domain_xml).with_context(|| "Failed to write domain XML")?;
 
-    // Define the domain
-    let output = global_opts
-        .virsh_command()
-        .args(&["define", &xml_path])
-        .output()
-        .with_context(|| "Failed to run virsh define")?;
+    let connect_uri = global_opts.connect.as_deref();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(color_eyre::eyre::eyre!(
-            "Failed to define libvirt domain: {}",
-            stderr
-        ));
-    }
-
-    // Start the domain by default (compatibility)
-    let output = global_opts
-        .virsh_command()
-        .args(&["start", domain_name])
-        .output()
-        .with_context(|| "Failed to start domain")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(color_eyre::eyre::eyre!(
-            "Failed to start libvirt domain: {}",
-            stderr
-        ));
+    // Create domain (transient or persistent)
+    if opts.transient {
+        // Create transient domain (single command - domain disappears on shutdown)
+        run_virsh_cmd(
+            connect_uri,
+            &["create", &xml_path],
+            "Failed to create transient libvirt domain",
+        )?;
+    } else {
+        // Define and start the domain (persistent)
+        run_virsh_cmd(
+            connect_uri,
+            &["define", &xml_path],
+            "Failed to define libvirt domain",
+        )?;
+        run_virsh_cmd(
+            connect_uri,
+            &["start", domain_name],
+            "Failed to start libvirt domain",
+        )?;
     }
 
     // Clean up temporary XML file

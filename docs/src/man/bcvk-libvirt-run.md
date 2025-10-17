@@ -106,6 +106,10 @@ Run a bootable container as a persistent VM
 
     User-defined labels for organizing VMs (comma not allowed in labels)
 
+**--transient**
+
+    Create a transient VM that disappears on shutdown/reboot
+
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

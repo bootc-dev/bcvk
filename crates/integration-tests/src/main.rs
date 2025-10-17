@@ -283,6 +283,10 @@ fn main() {
             tests::libvirt_verb::test_libvirt_bind_storage_ro();
             Ok(())
         }),
+        Trial::test("libvirt_transient_vm", || {
+            tests::libvirt_verb::test_libvirt_transient_vm();
+            Ok(())
+        }),
         Trial::test("libvirt_base_disk_creation_and_reuse", || {
             tests::libvirt_base_disks::test_base_disk_creation_and_reuse();
             Ok(())
