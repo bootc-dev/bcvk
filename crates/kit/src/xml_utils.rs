@@ -140,6 +140,19 @@ impl XmlNode {
     pub fn text_content(&self) -> &str {
         &self.text
     }
+
+    /// Parse memory value from an XML node with unit attribute
+    /// Returns the value in megabytes (MB)
+    pub fn parse_memory_mb(&self) -> Option<u32> {
+        let value = self.text_content().parse::<u32>().ok()?;
+        // Convert to MB based on unit attribute (default is KiB per libvirt spec)
+        let unit = self
+            .attributes
+            .get("unit")
+            .map(|s| s.as_str())
+            .unwrap_or("KiB");
+        Some(crate::utils::convert_memory_to_mb(value, unit))
+    }
 }
 
 /// Parse XML string into a simple DOM structure
@@ -369,5 +382,28 @@ mod tests {
         assert!(xml.contains("<root>"));
         assert!(xml.contains("<custom>raw content</custom>"));
         assert!(xml.contains("</root>"));
+    }
+
+    #[test]
+    fn test_parse_memory_mb() {
+        // Test KiB (default unit)
+        let xml = r#"<memory>4194304</memory>"#;
+        let dom = parse_xml_dom(xml).unwrap();
+        assert_eq!(dom.parse_memory_mb(), Some(4096));
+
+        // Test MiB
+        let xml = r#"<memory unit='MiB'>2048</memory>"#;
+        let dom = parse_xml_dom(xml).unwrap();
+        assert_eq!(dom.parse_memory_mb(), Some(2048));
+
+        // Test GiB
+        let xml = r#"<memory unit='GiB'>4</memory>"#;
+        let dom = parse_xml_dom(xml).unwrap();
+        assert_eq!(dom.parse_memory_mb(), Some(4096));
+
+        // Test KB (decimal unit: 1000-based)
+        let xml = r#"<memory unit='KB'>1048576</memory>"#;
+        let dom = parse_xml_dom(xml).unwrap();
+        assert_eq!(dom.parse_memory_mb(), Some(1000));
     }
 }

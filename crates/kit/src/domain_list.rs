@@ -192,10 +192,7 @@ impl DomainLister {
             .unwrap_or_default();
 
         // Extract memory and vcpu from domain XML
-        let memory_mb = dom.find("memory").and_then(|node| {
-            // Memory might have unit attribute, but we'll try to parse the value
-            node.text_content().parse::<u32>().ok()
-        });
+        let memory_mb = dom.find("memory").and_then(|node| node.parse_memory_mb());
 
         let vcpus = dom
             .find("vcpu")

@@ -173,3 +173,60 @@ pub(crate) fn parse_memory_to_mb(memory_str: &str) -> Result<u32> {
         Err(eyre!("Memory specification cannot be empty - please provide a value like '2G', '1024M', or '512'"))
     }
 }
+
+/// Convert memory value with unit to megabytes (MiB)
+/// Handles libvirt-style units distinguishing between decimal (KB, MB, GB - powers of 1000)
+/// and binary (KiB, MiB, GiB - powers of 1024) units per libvirt specification
+pub(crate) fn convert_memory_to_mb(value: u32, unit: &str) -> u32 {
+    // Use u128 for calculations to prevent overflow with large units like TB
+    let value_u128 = value as u128;
+    let mib_u128 = 1024 * 1024;
+
+    let mb = match unit {
+        // Binary prefixes (powers of 1024), converting to MiB
+        "k" | "K" | "KiB" => value_u128 / 1024,
+        "M" | "MiB" => value_u128,
+        "G" | "GiB" => value_u128 * 1024,
+        "T" | "TiB" => value_u128 * 1024 * 1024,
+
+        // Decimal prefixes (powers of 1000), converting to MiB
+        "B" | "bytes" => value_u128 / mib_u128,
+        "KB" => (value_u128 * 1_000) / mib_u128,
+        "MB" => (value_u128 * 1_000_000) / mib_u128,
+        "GB" => (value_u128 * 1_000_000_000) / mib_u128,
+        "TB" => (value_u128 * 1_000_000_000_000) / mib_u128,
+
+        // Libvirt default is KiB for memory
+        _ => value_u128 / 1024,
+    };
+    mb as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_memory_to_mb() {
+        // Test binary units (powers of 1024)
+        assert_eq!(convert_memory_to_mb(4194304, "KiB"), 4096);
+        assert_eq!(convert_memory_to_mb(2097152, "KiB"), 2048);
+        assert_eq!(convert_memory_to_mb(2048, "MiB"), 2048);
+        assert_eq!(convert_memory_to_mb(4096, "MiB"), 4096);
+        assert_eq!(convert_memory_to_mb(4, "GiB"), 4096);
+        assert_eq!(convert_memory_to_mb(2, "GiB"), 2048);
+
+        // Test short forms (binary)
+        assert_eq!(convert_memory_to_mb(4, "G"), 4096);
+        assert_eq!(convert_memory_to_mb(2048, "M"), 2048);
+        assert_eq!(convert_memory_to_mb(2097152, "K"), 2048);
+
+        // Test decimal units (powers of 1000)
+        assert_eq!(convert_memory_to_mb(1048576, "KB"), 1000);
+        assert_eq!(convert_memory_to_mb(1024, "MB"), 976);
+        assert_eq!(convert_memory_to_mb(4, "GB"), 3814);
+
+        // Test default/unknown unit (defaults to KiB)
+        assert_eq!(convert_memory_to_mb(4194304, "unknown"), 4096);
+    }
+}
