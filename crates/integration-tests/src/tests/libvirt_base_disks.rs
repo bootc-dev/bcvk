@@ -14,21 +14,15 @@ use crate::{get_bck_command, get_test_image, run_bcvk};
 pub fn test_base_disk_creation_and_reuse() {
     let test_image = get_test_image();
 
-    // Generate unique names for test VMs
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let vm1_name = format!("test-base-disk-vm1-{}", timestamp);
-    let vm2_name = format!("test-base-disk-vm2-{}", timestamp);
+    // Generate unique names for test VMs using shortuuid pattern
+    let vm1_name_template = "test-base-disk-vm1-{shortuuid}";
+    let vm2_name_template = "test-base-disk-vm2-{shortuuid}";
 
     println!("Testing base disk creation and reuse");
-    println!("VM1: {}", vm1_name);
-    println!("VM2: {}", vm2_name);
 
-    // Cleanup any existing test domains
-    cleanup_domain(&vm1_name);
-    cleanup_domain(&vm2_name);
+    // Create temp files for domain names
+    let vm1_id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let vm1_id_path = vm1_id_file.path().to_str().expect("Invalid temp file path");
 
     // Create first VM - this should create a new base disk
     println!("Creating first VM (should create base disk)...");
@@ -36,7 +30,9 @@ pub fn test_base_disk_creation_and_reuse() {
         "libvirt",
         "run",
         "--name",
-        &vm1_name,
+        vm1_name_template,
+        "--write-id-to",
+        vm1_id_path,
         "--filesystem",
         "ext4",
         &test_image,
@@ -47,11 +43,18 @@ pub fn test_base_disk_creation_and_reuse() {
     println!("VM1 stderr: {}", vm1_output.stderr);
 
     if !vm1_output.success() {
-        cleanup_domain(&vm1_name);
-        cleanup_domain(&vm2_name);
-
+        // Attempt cleanup before panicking
+        let _ = std::fs::read_to_string(vm1_id_path).map(|name| cleanup_domain(name.trim()));
         panic!("Failed to create first VM: {}", vm1_output.stderr);
     }
+
+    // Read the domain name from the file
+    let vm1_name = std::fs::read_to_string(vm1_id_path)
+        .expect("Failed to read VM1 domain name from file")
+        .trim()
+        .to_string();
+
+    println!("Created VM1: {}", vm1_name);
 
     // Verify base disk was created
     assert!(
@@ -61,11 +64,16 @@ pub fn test_base_disk_creation_and_reuse() {
 
     // Create second VM - this should reuse the base disk
     println!("Creating second VM (should reuse base disk)...");
+    let vm2_id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let vm2_id_path = vm2_id_file.path().to_str().expect("Invalid temp file path");
+
     let vm2_output = run_bcvk(&[
         "libvirt",
         "run",
         "--name",
-        &vm2_name,
+        vm2_name_template,
+        "--write-id-to",
+        vm2_id_path,
         "--filesystem",
         "ext4",
         &test_image,
@@ -75,13 +83,23 @@ pub fn test_base_disk_creation_and_reuse() {
     println!("VM2 stdout: {}", vm2_output.stdout);
     println!("VM2 stderr: {}", vm2_output.stderr);
 
+    if !vm2_output.success() {
+        // Cleanup VM1 before panicking
+        cleanup_domain(&vm1_name);
+        panic!("Failed to create second VM: {}", vm2_output.stderr);
+    }
+
+    // Read the domain name from the file
+    let vm2_name = std::fs::read_to_string(vm2_id_path)
+        .expect("Failed to read VM2 domain name from file")
+        .trim()
+        .to_string();
+
+    println!("Created VM2: {}", vm2_name);
+
     // Cleanup before assertions
     cleanup_domain(&vm1_name);
     cleanup_domain(&vm2_name);
-
-    if !vm2_output.success() {
-        panic!("Failed to create second VM: {}", vm2_output.stderr);
-    }
 
     // Verify base disk was reused (should be faster and mention using existing)
     assert!(
@@ -170,22 +188,22 @@ pub fn test_base_disks_prune_dry_run() {
 pub fn test_vm_disk_references_base() {
     let test_image = get_test_image();
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let vm_name = format!("test-disk-ref-{}", timestamp);
+    let vm_name_template = "test-disk-ref-{shortuuid}";
 
     println!("Testing VM disk references base disk");
 
-    cleanup_domain(&vm_name);
+    // Create temp file for domain name
+    let id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let id_path = id_file.path().to_str().expect("Invalid temp file path");
 
     // Create VM
     let output = run_bcvk(&[
         "libvirt",
         "run",
         "--name",
-        &vm_name,
+        vm_name_template,
+        "--write-id-to",
+        id_path,
         "--filesystem",
         "ext4",
         &test_image,
@@ -193,10 +211,18 @@ pub fn test_vm_disk_references_base() {
     .expect("Failed to create VM");
 
     if !output.success() {
-        cleanup_domain(&vm_name);
-
+        // Attempt cleanup before panicking
+        let _ = std::fs::read_to_string(id_path).map(|name| cleanup_domain(name.trim()));
         panic!("Failed to create VM: {}", output.stderr);
     }
+
+    // Read the domain name from the file
+    let vm_name = std::fs::read_to_string(id_path)
+        .expect("Failed to read domain name from file")
+        .trim()
+        .to_string();
+
+    println!("Created VM: {}", vm_name);
 
     // Get VM disk path from domain XML
     let dumpxml_output = Command::new("virsh")
@@ -238,7 +264,6 @@ pub fn test_vm_disk_references_base() {
     println!("✓ VM disk reference test passed");
 }
 
-/// Helper function to cleanup domain and its disk
 fn cleanup_domain(domain_name: &str) {
     println!("Cleaning up domain: {}", domain_name);
 

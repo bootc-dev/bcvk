@@ -102,6 +102,10 @@ pub struct LibvirtRunOpts {
     /// User-defined labels for organizing VMs (comma not allowed in labels)
     #[clap(long)]
     pub label: Vec<String>,
+
+    /// Write the domain name to the specified file path
+    #[clap(long)]
+    pub write_id_to: Option<Utf8PathBuf>,
 }
 
 impl LibvirtRunOpts {
@@ -138,13 +142,24 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
     // Generate or validate VM name
     let vm_name = match &opts.name {
         Some(name) => {
-            if existing_domains.contains(name) {
-                return Err(color_eyre::eyre::eyre!("VM '{}' already exists", name));
+            // Check if name contains {shortuuid} pattern
+            if name.contains("{shortuuid}") {
+                generate_name_with_shortuuid(name, &existing_domains)
+            } else {
+                if existing_domains.contains(name) {
+                    return Err(color_eyre::eyre::eyre!("VM '{}' already exists", name));
+                }
+                name.clone()
             }
-            name.clone()
         }
         None => generate_unique_vm_name(&opts.image, &existing_domains),
     };
+
+    // Write domain name to file if requested
+    if let Some(id_file) = &opts.write_id_to {
+        std::fs::write(id_file, format!("{}\n", vm_name))
+            .with_context(|| format!("Failed to write domain name to {}", id_file))?;
+    }
 
     println!(
         "Creating libvirt domain '{}' (install source container image: {})",
@@ -374,6 +389,41 @@ pub fn get_libvirt_storage_pool_path(connect_uri: Option<&str>) -> Result<Utf8Pa
     ))
 }
 
+/// Generate a short unique alphanumeric identifier (16 characters)
+fn generate_shortuuid() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..16].to_string()
+}
+
+/// Generate a VM name by replacing {shortuuid} pattern with a unique identifier
+/// Retries until a unique name is found (extremely unlikely to need more than one attempt)
+fn generate_name_with_shortuuid(template: &str, existing_domains: &[String]) -> String {
+    // Try up to 100 times to generate a unique name (should succeed on first try)
+    for _ in 0..100 {
+        let shortuuid = generate_shortuuid();
+        let candidate = template.replace("{shortuuid}", &shortuuid);
+
+        if !existing_domains.contains(&candidate) {
+            return candidate;
+        }
+    }
+
+    // Fallback: append a counter if somehow we failed to find unique name
+    let shortuuid = generate_shortuuid();
+    let base = template.replace("{shortuuid}", &shortuuid);
+    if !existing_domains.contains(&base) {
+        return base;
+    }
+
+    let mut counter = 1;
+    loop {
+        let candidate = format!("{}-{}", base, counter);
+        if !existing_domains.contains(&candidate) {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
 /// Generate a unique VM name from an image name
 fn generate_unique_vm_name(image: &str, existing_domains: &[String]) -> String {
     // Extract image name from full image path
@@ -533,6 +583,71 @@ fn check_libvirt_readonly_support() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_generate_shortuuid_length() {
+        let shortuuid = generate_shortuuid();
+        assert_eq!(shortuuid.len(), 16);
+    }
+
+    #[test]
+    fn test_generate_shortuuid_alphanumeric() {
+        let shortuuid = generate_shortuuid();
+        assert!(shortuuid.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_generate_shortuuid_unique() {
+        let uuid1 = generate_shortuuid();
+        let uuid2 = generate_shortuuid();
+        // Extremely unlikely to be equal
+        assert_ne!(uuid1, uuid2);
+    }
+
+    #[test]
+    fn test_generate_name_with_shortuuid_simple() {
+        let existing: Vec<String> = vec![];
+        let name = generate_name_with_shortuuid("test-{shortuuid}", &existing);
+
+        assert!(name.starts_with("test-"));
+        assert_eq!(name.len(), 21); // "test-" (5) + shortuuid (16)
+
+        // Verify the part after "test-" is alphanumeric
+        let uuid_part = &name[5..];
+        assert!(uuid_part.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_generate_name_with_shortuuid_multiple_patterns() {
+        let existing: Vec<String> = vec![];
+        let name = generate_name_with_shortuuid("foo-{shortuuid}-bar-{shortuuid}", &existing);
+
+        assert!(name.starts_with("foo-"));
+        assert!(name.contains("-bar-"));
+        // Both {shortuuid} should be replaced with the same value
+        let parts: Vec<&str> = name.split("-bar-").collect();
+        assert_eq!(parts.len(), 2);
+        let uuid_part1 = parts[0]
+            .strip_prefix("foo-")
+            .expect("name should start with 'foo-'");
+        let uuid_part2 = parts[1];
+        assert_eq!(
+            uuid_part1, uuid_part2,
+            "Both {{shortuuid}} placeholders should be replaced by the same value"
+        );
+    }
+
+    #[test]
+    fn test_generate_name_with_shortuuid_collision_retry() {
+        // Create an existing domain with a specific UUID pattern
+        let fake_uuid = "a".repeat(16);
+        let existing = vec![format!("test-{}", fake_uuid)];
+
+        // Generate should produce a different UUID
+        let name = generate_name_with_shortuuid("test-{shortuuid}", &existing);
+        assert!(name.starts_with("test-"));
+        assert!(!existing.contains(&name));
+    }
 
     #[test]
     fn test_parse_volume_mount_valid() {

@@ -193,30 +193,24 @@ pub fn test_libvirt_ssh_integration() {
 pub fn test_libvirt_run_ssh_full_workflow() {
     let test_image = get_test_image();
 
-    // Generate unique domain name for this test
-    let domain_name = format!(
-        "test-ssh-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
+    // Generate unique domain name for this test using shortuuid pattern
+    let domain_name_template = "test-ssh-{shortuuid}";
 
-    println!(
-        "Testing full libvirt run + SSH workflow with domain: {}",
-        domain_name
-    );
+    println!("Testing full libvirt run + SSH workflow");
 
-    // Cleanup any existing domain with this name
-    cleanup_domain(&domain_name);
+    // Create temp file for domain name
+    let id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let id_path = id_file.path().to_str().expect("Invalid temp file path");
 
-    // Create domain with SSH key generation
+    // Create domain with SSH key generation (name will be auto-generated)
     println!("Creating libvirt domain with SSH key injection...");
     let create_output = run_bcvk(&[
         "libvirt",
         "run",
         "--name",
-        &domain_name,
+        domain_name_template,
+        "--write-id-to",
+        id_path,
         "--label",
         LIBVIRT_INTEGRATION_TEST_LABEL,
         "--filesystem",
@@ -229,10 +223,16 @@ pub fn test_libvirt_run_ssh_full_workflow() {
     println!("Create stderr: {}", create_output.stderr);
 
     if !create_output.success() {
-        cleanup_domain(&domain_name);
-
+        // Attempt cleanup before panicking
+        let _ = std::fs::read_to_string(id_path).map(|name| cleanup_domain(name.trim()));
         panic!("Failed to create domain with SSH: {}", create_output.stderr);
     }
+
+    // Read the domain name from the file
+    let domain_name = std::fs::read_to_string(id_path)
+        .expect("Failed to read domain name from file")
+        .trim()
+        .to_string();
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -335,8 +335,45 @@ fn wait_for_ssh_available(
 /// Test VM startup and shutdown with libvirt run
 pub fn test_libvirt_vm_lifecycle() {
     let bck = get_bck_command().unwrap();
-    let test_volume = "test-vm-lifecycle";
-    let domain_name = format!("bootc-{}", test_volume);
+    let domain_name_template = "bootc-lifecycle-{shortuuid}";
+
+    // Create a minimal test volume (skip if no bootc container available)
+    let test_image = &get_test_image();
+
+    // Create temp file for domain name
+    let id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let id_path = id_file.path().to_str().expect("Invalid temp file path");
+
+    // First try to create a domain from container image
+    let output = std::process::Command::new(&bck)
+        .args(&[
+            "libvirt",
+            "run",
+            "--filesystem",
+            "ext4",
+            "--name",
+            domain_name_template,
+            "--write-id-to",
+            id_path,
+            "--label",
+            LIBVIRT_INTEGRATION_TEST_LABEL,
+            test_image,
+        ])
+        .output()
+        .expect("Failed to run libvirt run");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!("Failed to create VM: {}", stderr);
+    }
+
+    // Read the domain name from the file
+    let domain_name = std::fs::read_to_string(id_path)
+        .expect("Failed to read domain name from file")
+        .trim()
+        .to_string();
+
+    println!("Created VM domain: {}", domain_name);
 
     // Guard to ensure cleanup always runs
     struct VmCleanupGuard {
@@ -360,40 +397,6 @@ pub fn test_libvirt_vm_lifecycle() {
             }
         }
     }
-
-    // Cleanup any existing test domain
-    let _ = std::process::Command::new("virsh")
-        .args(&["destroy", &domain_name])
-        .output();
-    let _ = std::process::Command::new(&bck)
-        .args(&["libvirt", "rm", &domain_name, "--force", "--stop"])
-        .output();
-
-    // Create a minimal test volume (skip if no bootc container available)
-    let test_image = &get_test_image();
-
-    // First try to create a domain from container image
-    let output = std::process::Command::new(&bck)
-        .args(&[
-            "libvirt",
-            "run",
-            "--filesystem",
-            "ext4",
-            "--name",
-            &domain_name,
-            "--label",
-            LIBVIRT_INTEGRATION_TEST_LABEL,
-            test_image,
-        ])
-        .output()
-        .expect("Failed to run libvirt run");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("Failed to create VM: {}", stderr);
-    }
-
-    println!("Created VM domain: {}", domain_name);
 
     // Set up cleanup guard after successful creation
     let _guard = VmCleanupGuard {
@@ -464,19 +467,14 @@ pub fn test_libvirt_bind_storage_ro() {
         return;
     }
 
-    // Generate unique domain name for this test
-    let domain_name = format!(
-        "test-bind-storage-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
+    // Generate unique domain name for this test using shortuuid pattern
+    let domain_name_template = "test-bind-storage-{shortuuid}";
 
-    println!("Testing --bind-storage-ro with domain: {}", domain_name);
+    println!("Testing --bind-storage-ro");
 
-    // Cleanup any existing domain with this name
-    cleanup_domain(&domain_name);
+    // Create temp file for domain name
+    let id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let id_path = id_file.path().to_str().expect("Invalid temp file path");
 
     // Create domain with --bind-storage-ro flag
     println!("Creating libvirt domain with --bind-storage-ro...");
@@ -484,7 +482,9 @@ pub fn test_libvirt_bind_storage_ro() {
         "libvirt",
         "run",
         "--name",
-        &domain_name,
+        domain_name_template,
+        "--write-id-to",
+        id_path,
         "--label",
         LIBVIRT_INTEGRATION_TEST_LABEL,
         "--bind-storage-ro",
@@ -498,12 +498,19 @@ pub fn test_libvirt_bind_storage_ro() {
     println!("Create stderr: {}", create_output.stderr);
 
     if !create_output.success() {
-        cleanup_domain(&domain_name);
+        // Attempt cleanup before panicking
+        let _ = std::fs::read_to_string(id_path).map(|name| cleanup_domain(name.trim()));
         panic!(
             "Failed to create domain with --bind-storage-ro: {}",
             create_output.stderr
         );
     }
+
+    // Read the domain name from the file
+    let domain_name = std::fs::read_to_string(id_path)
+        .expect("Failed to read domain name from file")
+        .trim()
+        .to_string();
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -644,22 +651,14 @@ pub fn test_libvirt_label_functionality() {
     let bck = get_bck_command().unwrap();
     let test_image = get_test_image();
 
-    // Generate unique domain name for this test
-    let domain_name = format!(
-        "test-label-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
+    // Generate unique domain name for this test using shortuuid pattern
+    let domain_name_template = "test-label-{shortuuid}";
 
-    println!(
-        "Testing libvirt label functionality with domain: {}",
-        domain_name
-    );
+    println!("Testing libvirt label functionality");
 
-    // Cleanup any existing domain with this name
-    cleanup_domain(&domain_name);
+    // Create temp file for domain name
+    let id_file = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    let id_path = id_file.path().to_str().expect("Invalid temp file path");
 
     // Create domain with multiple labels
     println!("Creating libvirt domain with multiple labels...");
@@ -667,7 +666,9 @@ pub fn test_libvirt_label_functionality() {
         "libvirt",
         "run",
         "--name",
-        &domain_name,
+        domain_name_template,
+        "--write-id-to",
+        id_path,
         "--label",
         LIBVIRT_INTEGRATION_TEST_LABEL,
         "--label",
@@ -684,12 +685,19 @@ pub fn test_libvirt_label_functionality() {
     println!("Create stderr: {}", create_output.stderr);
 
     if !create_output.success() {
-        cleanup_domain(&domain_name);
+        // Attempt cleanup before panicking
+        let _ = std::fs::read_to_string(id_path).map(|name| cleanup_domain(name.trim()));
         panic!(
             "Failed to create domain with labels: {}",
             create_output.stderr
         );
     }
+
+    // Read the domain name from the file
+    let domain_name = std::fs::read_to_string(id_path)
+        .expect("Failed to read domain name from file")
+        .trim()
+        .to_string();
 
     println!("Successfully created domain with labels: {}", domain_name);
 
