@@ -15,6 +15,7 @@ mod tests {
     pub mod libvirt_upload_disk;
     pub mod libvirt_verb;
     pub mod mount_feature;
+    pub mod osbuild_disk;
     pub mod run_ephemeral;
     pub mod run_ephemeral_ssh;
     pub mod to_disk;
@@ -241,6 +242,18 @@ fn main() {
         }),
         Trial::test("to_disk_caching", || {
             tests::to_disk::test_to_disk_caching();
+            Ok(())
+        }),
+        Trial::test("osbuild_disk_qcow2", || {
+            tests::osbuild_disk::test_osbuild_disk_qcow2();
+            Ok(())
+        }),
+        Trial::test("osbuild_disk_with_config", || {
+            tests::osbuild_disk::test_osbuild_disk_with_config();
+            Ok(())
+        }),
+        Trial::test("osbuild_disk_raw", || {
+            tests::osbuild_disk::test_osbuild_disk_raw();
             Ok(())
         }),
         Trial::test("libvirt_list_functionality", || {
