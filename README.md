@@ -5,7 +5,7 @@ disk images that can be imported into other virtualization frameworks.
 
 ## Installation
 
-For now `git clone && cargo build --release`.
+See [docs/src/installation.md](./docs/src/installation.md).
 
 ## Quick Start
 

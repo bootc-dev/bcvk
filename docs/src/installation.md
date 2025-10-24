@@ -18,17 +18,16 @@ Optional:
 
 ## Building from Source
 
+Without cloning the repo:
+
 ```bash
-git clone https://github.com/cgwalters/bcvk.git
-cd bcvk
-cargo build --release
+cargo install --locked --git https://github.com/bootc-dev/bcvk bcvk
 ```
 
-Binary location: `target/release/bcvk`
+Inside a clone of the repo:
 
-Install to PATH:
 ```bash
-sudo cp target/release/bcvk /usr/local/bin/
+cargo install --locked --path crates/kit
 ```
 
 ## Platform Support
