@@ -77,7 +77,7 @@ pub struct LibvirtRunOpts {
     #[clap(flatten)]
     pub install: InstallOptions,
 
-    /// Port mapping from host to VM
+    /// Port mapping from host to VM (format: host_port:guest_port, e.g., 8080:80)
     #[clap(long = "port", short = 'p', action = clap::ArgAction::Append)]
     pub port_mappings: Vec<String>,
 
@@ -221,6 +221,16 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
                     "  {} (tag: {}, mount with: mount -t virtiofs {} /your/mount/point)",
                     host_path, tag, tag
                 );
+            }
+        }
+    }
+
+    // Display port forwarding information if any
+    if !opts.port_mappings.is_empty() {
+        println!("\nPort forwarding:");
+        for port_str in opts.port_mappings.iter() {
+            if let Ok((host_port, guest_port)) = parse_port_mapping(port_str) {
+                println!("  localhost:{} -> VM:{}", host_port, guest_port);
             }
         }
     }
@@ -528,6 +538,34 @@ fn parse_volume_mount(volume_str: &str) -> Result<(String, String)> {
     Ok((host_path.to_string(), tag.to_string()))
 }
 
+/// Parse a port mapping string in the format "host_port:guest_port"
+fn parse_port_mapping(port_str: &str) -> Result<(u16, u16)> {
+    let parts: Vec<&str> = port_str.splitn(2, ':').collect();
+
+    if parts.len() != 2 {
+        return Err(color_eyre::eyre::eyre!(
+            "Invalid port format '{}'. Expected format: host_port:guest_port",
+            port_str
+        ));
+    }
+
+    let host_port = parts[0].trim().parse::<u16>().map_err(|_| {
+        color_eyre::eyre::eyre!(
+            "Invalid host port '{}'. Must be a number between 1 and 65535",
+            parts[0]
+        )
+    })?;
+
+    let guest_port = parts[1].trim().parse::<u16>().map_err(|_| {
+        color_eyre::eyre::eyre!(
+            "Invalid guest port '{}'. Must be a number between 1 and 65535",
+            parts[1]
+        )
+    })?;
+
+    Ok((host_port, guest_port))
+}
+
 /// Check if the libvirt version supports readonly virtiofs filesystems
 /// Requires libvirt 11.0+ and modern QEMU with rust-based virtiofsd
 fn check_libvirt_readonly_support() -> Result<()> {
@@ -590,6 +628,57 @@ mod tests {
         let result = parse_volume_mount("/nonexistent/path/that/does/not/exist:mytag");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_valid() {
+        let result = parse_port_mapping("8080:80");
+        assert!(result.is_ok());
+        let (host, guest) = result.unwrap();
+        assert_eq!(host, 8080);
+        assert_eq!(guest, 80);
+    }
+
+    #[test]
+    fn test_parse_port_mapping_same_port() {
+        let result = parse_port_mapping("80:80");
+        assert!(result.is_ok());
+        let (host, guest) = result.unwrap();
+        assert_eq!(host, 80);
+        assert_eq!(guest, 80);
+    }
+
+    #[test]
+    fn test_parse_port_mapping_invalid_format() {
+        let result = parse_port_mapping("8080");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Expected format: host_port:guest_port"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_invalid_host_port() {
+        let result = parse_port_mapping("abc:80");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid host port"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_invalid_guest_port() {
+        let result = parse_port_mapping("8080:xyz");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid guest port"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_port_out_of_range() {
+        let result = parse_port_mapping("70000:80");
+        assert!(result.is_err());
     }
 }
 
@@ -754,15 +843,36 @@ fn create_libvirt_domain_from_disk(
             .with_metadata("bootc:storage-path", storage_path.as_str());
     }
 
+    // Build QEMU args with port forwarding
+    let mut qemu_args = vec![
+        "-smbios".to_string(),
+        format!("type=11,value={}", smbios_cred),
+    ];
+
+    // Build netdev user mode networking with port forwarding
+    let mut hostfwd_args = vec![format!("tcp::{}-:22", ssh_port)];
+
+    // Add user-specified port mappings
+    for port_str in opts.port_mappings.iter() {
+        let (host_port, guest_port) = parse_port_mapping(port_str)
+            .with_context(|| format!("Failed to parse port mapping '{}'", port_str))?;
+        hostfwd_args.push(format!("tcp::{}-:{}", host_port, guest_port));
+    }
+
+    let netdev_config = format!("user,id=ssh0,{}",
+        hostfwd_args
+            .iter()
+            .map(|fwd| format!("hostfwd={}", fwd))
+            .collect::<Vec<_>>()
+            .join(","));
+
+    qemu_args.push("-netdev".to_string());
+    qemu_args.push(netdev_config);
+    qemu_args.push("-device".to_string());
+    qemu_args.push("virtio-net-pci,netdev=ssh0,addr=0x3".to_string());
+
     let domain_xml = domain_builder
-        .with_qemu_args(vec![
-            "-smbios".to_string(),
-            format!("type=11,value={}", smbios_cred),
-            "-netdev".to_string(),
-            format!("user,id=ssh0,hostfwd=tcp::{}-:22", ssh_port),
-            "-device".to_string(),
-            "virtio-net-pci,netdev=ssh0,addr=0x3".to_string(),
-        ])
+        .with_qemu_args(qemu_args)
         .build_xml()
         .with_context(|| "Failed to build domain XML")?;
 
