@@ -208,3 +208,73 @@ fn test_ssh_with_image(image: &str, image_type: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[distributed_slice(INTEGRATION_TESTS)]
+static TEST_RUN_TMPFS: IntegrationTest = IntegrationTest::new("run_tmpfs", test_run_tmpfs);
+
+/// Test that /run is mounted as tmpfs and supports unix domain sockets
+fn test_run_tmpfs() -> Result<()> {
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Create a temporary directory with a test script
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let script_path = temp_dir.path().join("check_run_tmpfs.sh");
+
+    // Write a script that verifies /run is tmpfs and supports unix domain sockets
+    let script_content = r#"#!/bin/bash
+set -euo pipefail
+
+echo "Checking /run filesystem..."
+
+# Verify /run is mounted as tmpfs
+if ! findmnt -n -o FSTYPE /run | grep -q tmpfs; then
+    echo "ERROR: /run is not a tmpfs"
+    findmnt -n /run
+    exit 1
+fi
+
+echo "✓ /run is tmpfs"
+
+echo "All checks passed!"
+"#;
+
+    fs::write(&script_path, script_content).expect("Failed to write test script");
+
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("Failed to get file metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("Failed to set permissions");
+    }
+
+    let mount_path = temp_dir
+        .path()
+        .to_str()
+        .expect("Failed to convert path to string");
+
+    // Run the test via SSH with the script mounted via virtiofs
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run-ssh",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--bind",
+        &format!("{}:testscripts", mount_path),
+        &get_test_image(),
+        "--",
+        "/run/virtiofs-mnt-testscripts/check_run_tmpfs.sh",
+    ])?;
+
+    output.assert_success("ephemeral run-ssh with tmpfs check");
+
+    assert!(
+        output.stdout.contains("All checks passed!"),
+        "Test script did not complete successfully. Output: {}",
+        output.stdout
+    );
+
+    Ok(())
+}

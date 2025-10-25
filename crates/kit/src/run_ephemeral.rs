@@ -373,6 +373,12 @@ fn prepare_run_command_with_temp(
         cmd.arg(format!("--label={label}"));
     }
 
+    // We always want this to be a tmpfs on general principle
+    // to match the running system. But also, apparently creating
+    // unix domain sockets on fuse-overlayfs is buggy in some
+    // circumstances.
+    cmd.arg("--mount=type=tmpfs,target=/run");
+
     // Propagate all podman arguments
     if let Some(ref name) = opts.podman.name {
         cmd.args(["--name", name]);
