@@ -9,6 +9,7 @@ use clap::{Parser, ValueEnum};
 use color_eyre::eyre;
 use color_eyre::{eyre::Context, Result};
 use std::fs;
+use std::str::FromStr;
 use tracing::{debug, info};
 
 use crate::common_opts::MemoryOpts;
@@ -52,6 +53,51 @@ pub enum FirmwareType {
     Bios,
 }
 
+/// Port mapping from host to VM
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortMapping {
+    pub host_port: u16,
+    pub guest_port: u16,
+}
+
+impl FromStr for PortMapping {
+    type Err = color_eyre::Report;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let (host_part, guest_part) = s.split_once(':').ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "Invalid port format '{}'. Expected format: host_port:guest_port",
+                s
+            )
+        })?;
+
+        let host_port = host_part.trim().parse::<u16>().map_err(|_| {
+            color_eyre::eyre::eyre!(
+                "Invalid host port '{}'. Must be a number between 1 and 65535",
+                host_part
+            )
+        })?;
+
+        let guest_port = guest_part.trim().parse::<u16>().map_err(|_| {
+            color_eyre::eyre::eyre!(
+                "Invalid guest port '{}'. Must be a number between 1 and 65535",
+                guest_part
+            )
+        })?;
+
+        Ok(PortMapping {
+            host_port,
+            guest_port,
+        })
+    }
+}
+
+impl std::fmt::Display for PortMapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host_port, self.guest_port)
+    }
+}
+
 /// Options for creating and running a bootable container VM
 #[derive(Debug, Parser)]
 pub struct LibvirtRunOpts {
@@ -77,9 +123,9 @@ pub struct LibvirtRunOpts {
     #[clap(flatten)]
     pub install: InstallOptions,
 
-    /// Port mapping from host to VM
+    /// Port mapping from host to VM (format: host_port:guest_port, e.g., 8080:80)
     #[clap(long = "port", short = 'p', action = clap::ArgAction::Append)]
-    pub port_mappings: Vec<String>,
+    pub port_mappings: Vec<PortMapping>,
 
     /// Volume mount from host to VM
     #[clap(long = "volume", short = 'v', action = clap::ArgAction::Append)]
@@ -222,6 +268,17 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
                     host_path, tag, tag
                 );
             }
+        }
+    }
+
+    // Display port forwarding information if any
+    if !opts.port_mappings.is_empty() {
+        println!("\nPort forwarding:");
+        for mapping in opts.port_mappings.iter() {
+            println!(
+                "  localhost:{} -> VM:{}",
+                mapping.host_port, mapping.guest_port
+            );
         }
     }
 
@@ -490,17 +547,15 @@ fn find_available_ssh_port() -> u16 {
 
 /// Parse a volume mount string in the format "host_path:tag"
 fn parse_volume_mount(volume_str: &str) -> Result<(String, String)> {
-    let parts: Vec<&str> = volume_str.splitn(2, ':').collect();
-
-    if parts.len() != 2 {
-        return Err(color_eyre::eyre::eyre!(
+    let (host_part, tag_part) = volume_str.split_once(':').ok_or_else(|| {
+        color_eyre::eyre::eyre!(
             "Invalid volume format '{}'. Expected format: host_path:tag",
             volume_str
-        ));
-    }
+        )
+    })?;
 
-    let host_path = parts[0].trim();
-    let tag = parts[1].trim();
+    let host_path = host_part.trim();
+    let tag = tag_part.trim();
 
     if host_path.is_empty() || tag.is_empty() {
         return Err(color_eyre::eyre::eyre!(
@@ -590,6 +645,60 @@ mod tests {
         let result = parse_volume_mount("/nonexistent/path/that/does/not/exist:mytag");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_valid() {
+        let result = "8080:80".parse::<PortMapping>();
+        assert!(result.is_ok());
+        let mapping = result.unwrap();
+        assert_eq!(mapping.host_port, 8080);
+        assert_eq!(mapping.guest_port, 80);
+    }
+
+    #[test]
+    fn test_parse_port_mapping_same_port() {
+        let result = "80:80".parse::<PortMapping>();
+        assert!(result.is_ok());
+        let mapping = result.unwrap();
+        assert_eq!(mapping.host_port, 80);
+        assert_eq!(mapping.guest_port, 80);
+    }
+
+    #[test]
+    fn test_parse_port_mapping_invalid_format() {
+        let result = "8080".parse::<PortMapping>();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Expected format: host_port:guest_port"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_invalid_host_port() {
+        let result = "abc:80".parse::<PortMapping>();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid host port"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_invalid_guest_port() {
+        let result = "8080:xyz".parse::<PortMapping>();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid guest port"));
+    }
+
+    #[test]
+    fn test_parse_port_mapping_port_out_of_range() {
+        let result = "70000:80".parse::<PortMapping>();
+        assert!(result.is_err());
     }
 }
 
@@ -754,15 +863,39 @@ fn create_libvirt_domain_from_disk(
             .with_metadata("bootc:storage-path", storage_path.as_str());
     }
 
+    // Build QEMU args with port forwarding
+    let mut qemu_args = vec![
+        "-smbios".to_string(),
+        format!("type=11,value={}", smbios_cred),
+    ];
+
+    // Build netdev user mode networking with port forwarding
+    let mut hostfwd_args = vec![format!("tcp::{}-:22", ssh_port)];
+
+    // Add user-specified port mappings
+    for mapping in opts.port_mappings.iter() {
+        hostfwd_args.push(format!(
+            "tcp::{}-:{}",
+            mapping.host_port, mapping.guest_port
+        ));
+    }
+
+    let netdev_config = format!(
+        "user,id=ssh0,{}",
+        hostfwd_args
+            .iter()
+            .map(|fwd| format!("hostfwd={}", fwd))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+
+    qemu_args.push("-netdev".to_string());
+    qemu_args.push(netdev_config);
+    qemu_args.push("-device".to_string());
+    qemu_args.push("virtio-net-pci,netdev=ssh0,addr=0x3".to_string());
+
     let domain_xml = domain_builder
-        .with_qemu_args(vec![
-            "-smbios".to_string(),
-            format!("type=11,value={}", smbios_cred),
-            "-netdev".to_string(),
-            format!("user,id=ssh0,hostfwd=tcp::{}-:22", ssh_port),
-            "-device".to_string(),
-            "virtio-net-pci,netdev=ssh0,addr=0x3".to_string(),
-        ])
+        .with_qemu_args(qemu_args)
         .build_xml()
         .with_context(|| "Failed to build domain XML")?;
 
