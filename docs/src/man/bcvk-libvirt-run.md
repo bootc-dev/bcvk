@@ -65,9 +65,17 @@ Run a bootable container as a persistent VM
 
     Port mapping from host to VM
 
-**-v**, **--volume**=*VOLUMES*
+**-v**, **--volume**=*RAW_VOLUMES*
 
-    Volume mount from host to VM
+    Volume mount from host to VM (raw virtiofs tag, for manual mounting)
+
+**--bind**=*BIND_MOUNTS*
+
+    Bind mount from host to VM (format: host_path:guest_path)
+
+**--bind-ro**=*BIND_MOUNTS_RO*
+
+    Bind mount from host to VM as read-only (format: host_path:guest_path)
 
 **--network**=*NETWORK*
 
@@ -85,7 +93,7 @@ Run a bootable container as a persistent VM
 
 **--bind-storage-ro**
 
-    Mount host container storage (RO) at /run/virtiofs-mnt-hoststorage
+    Mount host container storage (RO) at /run/host-container-storage
 
 **--firmware**=*FIRMWARE*
 
@@ -113,6 +121,10 @@ Run a bootable container as a persistent VM
 **--transient**
 
     Create a transient VM that disappears on shutdown/reboot
+
+**--lifecycle-bind-parent**
+
+    Bind VM lifecycle to parent process (shutdown VM when parent exits)
 
 <!-- END GENERATED OPTIONS -->
 

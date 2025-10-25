@@ -6,6 +6,8 @@ bcvk-libvirt - Manage libvirt integration for bootc containers
 
 **bcvk libvirt** \[**-h**\|**\--help**\] \<*subcommands*\>
 
+**bcvk v** \[**-h**\|**\--help**\] \<*subcommands*\>
+
 # DESCRIPTION
 
 Comprehensive libvirt integration with subcommands for uploading disk images,

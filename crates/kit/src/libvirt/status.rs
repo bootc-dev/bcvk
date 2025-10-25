@@ -7,6 +7,7 @@ use clap::Parser;
 use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use crate::domain_list::DomainLister;
 
@@ -28,7 +29,7 @@ pub enum OutputFormat {
 }
 
 /// libvirt version information
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LibvirtVersion {
     pub major: u32,
     pub minor: u32,
@@ -97,7 +98,7 @@ fn parse_libvirt_version_from_output(version_output: &str) -> Option<LibvirtVers
 }
 
 /// Parse libvirt version from virsh version output
-pub fn parse_libvirt_version() -> Result<Option<LibvirtVersion>> {
+fn parse_libvirt_version_uncached() -> Result<Option<LibvirtVersion>> {
     let output = Command::new("virsh")
         .args(&["version"])
         .output()
@@ -111,6 +112,22 @@ pub fn parse_libvirt_version() -> Result<Option<LibvirtVersion>> {
         .with_context(|| "virsh version output contained invalid UTF-8")?;
 
     Ok(parse_libvirt_version_from_output(&version_output))
+}
+
+/// Cached libvirt version (parsed once per process)
+static LIBVIRT_VERSION: OnceLock<Option<LibvirtVersion>> = OnceLock::new();
+
+/// Get the cached libvirt version, parsing it on first call
+pub fn parse_libvirt_version() -> Result<Option<LibvirtVersion>> {
+    // If already cached, clone and return
+    if let Some(version) = LIBVIRT_VERSION.get() {
+        return Ok(version.clone());
+    }
+
+    // Parse version and cache it
+    let version = parse_libvirt_version_uncached()?;
+    let _ = LIBVIRT_VERSION.set(version.clone());
+    Ok(version)
 }
 
 /// Check if libvirt supports readonly virtiofs

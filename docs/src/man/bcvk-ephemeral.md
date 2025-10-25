@@ -6,6 +6,8 @@ bcvk-ephemeral - Manage ephemeral VMs for bootc containers
 
 **bcvk ephemeral** [*OPTIONS*]
 
+**bcvk e** [*OPTIONS*]
+
 # DESCRIPTION
 
 Manage ephemeral VMs for bootc containers

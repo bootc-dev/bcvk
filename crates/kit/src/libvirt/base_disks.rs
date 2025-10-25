@@ -20,7 +20,7 @@ pub fn find_or_create_base_disk(
     connect_uri: Option<&str>,
 ) -> Result<Utf8PathBuf> {
     let metadata = DiskImageMetadata::from(install_options, image_digest);
-    let cache_hash = metadata.compute_cache_hash();
+    let cache_hash = metadata.compute_cache_hash(install_options);
 
     // Extract short hash for filename (first 16 chars after "sha256:")
     let short_hash = cache_hash

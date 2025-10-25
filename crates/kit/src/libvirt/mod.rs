@@ -27,6 +27,7 @@ pub mod base_disks;
 pub mod base_disks_cli;
 pub mod domain;
 pub mod inspect;
+pub mod lifecycle_monitor;
 pub mod list;
 pub mod list_volumes;
 pub mod rm;

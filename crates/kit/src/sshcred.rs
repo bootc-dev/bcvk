@@ -43,6 +43,54 @@ pub fn key_to_root_tmpfiles_d(pubkey: &str) -> String {
     format!("d /root/.ssh 0750 - - -\nf+~ /root/.ssh/authorized_keys 700 - - - {buf}")
 }
 
+/// Generate SMBIOS credentials for STORAGE_OPTS configuration
+///
+/// Creates a systemd unit that conditionally appends STORAGE_OPTS to /etc/environment
+/// (for PAM sessions including SSH), plus a dropin to ensure it runs.
+///
+/// Returns a vector with:
+/// 1. The unit itself (systemd.extra-unit)
+/// 2. A dropin for sysinit.target to pull in the unit
+pub fn smbios_creds_for_storage_opts() -> Result<Vec<String>> {
+    // Create systemd unit that conditionally appends to /etc/environment
+    let unit_content = r#"[Unit]
+Description=Setup STORAGE_OPTS for bcvk
+DefaultDependencies=no
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'grep -q STORAGE_OPTS /etc/environment || echo STORAGE_OPTS=additionalimagestore=/run/host-container-storage >> /etc/environment'
+RemainAfterExit=yes
+"#;
+    let encoded_unit = data_encoding::BASE64.encode(unit_content.as_bytes());
+    let unit_cred = format!(
+        "io.systemd.credential.binary:systemd.extra-unit.bcvk-storage-opts.service={encoded_unit}"
+    );
+
+    // Create dropin for sysinit.target to pull in our unit
+    let dropin_content = "[Unit]\nWants=bcvk-storage-opts.service\n";
+    let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
+    let dropin_cred = format!(
+        "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-storage={encoded_dropin}"
+    );
+
+    Ok(vec![unit_cred, dropin_cred])
+}
+
+/// Generate tmpfiles.d lines for STORAGE_OPTS in systemd contexts
+///
+/// Configures STORAGE_OPTS for:
+/// - /etc/environment.d/: systemd user manager and user services
+/// - /etc/systemd/system.conf.d/: system-level systemd services
+pub fn storage_opts_tmpfiles_d_lines() -> String {
+    concat!(
+        "f /etc/environment.d/90-bcvk-storage.conf 0644 root root - STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n",
+        "d /etc/systemd/system.conf.d 0755 root root -\n",
+        "f /etc/systemd/system.conf.d/90-bcvk-storage.conf 0644 root root - [Manager]\\nDefaultEnvironment=STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n"
+    ).to_string()
+}
+
 /// Generate SMBIOS credential string for AF_VSOCK systemd notification socket
 ///
 /// Creates a systemd credential that configures systemd to send notifications
@@ -55,6 +103,97 @@ pub fn smbios_cred_for_vsock_notify(host_cid: u32, port: u32) -> String {
         "io.systemd.credential:vmm.notify_socket=vsock-stream:{}:{}",
         host_cid, port
     )
+}
+
+/// Convert a guest mount path to a systemd unit name
+///
+/// Systemd requires mount unit names to match the mount path with:
+/// - Leading slash removed
+/// - All slashes replaced with dashes
+/// - All dashes in path components escaped as `\x2d`
+/// - .mount suffix added
+///
+/// Examples:
+/// - `/mnt/data` → `mnt-data.mount`
+/// - `/var/lib/data` → `var-lib-data.mount`
+/// - `/data` → `data.mount`
+/// - `/mnt/test-rw` → `mnt-test\x2drw.mount`
+pub fn guest_path_to_unit_name(guest_path: &str) -> String {
+    let path = guest_path.strip_prefix('/').unwrap_or(guest_path);
+
+    // Escape dashes in path components, then replace slashes with dashes
+    let escaped = path
+        .split('/')
+        .map(|component| component.replace('-', "\\x2d"))
+        .collect::<Vec<_>>()
+        .join("-");
+
+    format!("{}.mount", escaped)
+}
+
+/// Generate a systemd mount unit for virtiofs
+///
+/// Creates a systemd mount unit that mounts a virtiofs filesystem at the specified
+/// guest path. The unit is configured to:
+/// - Mount type: virtiofs
+/// - Options: Include readonly flag if specified
+/// - DefaultDependencies=no to avoid ordering cycles
+/// - Before=local-fs.target and After=systemd-remount-fs.service
+///
+/// Returns the complete unit file content as a string
+pub fn generate_mount_unit(virtiofs_tag: &str, guest_path: &str, readonly: bool) -> String {
+    let options = if readonly { "Options=ro" } else { "Options=rw" };
+
+    format!(
+        "[Unit]\n\
+         Description=Mount virtiofs tag {tag} at {path}\n\
+         ConditionPathExists=!/etc/initrd-release\n\
+         DefaultDependencies=no\n\
+         Conflicts=umount.target\n\
+         Before=local-fs.target umount.target\n\
+         After=systemd-remount-fs.service\n\
+         \n\
+         [Mount]\n\
+         What={tag}\n\
+         Where={path}\n\
+         Type=virtiofs\n\
+         {options}\n",
+        tag = virtiofs_tag,
+        path = guest_path,
+        options = options
+    )
+}
+
+/// Generate SMBIOS credentials for a systemd mount unit
+///
+/// Creates systemd credentials for:
+/// 1. The mount unit itself (via systemd.extra-unit)
+/// 2. A dropin for local-fs.target that wants this mount unit
+///
+/// Returns a vector of SMBIOS credential strings
+pub fn smbios_creds_for_mount_unit(
+    virtiofs_tag: &str,
+    guest_path: &str,
+    readonly: bool,
+) -> Result<Vec<String>> {
+    let unit_name = guest_path_to_unit_name(guest_path);
+    let mount_unit_content = generate_mount_unit(virtiofs_tag, guest_path, readonly);
+    let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
+
+    let mount_cred =
+        format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}");
+
+    // Create a dropin for local-fs.target that wants this mount
+    let dropin_content = format!(
+        "[Unit]\n\
+         Wants={unit_name}\n"
+    );
+    let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
+    let dropin_cred = format!(
+        "io.systemd.credential.binary:systemd.unit-dropin.local-fs.target~bcvk-mounts={encoded_dropin}"
+    );
+
+    Ok(vec![mount_cred, dropin_cred])
 }
 
 #[cfg(test)]

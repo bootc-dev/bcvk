@@ -5,6 +5,7 @@
 
 use crate::xml_utils;
 use base64::Engine;
+use camino::Utf8PathBuf;
 use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -35,6 +36,8 @@ pub struct PodmanBootcDomain {
     pub has_ssh_key: bool,
     /// SSH private key (available only when outputting JSON)
     pub ssh_private_key: Option<String>,
+    /// Project directory path (for project-scoped VMs)
+    pub project_dir: Option<Utf8PathBuf>,
 }
 
 impl PodmanBootcDomain {
@@ -219,6 +222,11 @@ impl DomainLister {
         let ssh_private_key = extract_ssh_private_key(dom);
         let has_ssh_key = ssh_private_key.is_some();
 
+        // Extract project directory
+        let project_dir = dom
+            .find_with_namespace("project-dir")
+            .map(|node| Utf8PathBuf::from(node.text_content()));
+
         Ok(Some(PodmanBootcDomainMetadata {
             source_image,
             created,
@@ -229,6 +237,7 @@ impl DomainLister {
             ssh_port,
             has_ssh_key,
             ssh_private_key,
+            project_dir,
         }))
     }
 
@@ -264,6 +273,7 @@ impl DomainLister {
             ssh_port: metadata.as_ref().and_then(|m| m.ssh_port),
             has_ssh_key: metadata.as_ref().map(|m| m.has_ssh_key).unwrap_or(false),
             ssh_private_key: metadata.as_ref().and_then(|m| m.ssh_private_key.clone()),
+            project_dir: metadata.as_ref().and_then(|m| m.project_dir.clone()),
         })
     }
 
@@ -329,6 +339,7 @@ struct PodmanBootcDomainMetadata {
     ssh_port: Option<u16>,
     has_ssh_key: bool,
     ssh_private_key: Option<String>,
+    project_dir: Option<Utf8PathBuf>,
 }
 
 /// Extract disk path from domain XML using DOM parser
@@ -451,6 +462,7 @@ mod tests {
             ssh_port: None,
             has_ssh_key: false,
             ssh_private_key: None,
+            project_dir: None,
         };
 
         assert!(domain.is_running());
@@ -469,6 +481,7 @@ mod tests {
             ssh_port: None,
             has_ssh_key: false,
             ssh_private_key: None,
+            project_dir: None,
         };
 
         assert!(!stopped_domain.is_running());

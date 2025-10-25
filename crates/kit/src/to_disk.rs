@@ -182,11 +182,22 @@ impl ToDiskOpts {
 
     /// Generate the complete bootc installation command arguments for SSH execution
     fn generate_bootc_install_command(&self, disk_size: u64) -> Result<Vec<String>> {
-        let source_imgref = format!("containers-storage:{}", self.source_image);
+        // Auto-detect localhost/ images and use --target-transport containers-storage
+        let mut install_opts = self.install.clone();
+        let source_imgref = if self.source_image.starts_with("localhost/") {
+            // For localhost/ images, use --target-transport instead of containers-storage: prefix
+            if install_opts.target_transport.is_none() {
+                install_opts.target_transport = Some("containers-storage".to_string());
+            }
+            self.source_image.clone()
+        } else {
+            // For other images, use containers-storage: prefix (existing behavior)
+            format!("containers-storage:{}", self.source_image)
+        };
 
         // Quote each bootc argument individually to prevent shell injection
         let mut quoted_bootc_args = Vec::new();
-        for arg in self.install.to_bootc_args() {
+        for arg in install_opts.to_bootc_args() {
             let quoted = shlex::try_quote(&arg)
                 .map_err(|e| eyre!("Failed to quote bootc argument '{}': {}", arg, e))?;
             quoted_bootc_args.push(quoted.to_string());
@@ -514,7 +525,7 @@ fn write_disk_metadata(
         .with_context(|| format!("Failed to open disk file {}", target_disk))?;
 
     metadata
-        .write_to_file(&file)
+        .write_to_file(&file, install_options)
         .with_context(|| "Failed to write metadata to disk file")?;
 
     debug!(
@@ -567,6 +578,70 @@ mod tests {
 
         let size2 = opts2.calculate_disk_size()?;
         assert_eq!(size2, 5120 * 1024 * 1024);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_localhost_image_detection() -> Result<()> {
+        // Test localhost/ image uses --target-transport
+        let opts_localhost = ToDiskOpts {
+            source_image: "localhost/my-image:latest".to_string(),
+            target_disk: "/tmp/test.img".into(),
+            install: InstallOptions::default(),
+            additional: ToDiskAdditionalOpts {
+                disk_size: Some("10G".to_string()),
+                ..Default::default()
+            },
+        };
+
+        let cmd = opts_localhost.generate_bootc_install_command(10 * 1024 * 1024 * 1024)?;
+        let script = &cmd[2]; // The script is the third argument after /bin/bash -c
+
+        // Should use plain image name (not containers-storage: prefix)
+        assert!(
+            script.contains("localhost/my-image:latest"),
+            "Script should contain localhost/my-image:latest"
+        );
+        // Should NOT have containers-storage: prefix for localhost/ images
+        assert!(
+            !script.contains("containers-storage:localhost/"),
+            "Script should not contain containers-storage: prefix for localhost/ images"
+        );
+        // Should include --target-transport in bootc args
+        assert!(
+            script.contains("--target-transport"),
+            "Script should contain --target-transport flag"
+        );
+        assert!(
+            script.contains("containers-storage"),
+            "Script should contain containers-storage as transport value"
+        );
+
+        // Test non-localhost image uses containers-storage: prefix (existing behavior)
+        let opts_regular = ToDiskOpts {
+            source_image: "quay.io/my-image:latest".to_string(),
+            target_disk: "/tmp/test.img".into(),
+            install: InstallOptions::default(),
+            additional: ToDiskAdditionalOpts {
+                disk_size: Some("10G".to_string()),
+                ..Default::default()
+            },
+        };
+
+        let cmd_regular = opts_regular.generate_bootc_install_command(10 * 1024 * 1024 * 1024)?;
+        let script_regular = &cmd_regular[2];
+
+        // Should use containers-storage: prefix
+        assert!(
+            script_regular.contains("containers-storage:quay.io/my-image:latest"),
+            "Script should contain containers-storage:quay.io/my-image:latest"
+        );
+        // Should NOT include --target-transport for non-localhost images
+        assert!(
+            !script_regular.contains("--target-transport"),
+            "Script should not contain --target-transport flag for non-localhost images"
+        );
 
         Ok(())
     }

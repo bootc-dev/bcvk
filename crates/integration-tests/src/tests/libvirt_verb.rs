@@ -759,48 +759,14 @@ fn test_libvirt_bind_storage_ro() -> Result<()> {
         panic!("Failed to establish SSH connection: {}", e);
     }
 
-    // Create mount point and mount virtiofs filesystem
-    println!("Creating mount point and mounting virtiofs filesystem...");
-    let mount_setup = run_bcvk(&[
-        "libvirt",
-        "ssh",
-        &domain_name,
-        "--",
-        "sudo",
-        "mkdir",
-        "-p",
-        "/run/virtiofs-mnt-hoststorage",
-    ])
-    .expect("Failed to create mount point");
+    // Wait for VM to boot and automatic mount to complete
+    println!("Waiting for VM to boot and automatic mount to complete...");
+    std::thread::sleep(std::time::Duration::from_secs(10));
 
-    if !mount_setup.success() {
-        println!(
-            "Warning: Failed to create mount point: {}",
-            mount_setup.stderr
-        );
-    }
-
-    let mount_cmd = run_bcvk(&[
-        "libvirt",
-        "ssh",
-        &domain_name,
-        "--",
-        "sudo",
-        "mount",
-        "-t",
-        "virtiofs",
-        "hoststorage",
-        "/run/virtiofs-mnt-hoststorage",
-    ])
-    .expect("Failed to mount virtiofs");
-
-    if !mount_cmd.success() {
-        cleanup_domain(&domain_name);
-        panic!("Failed to mount virtiofs filesystem: {}", mount_cmd.stderr);
-    }
-
-    // Test SSH connection and verify container storage mount inside VM
-    println!("Testing SSH connection and checking container storage mount...");
+    // Test SSH connection and verify container storage is automatically mounted
+    println!(
+        "Verifying container storage is automatically mounted at /run/host-container-storage..."
+    );
     run_bcvk_nocapture(&[
         "libvirt",
         "ssh",
@@ -808,9 +774,9 @@ fn test_libvirt_bind_storage_ro() -> Result<()> {
         "--",
         "ls",
         "-la",
-        "/run/virtiofs-mnt-hoststorage/overlay",
+        "/run/host-container-storage/overlay",
     ])
-    .expect("Failed to run SSH command to check container storage");
+    .expect("Failed to verify automatic mount of container storage");
 
     // Verify that the mount is read-only
     println!("Verifying that the mount is read-only...");
@@ -820,7 +786,7 @@ fn test_libvirt_bind_storage_ro() -> Result<()> {
         &domain_name,
         "--",
         "touch",
-        "/run/virtiofs-mnt-hoststorage/test-write",
+        "/run/host-container-storage/test-write",
     ])
     .expect("Failed to run SSH command to test read-only mount");
 
@@ -1174,5 +1140,252 @@ fn test_libvirt_transient_vm() -> Result<()> {
     }
 
     println!("✓ Transient VM test passed");
+    Ok(())
+}
+
+#[distributed_slice(INTEGRATION_TESTS)]
+static TEST_LIBVIRT_BIND_MOUNTS: IntegrationTest =
+    IntegrationTest::new("test_libvirt_bind_mounts", test_libvirt_bind_mounts);
+
+/// Test automatic bind mount functionality with systemd mount units
+fn test_libvirt_bind_mounts() -> Result<()> {
+    use camino::Utf8Path;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let test_image = get_test_image();
+
+    // Generate unique domain name for this test
+    let domain_name = format!(
+        "test-bind-mounts-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+
+    println!("Testing bind mounts with domain: {}", domain_name);
+
+    // Create temporary directories for testing bind mounts
+    let rw_dir = TempDir::new().expect("Failed to create read-write temp directory");
+    let rw_dir_path = Utf8Path::from_path(rw_dir.path()).expect("rw dir path is not utf8");
+    let rw_test_file = rw_dir_path.join("rw-test.txt");
+    fs::write(&rw_test_file, "read-write content").expect("Failed to write rw test file");
+
+    let ro_dir = TempDir::new().expect("Failed to create read-only temp directory");
+    let ro_dir_path = Utf8Path::from_path(ro_dir.path()).expect("ro dir path is not utf8");
+    let ro_test_file = ro_dir_path.join("ro-test.txt");
+    fs::write(&ro_test_file, "read-only content").expect("Failed to write ro test file");
+
+    println!("RW directory: {}", rw_dir_path);
+    println!("RO directory: {}", ro_dir_path);
+
+    // Cleanup any existing domain with this name
+    cleanup_domain(&domain_name);
+
+    // Create domain with bind mounts
+    println!("Creating libvirt domain with bind mounts...");
+    let create_output = run_bcvk(&[
+        "libvirt",
+        "run",
+        "--name",
+        &domain_name,
+        "--label",
+        LIBVIRT_INTEGRATION_TEST_LABEL,
+        "--filesystem",
+        "ext4",
+        "--bind",
+        &format!("{}:/var/mnt/test-rw", rw_dir_path),
+        "--bind-ro",
+        &format!("{}:/var/mnt/test-ro", ro_dir_path),
+        &test_image,
+    ])
+    .expect("Failed to run libvirt run with bind mounts");
+
+    println!("Create stdout: {}", create_output.stdout);
+    println!("Create stderr: {}", create_output.stderr);
+
+    if !create_output.success() {
+        cleanup_domain(&domain_name);
+        panic!(
+            "Failed to create domain with bind mounts: {}",
+            create_output.stderr
+        );
+    }
+
+    println!("Successfully created domain: {}", domain_name);
+
+    // Check domain XML for virtiofs filesystems and SMBIOS credentials
+    println!("Checking domain XML for virtiofs and SMBIOS credentials...");
+    let dumpxml_output = Command::new("virsh")
+        .args(&["dumpxml", &domain_name])
+        .output()
+        .expect("Failed to dump domain XML");
+
+    if !dumpxml_output.status.success() {
+        cleanup_domain(&domain_name);
+        let stderr = String::from_utf8_lossy(&dumpxml_output.stderr);
+        panic!("Failed to dump domain XML: {}", stderr);
+    }
+
+    let domain_xml = String::from_utf8_lossy(&dumpxml_output.stdout);
+
+    // Verify virtiofs filesystems are present
+    assert!(
+        domain_xml.contains("type='virtiofs'") || domain_xml.contains("driver type='virtiofs'"),
+        "Domain XML should contain virtiofs filesystem configuration"
+    );
+
+    // Verify SMBIOS credentials are injected
+    assert!(
+        domain_xml.contains("systemd.extra-unit"),
+        "Domain XML should contain systemd.extra-unit SMBIOS credentials for mount units"
+    );
+
+    println!("✓ Domain XML contains virtiofs and SMBIOS credentials");
+
+    // Wait for VM to boot and mounts to be ready
+    println!("Waiting for VM to boot and mounts to be ready...");
+    std::thread::sleep(std::time::Duration::from_secs(15));
+
+    // Debug: Check systemd credentials
+    println!("Debugging: Checking systemd credentials...");
+    let _creds_check = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "ls",
+        "-la",
+        "/run/credentials",
+    ])
+    .expect("Failed to check credentials");
+
+    // Debug: Check mount units
+    println!("Debugging: Checking mount units...");
+    let _units_check = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "systemctl",
+        "list-units",
+        "*.mount",
+    ])
+    .expect("Failed to check mount units");
+
+    // Debug: Check mount status
+    println!("Debugging: Checking if mounts exist...");
+    let _mount_check = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "mount",
+        "|",
+        "grep",
+        "virtiofs",
+    ])
+    .expect("Failed to check mounts");
+
+    // Test read-write bind mount - verify file exists and is readable
+    println!("Testing read-write bind mount...");
+    let rw_read_test = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "cat",
+        "/var/mnt/test-rw/rw-test.txt",
+    ])
+    .expect("Failed to read from rw bind mount");
+
+    assert!(
+        rw_read_test.success(),
+        "Should be able to read from rw bind mount. stderr: {}",
+        rw_read_test.stderr
+    );
+    assert!(
+        rw_read_test.stdout.contains("read-write content"),
+        "Should read correct content from rw bind mount"
+    );
+    println!("✓ RW bind mount is readable");
+
+    // Test write access on read-write mount
+    println!("Testing write access on read-write bind mount...");
+    let rw_write_test = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "sh",
+        "-c",
+        "echo 'new content' > /var/mnt/test-rw/write-test.txt",
+    ])
+    .expect("Failed to write to rw bind mount");
+
+    assert!(
+        rw_write_test.success(),
+        "Should be able to write to rw bind mount. stderr: {}",
+        rw_write_test.stderr
+    );
+    println!("✓ RW bind mount is writable");
+
+    // Verify written file exists on host
+    let written_file = rw_dir_path.join("write-test.txt");
+    assert!(
+        written_file.exists(),
+        "Written file should exist on host filesystem"
+    );
+    println!("✓ Written file exists on host");
+
+    // Test read-only bind mount - verify file exists and is readable
+    println!("Testing read-only bind mount...");
+    let ro_read_test = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "cat",
+        "/var/mnt/test-ro/ro-test.txt",
+    ])
+    .expect("Failed to read from ro bind mount");
+
+    assert!(
+        ro_read_test.success(),
+        "Should be able to read from ro bind mount. stderr: {}",
+        ro_read_test.stderr
+    );
+    assert!(
+        ro_read_test.stdout.contains("read-only content"),
+        "Should read correct content from ro bind mount"
+    );
+    println!("✓ RO bind mount is readable");
+
+    // Test that read-only mount rejects writes
+    println!("Testing that read-only bind mount rejects writes...");
+    let ro_write_test = run_bcvk(&[
+        "libvirt",
+        "ssh",
+        &domain_name,
+        "--",
+        "sh",
+        "-c",
+        "echo 'should fail' > /var/mnt/test-ro/write-test.txt 2>&1",
+    ])
+    .expect("Failed to test write to ro bind mount");
+
+    assert!(
+        !ro_write_test.success(),
+        "Write to read-only bind mount should fail. stdout: {}, stderr: {}",
+        ro_write_test.stdout,
+        ro_write_test.stderr
+    );
+    println!("✓ RO bind mount correctly rejects writes");
+
+    // Cleanup domain
+    cleanup_domain(&domain_name);
+
+    println!("✓ Bind mounts test passed");
     Ok(())
 }
