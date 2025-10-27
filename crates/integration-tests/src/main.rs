@@ -17,6 +17,7 @@ use linkme::distributed_slice;
 
 mod tests {
     pub mod libvirt_base_disks;
+    pub mod libvirt_port_forward;
     pub mod libvirt_upload_disk;
     pub mod libvirt_verb;
     pub mod mount_feature;
