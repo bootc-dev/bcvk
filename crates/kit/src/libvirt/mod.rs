@@ -15,6 +15,7 @@ pub enum OutputFormat {
     Table,
     Json,
     Yaml,
+    Xml,
 }
 
 /// Default memory allocation for libvirt VMs

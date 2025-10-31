@@ -59,6 +59,23 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtInspectOpt
                     .with_context(|| "Failed to serialize VM as JSON")?
             );
         }
+        OutputFormat::Xml => {
+            // Output raw domain XML using virsh dumpxml
+            let mut cmd = global_opts.virsh_command();
+            cmd.args(["dumpxml", &opts.name]);
+            let output = cmd
+                .output()
+                .with_context(|| format!("Failed to run virsh dumpxml for {}", opts.name))?;
+
+            if !output.status.success() {
+                return Err(color_eyre::eyre::eyre!(
+                    "Failed to get domain XML: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+        }
         OutputFormat::Table => {
             return Err(color_eyre::eyre::eyre!(
                 "Table format is not supported for inspect command"

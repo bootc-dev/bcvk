@@ -228,3 +228,107 @@ fn test_run_ephemeral_container_ssh_access() -> Result<()> {
     assert!(ssh_output.stdout.contains("SSH_TEST_SUCCESS"));
     Ok(())
 }
+
+#[distributed_slice(INTEGRATION_TESTS)]
+static TEST_RUN_EPHEMERAL_WITH_INSTANCETYPE: IntegrationTest = IntegrationTest::new(
+    "run_ephemeral_with_instancetype",
+    test_run_ephemeral_with_instancetype,
+);
+
+fn test_run_ephemeral_with_instancetype() -> Result<()> {
+    // Test u1.nano: 1 vCPU, 512 MiB memory
+    // Calculate physical memory from /sys/firmware/memmap (System RAM regions)
+    let script = "/bin/sh -c 'echo CPUs:$(grep -c ^processor /proc/cpuinfo); total=0; for dir in /sys/firmware/memmap/*; do type=$(cat \"$dir/type\" 2>/dev/null); if [ \"$type\" = \"System RAM\" ]; then start=$(cat \"$dir/start\"); end=$(cat \"$dir/end\"); start_dec=$((start)); end_dec=$((end)); size=$((end_dec - start_dec + 1)); total=$((total + size)); fi; done; total_kb=$((total / 1024)); echo PhysicalMemKB:$total_kb'";
+
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--itype",
+        "u1.nano",
+        "--execute",
+        script,
+        &get_test_image(),
+    ])?;
+
+    output.assert_success("ephemeral run with instance type u1.nano");
+
+    // Verify vCPUs (should be 1)
+    assert!(
+        output.stdout.contains("CPUs:1"),
+        "Expected 1 vCPU for u1.nano, output: {}",
+        output.stdout
+    );
+
+    // Verify physical memory (should be exactly 512 MiB = 524288 kB)
+    let mem_line = output
+        .stdout
+        .lines()
+        .find(|line| line.contains("PhysicalMemKB:"))
+        .expect("PhysicalMemKB line not found in output");
+
+    let mem_kb: u32 = mem_line
+        .split(':')
+        .nth(1)
+        .expect("Could not parse PhysicalMemKB")
+        .trim()
+        .parse()
+        .expect("Could not parse PhysicalMemKB as number");
+
+    // Physical memory should be close to 512 MiB = 524288 kB
+    // QEMU reserves small memory regions (BIOS, VGA, ACPI, etc.) so actual may be slightly less
+    // Allow 1% tolerance to account for hypervisor overhead
+    let expected_kb = 512 * 1024;
+    let tolerance_kb = expected_kb / 100; // 1% tolerance
+    let diff = if mem_kb > expected_kb {
+        mem_kb - expected_kb
+    } else {
+        expected_kb - mem_kb
+    };
+
+    assert!(
+        diff <= tolerance_kb,
+        "Expected physical memory ~{} kB for u1.nano, got {} kB (diff: {} kB, max allowed: {} kB [1%])",
+        expected_kb, mem_kb, diff, tolerance_kb
+    );
+
+    Ok(())
+}
+
+#[distributed_slice(INTEGRATION_TESTS)]
+static TEST_RUN_EPHEMERAL_INSTANCETYPE_INVALID: IntegrationTest = IntegrationTest::new(
+    "run_ephemeral_instancetype_invalid",
+    test_run_ephemeral_instancetype_invalid,
+);
+
+fn test_run_ephemeral_instancetype_invalid() -> Result<()> {
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--itype",
+        "invalid.type",
+        "--karg",
+        "systemd.unit=poweroff.target",
+        &get_test_image(),
+    ])?;
+
+    // Should fail with invalid instance type
+    assert!(
+        !output.success(),
+        "Expected failure with invalid instance type, but succeeded"
+    );
+
+    // Error message should mention the invalid type
+    assert!(
+        output.stderr.contains("invalid.type") || output.stderr.contains("Unknown instance type"),
+        "Error message should mention invalid instance type: {}",
+        output.stderr
+    );
+
+    Ok(())
+}

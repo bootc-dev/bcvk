@@ -33,6 +33,7 @@ When using `--format=json` with a specific domain name, the output is a single J
     - table
     - json
     - yaml
+    - xml
 
     Default: table
 

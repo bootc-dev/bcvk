@@ -116,6 +116,11 @@ fn run_list(connect_uri: Option<&str>, opts: ListOpts) -> Result<()> {
                 "YAML format is not supported for base-disks list command"
             ))
         }
+        OutputFormat::Xml => {
+            return Err(color_eyre::eyre::eyre!(
+                "XML format is not supported for base-disks list command"
+            ))
+        }
     }
 
     Ok(())

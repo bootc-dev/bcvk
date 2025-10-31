@@ -143,6 +143,11 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtListOpts) 
                 "YAML format is not supported for list command"
             ))
         }
+        OutputFormat::Xml => {
+            return Err(color_eyre::eyre::eyre!(
+                "XML format is not supported for list command"
+            ))
+        }
     }
     Ok(())
 }

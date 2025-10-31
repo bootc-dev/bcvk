@@ -363,6 +363,97 @@ fn test_libvirt_ssh_integration() -> Result<()> {
     Ok(())
 }
 
+#[distributed_slice(INTEGRATION_TESTS)]
+static TEST_LIBVIRT_RUN_WITH_INSTANCETYPE: IntegrationTest = IntegrationTest::new(
+    "test_libvirt_run_with_instancetype",
+    test_libvirt_run_with_instancetype,
+);
+
+/// Test libvirt run with instancetype
+fn test_libvirt_run_with_instancetype() -> Result<()> {
+    let test_image = get_test_image();
+
+    // Generate unique domain name for this test
+    let domain_name = format!(
+        "test-itype-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+
+    println!(
+        "Testing libvirt run with instancetype for domain: {}",
+        domain_name
+    );
+
+    // Cleanup any existing domain with this name
+    cleanup_domain(&domain_name);
+
+    // Create domain with instancetype
+    println!("Creating libvirt domain with instancetype u1.small...");
+    let create_output = run_bcvk(&[
+        "libvirt",
+        "run",
+        "--name",
+        &domain_name,
+        "--label",
+        LIBVIRT_INTEGRATION_TEST_LABEL,
+        "--itype",
+        "u1.small",
+        "--filesystem",
+        "ext4",
+        &test_image,
+    ])
+    .expect("Failed to run libvirt run");
+
+    println!("Create stdout: {}", create_output.stdout);
+    println!("Create stderr: {}", create_output.stderr);
+
+    if !create_output.success() {
+        cleanup_domain(&domain_name);
+        panic!(
+            "Failed to create domain with instancetype: {}",
+            create_output.stderr
+        );
+    }
+
+    println!("Successfully created domain: {}", domain_name);
+
+    // Inspect the domain to verify instancetype was set
+    let inspect_output = run_bcvk(&["libvirt", "inspect", "--format", "xml", &domain_name])
+        .expect("Failed to run libvirt inspect");
+
+    let inspect_stdout = inspect_output.stdout;
+    println!("Inspect output: {}", inspect_stdout);
+
+    // Parse XML to verify memory and vcpus match u1.small (1 vcpu, 2048 MB)
+    let dom = parse_xml_dom(&inspect_stdout).expect("Failed to parse domain XML");
+
+    // Check vCPUs (should be 1 for u1.small)
+    let vcpu_node = dom.find("vcpu").expect("vcpu element not found");
+    let vcpus: u32 = vcpu_node.text.parse().expect("Failed to parse vcpu count");
+    assert_eq!(vcpus, 1, "u1.small should have 1 vCPU, got {}", vcpus);
+    println!("✓ vCPUs correctly set to: {}", vcpus);
+
+    // Check memory (should be 2048 MB = 2097152 KB for u1.small)
+    let memory_node = dom.find("memory").expect("memory element not found");
+    let memory_kb: u64 = memory_node.text.parse().expect("Failed to parse memory");
+    let memory_mb = memory_kb / 1024;
+    assert_eq!(
+        memory_mb, 2048,
+        "u1.small should have 2048 MB, got {} MB",
+        memory_mb
+    );
+    println!("✓ Memory correctly set to: {} MB", memory_mb);
+
+    // Cleanup domain
+    cleanup_domain(&domain_name);
+
+    println!("✓ libvirt run with instancetype test passed");
+    Ok(())
+}
+
 /// Helper function to cleanup domain
 fn cleanup_domain(domain_name: &str) {
     println!("Cleaning up domain: {}", domain_name);

@@ -27,6 +27,7 @@ Show detailed information about a libvirt domain
     - table
     - json
     - yaml
+    - xml
 
     Default: yaml
 

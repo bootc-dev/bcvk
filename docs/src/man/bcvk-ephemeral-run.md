@@ -49,6 +49,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     This argument is required.
 
+**--itype**=*ITYPE*
+
+    Instance type (e.g., u1.nano, u1.small, u1.medium). Overrides vcpus/memory if specified.
+
 **--memory**=*MEMORY*
 
     Memory size (e.g. 4G, 2048M, or plain number for MB)
@@ -57,7 +61,7 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
 **--vcpus**=*VCPUS*
 
-    Number of vCPUs
+    Number of vCPUs (overridden by --itype if specified)
 
 **--console**
 

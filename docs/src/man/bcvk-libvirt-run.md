@@ -23,6 +23,10 @@ Run a bootable container as a persistent VM
 
     Name for the VM (auto-generated if not specified)
 
+**--itype**=*ITYPE*
+
+    Instance type (e.g., u1.nano, u1.small, u1.medium). Overrides cpus/memory if specified.
+
 **--memory**=*MEMORY*
 
     Memory size (e.g. 4G, 2048M, or plain number for MB)
@@ -31,7 +35,7 @@ Run a bootable container as a persistent VM
 
 **--cpus**=*CPUS*
 
-    Number of virtual CPUs for the VM
+    Number of virtual CPUs for the VM (overridden by --itype if specified)
 
     Default: 2
 

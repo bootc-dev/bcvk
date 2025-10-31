@@ -174,10 +174,16 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub name: Option<String>,
 
+    #[clap(
+        long,
+        help = "Instance type (e.g., u1.nano, u1.small, u1.medium). Overrides cpus/memory if specified."
+    )]
+    pub itype: Option<crate::instancetypes::InstanceType>,
+
     #[clap(flatten)]
     pub memory: MemoryOpts,
 
-    /// Number of virtual CPUs for the VM
+    /// Number of virtual CPUs for the VM (overridden by --itype if specified)
     #[clap(long, default_value = "2")]
     pub cpus: u32,
 
@@ -263,6 +269,24 @@ impl LibvirtRunOpts {
         }
         Ok(())
     }
+
+    /// Get resolved memory in MB, using instancetype if specified
+    pub fn resolved_memory_mb(&self) -> Result<u32> {
+        if let Some(itype) = self.itype {
+            Ok(itype.memory_mb())
+        } else {
+            parse_memory_to_mb(&self.memory.memory)
+        }
+    }
+
+    /// Get resolved CPU count, using instancetype if specified
+    pub fn resolved_cpus(&self) -> Result<u32> {
+        if let Some(itype) = self.itype {
+            Ok(itype.vcpus())
+        } else {
+            Ok(self.cpus)
+        }
+    }
 }
 
 /// Execute the libvirt run command
@@ -334,11 +358,17 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
 
     // VM is now managed by libvirt, no need to track separately
 
+    let resolved_memory = opts.resolved_memory_mb()?;
+    let resolved_cpus = opts.resolved_cpus()?;
+
     println!("VM '{}' created successfully!", vm_name);
     println!("  Image: {}", opts.image);
     println!("  Disk: {}", disk_path);
-    println!("  Memory: {}", opts.memory.memory);
-    println!("  CPUs: {}", opts.cpus);
+    if let Some(ref itype) = opts.itype {
+        println!("  Instance Type: {}", itype);
+    }
+    println!("  Memory: {} MiB", resolved_memory);
+    println!("  CPUs: {}", resolved_cpus);
 
     // Display volume mount information if any
     if !opts.raw_volumes.is_empty() {
@@ -924,7 +954,8 @@ fn create_libvirt_domain_from_disk(
     // Generate SMBIOS credentials for storage opts unit (handles /etc/environment for PAM/SSH)
     let storage_opts_creds = crate::sshcred::smbios_creds_for_storage_opts()?;
 
-    let memory = parse_memory_to_mb(&opts.memory.memory)?;
+    let memory = opts.resolved_memory_mb()?;
+    let cpus = opts.resolved_cpus()?;
 
     // Setup secure boot if requested
     let secure_boot_config = if let Some(keys) = opts.secure_boot_keys.as_deref() {
@@ -943,15 +974,15 @@ fn create_libvirt_domain_from_disk(
     let mut domain_builder = DomainBuilder::new()
         .with_name(domain_name)
         .with_memory(memory.into())
-        .with_vcpus(opts.cpus)
+        .with_vcpus(cpus)
         .with_disk(disk_path.as_str())
         .with_transient_disk(opts.transient)
         .with_network("none") // Use QEMU args for SSH networking instead
         .with_firmware(opts.firmware)
         .with_tpm(!opts.disable_tpm)
         .with_metadata("bootc:source-image", &opts.image)
-        .with_metadata("bootc:memory-mb", &opts.memory.to_string())
-        .with_metadata("bootc:vcpus", &opts.cpus.to_string())
+        .with_metadata("bootc:memory-mb", &memory.to_string())
+        .with_metadata("bootc:vcpus", &cpus.to_string())
         .with_metadata("bootc:disk-size-gb", &opts.disk_size.to_string())
         .with_metadata(
             "bootc:filesystem",
@@ -965,6 +996,11 @@ fn create_libvirt_domain_from_disk(
         .with_metadata("bootc:ssh-private-key-base64", &private_key_base64)
         .with_metadata("bootc:ssh-port", &ssh_port.to_string())
         .with_metadata("bootc:image-digest", image_digest);
+
+    // Add instance type metadata if specified
+    if let Some(itype) = opts.itype {
+        domain_builder = domain_builder.with_metadata("bootc:instance-type", &itype.to_string());
+    }
 
     // Add labels if specified
     if !opts.label.is_empty() {

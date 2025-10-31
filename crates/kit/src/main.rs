@@ -19,6 +19,7 @@ mod ephemeral;
 mod hostexec;
 mod images;
 mod install_options;
+mod instancetypes;
 mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]

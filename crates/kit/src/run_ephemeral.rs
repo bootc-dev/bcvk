@@ -166,10 +166,16 @@ pub struct CommonPodmanOptions {
 /// Common VM configuration options for hardware, networking, and features.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonVmOpts {
+    #[clap(
+        long,
+        help = "Instance type (e.g., u1.nano, u1.small, u1.medium). Overrides vcpus/memory if specified."
+    )]
+    pub itype: Option<crate::instancetypes::InstanceType>,
+
     #[clap(flatten)]
     pub memory: MemoryOpts,
 
-    #[clap(long, help = "Number of vCPUs")]
+    #[clap(long, help = "Number of vCPUs (overridden by --itype if specified)")]
     pub vcpus: Option<u32>,
 
     #[clap(long, help = "Enable console output to terminal for debugging")]
@@ -203,14 +209,22 @@ pub struct CommonVmOpts {
 }
 
 impl CommonVmOpts {
-    /// Parse memory specification to MB
+    /// Parse memory specification to MB, using instancetype if specified
     pub fn memory_mb(&self) -> color_eyre::Result<u32> {
-        crate::utils::parse_memory_to_mb(&self.memory.memory)
+        if let Some(itype) = self.itype {
+            Ok(itype.memory_mb())
+        } else {
+            crate::utils::parse_memory_to_mb(&self.memory.memory)
+        }
     }
 
-    /// Get vCPU count
-    pub fn vcpus(&self) -> u32 {
-        self.vcpus.unwrap_or_else(default_vcpus)
+    /// Get vCPU count, using instancetype if specified
+    pub fn vcpus(&self) -> color_eyre::Result<u32> {
+        if let Some(itype) = self.itype {
+            Ok(itype.vcpus())
+        } else {
+            Ok(self.vcpus.unwrap_or_else(default_vcpus))
+        }
     }
 }
 
@@ -988,7 +1002,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     // Configure qemu
     let mut qemu_config = crate::qemu::QemuConfig::new_direct_boot(
         opts.common.memory_mb()?,
-        opts.common.vcpus(),
+        opts.common.vcpus()?,
         "/run/qemu/kernel".to_string(),
         "/run/qemu/initramfs".to_string(),
         main_virtiofsd_config.socket_path.clone(),
