@@ -413,7 +413,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         add_swap: Some(format!("{disk_size}")),
         bind_mounts: Vec::new(),    // No additional bind mounts needed
         ro_bind_mounts: Vec::new(), // No additional ro bind mounts needed
-        systemd_units_dir: None,    // No custom systemd units
+        add_unit: Vec::new(),       // No additional units to inject
         bind_storage_ro: true,      // Mount host container storage read-only
         mount_disk_files: vec![format!(
             "{}:output:{}",
@@ -421,6 +421,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
             opts.additional.format.as_str()
         )], // Attach target disk
         kernel_args: Default::default(),
+        cloud_init: None, // No cloud-init for to-disk installation
     };
 
     // Phase 5: SSH-based VM configuration and execution

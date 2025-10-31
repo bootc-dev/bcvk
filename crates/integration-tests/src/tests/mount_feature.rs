@@ -24,18 +24,17 @@ use crate::{get_test_image, run_bcvk, IntegrationTest, INTEGRATION_TESTS, INTEGR
 
 /// Create a systemd unit that verifies a mount exists and tests writability
 fn create_mount_verify_unit(
-    unit_dir: &Utf8Path,
+    unit_path: &Utf8Path,
     mount_name: &str,
     expected_file: &str,
     expected_content: Option<&str>,
     readonly: bool,
 ) -> std::io::Result<()> {
-    let (description, content_check, write_check, unit_prefix) = if readonly {
+    let (description, content_check, write_check) = if readonly {
         (
             format!("Verify read-only mount {mount_name} and poweroff"),
             format!("ExecStart=test -f /run/virtiofs-mnt-{mount_name}/{expected_file}"),
             format!("ExecStart=/bin/sh -c '! echo test-write > /run/virtiofs-mnt-{mount_name}/write-test.txt 2>/dev/null'"),
-            "verify-ro-mount",
         )
     } else {
         let content = expected_content.expect("expected_content required for writable mounts");
@@ -43,7 +42,6 @@ fn create_mount_verify_unit(
             format!("Verify mount {mount_name} and poweroff"),
             format!("ExecStart=grep -qF \"{content}\" /run/virtiofs-mnt-{mount_name}/{expected_file}"),
             format!("ExecStart=/bin/sh -c 'echo test-write > /run/virtiofs-mnt-{mount_name}/write-test.txt'"),
-            "verify-mount",
         )
     };
 
@@ -60,11 +58,13 @@ ExecStart=echo ok mount verify {mount_name}
 ExecStart=systemctl poweroff
 StandardOutput=journal+console
 StandardError=journal+console
+
+[Install]
+WantedBy=default.target
 "#
     );
 
-    let unit_path = unit_dir.join(format!("{unit_prefix}-{mount_name}.service"));
-    fs::write(&unit_path, unit_content)?;
+    fs::write(unit_path, unit_content)?;
     Ok(())
 }
 
@@ -80,15 +80,14 @@ fn test_mount_feature_bind() -> Result<()> {
     let test_content = "Test content for bind mount";
     fs::write(&test_file_path, test_content).expect("Failed to write test file");
 
-    // Create systemd units directory
-    let units_dir = TempDir::new().expect("Failed to create units directory");
-    let units_dir_path = Utf8Path::from_path(units_dir.path()).expect("units dir path is not utf8");
-    let system_dir = units_dir_path.join("system");
-    fs::create_dir(&system_dir).expect("Failed to create system directory");
+    // Create temporary unit file
+    let unit_dir = TempDir::new().expect("Failed to create unit directory");
+    let unit_dir_path = Utf8Path::from_path(unit_dir.path()).expect("unit dir path is not utf8");
+    let unit_file = unit_dir_path.join("verify-mount-testmount.service");
 
     // Create verification unit
     create_mount_verify_unit(
-        &system_dir,
+        &unit_file,
         "testmount",
         "test.txt",
         Some(test_content),
@@ -109,8 +108,8 @@ fn test_mount_feature_bind() -> Result<()> {
         "-K",
         "--bind",
         &format!("{}:testmount", temp_dir_path),
-        "--systemd-units",
-        units_dir_path.as_str(),
+        "--add-unit",
+        unit_file.as_str(),
         "--karg",
         "systemd.unit=verify-mount-testmount.service",
         "--karg",
@@ -135,14 +134,13 @@ fn test_mount_feature_ro_bind() -> Result<()> {
     let test_file_path = temp_dir_path.join("readonly.txt");
     fs::write(&test_file_path, "Read-only content").expect("Failed to write test file");
 
-    // Create systemd units directory
-    let units_dir = TempDir::new().expect("Failed to create units directory");
-    let units_dir_path = Utf8Path::from_path(units_dir.path()).expect("units dir path is not utf8");
-    let system_dir = units_dir_path.join("system");
-    fs::create_dir(&system_dir).expect("Failed to create system directory");
+    // Create temporary unit file
+    let unit_dir = TempDir::new().expect("Failed to create unit directory");
+    let unit_dir_path = Utf8Path::from_path(unit_dir.path()).expect("unit dir path is not utf8");
+    let unit_file = unit_dir_path.join("verify-ro-mount-romount.service");
 
     // Create verification unit for read-only mount
-    create_mount_verify_unit(&system_dir, "romount", "readonly.txt", None, true)
+    create_mount_verify_unit(&unit_file, "romount", "readonly.txt", None, true)
         .expect("Failed to create verify unit");
 
     println!(
@@ -161,8 +159,8 @@ fn test_mount_feature_ro_bind() -> Result<()> {
         "-K",
         "--ro-bind",
         &format!("{}:romount", temp_dir_path),
-        "--systemd-units",
-        units_dir_path.as_str(),
+        "--add-unit",
+        unit_file.as_str(),
         "--karg",
         "systemd.unit=verify-ro-mount-romount.service",
         "--karg",

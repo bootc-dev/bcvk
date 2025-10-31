@@ -228,3 +228,59 @@ fn test_run_ephemeral_container_ssh_access() -> Result<()> {
     assert!(ssh_output.stdout.contains("SSH_TEST_SUCCESS"));
     Ok(())
 }
+
+#[distributed_slice(INTEGRATION_TESTS)]
+static TEST_RUN_EPHEMERAL_ADD_UNIT: IntegrationTest =
+    IntegrationTest::new("run_ephemeral_add_unit", test_run_ephemeral_add_unit);
+
+fn test_run_ephemeral_add_unit() -> Result<()> {
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Create a temporary directory for the test unit file
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let unit_file_path = temp_dir.path().join("bcvk-test-marker.service");
+
+    // Write a simple systemd service that creates a marker file
+    let unit_content = r#"[Unit]
+Description=BCVK Test Marker Service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo BCVK_TEST_MARKER_SUCCESS > /run/bcvk-test-marker'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"#;
+
+    fs::write(&unit_file_path, unit_content).expect("Failed to write unit file");
+
+    // Run ephemeral with --add-unit and use --execute to check if the service ran
+    // The service should be started automatically via [Install] WantedBy=multi-user.target
+    // but we explicitly start it to ensure it runs before our check
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--add-unit",
+        unit_file_path.to_str().unwrap(),
+        "--execute",
+        "/bin/sh -c 'systemctl start bcvk-test-marker.service && cat /run/bcvk-test-marker'",
+        &get_test_image(),
+    ])?;
+
+    output.assert_success("ephemeral run with --add-unit");
+
+    // The service should have created the marker file
+    assert!(
+        output.stdout.contains("BCVK_TEST_MARKER_SUCCESS"),
+        "Service marker not found. Unit may not have been injected correctly. Output: {}",
+        output.stdout
+    );
+
+    Ok(())
+}

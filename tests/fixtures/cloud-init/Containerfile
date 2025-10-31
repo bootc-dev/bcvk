@@ -1,0 +1,10 @@
+# This image contains cloud-init, which makes it usable out of the box
+# for e.g. a pre-generated AWS or KVM guest system.
+FROM quay.io/centos-bootc/centos-bootc:stream10
+
+RUN dnf -y install cloud-init && \
+    ln -s ../cloud-init.target /usr/lib/systemd/system/default.target.wants && \
+    rm -rf /var/{cache,log} /var/lib/{dnf,rhsm}
+COPY --chmod=0644 10_bootc.cfg /etc/cloud/cloud.cfg.d
+COPY usr/ /usr/
+

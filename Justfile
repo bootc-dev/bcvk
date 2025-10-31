@@ -19,8 +19,16 @@ unit *ARGS:
 pull-test-images:
     podman pull -q quay.io/fedora/fedora-bootc:42 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10 >/dev/null
 
+# Build cloud-init test image
+build-cloud-init-image:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Building cloud-init test image..."
+    podman build -t localhost/bootc-cloud-init tests/fixtures/cloud-init/
+    echo "✓ Cloud-init test image built: localhost/bootc-cloud-init"
+
 # Run integration tests (auto-detects nextest, with cleanup)
-test-integration *ARGS: build pull-test-images
+test-integration *ARGS: build pull-test-images build-cloud-init-image
     #!/usr/bin/env bash
     set -euo pipefail
     export BCVK_PATH=$(pwd)/target/release/bcvk

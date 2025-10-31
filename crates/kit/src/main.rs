@@ -10,9 +10,11 @@ mod arch;
 mod boot_progress;
 mod cache_metadata;
 mod cli_json;
+mod cloud_init;
 mod common_opts;
 mod container_entrypoint;
 pub(crate) mod containerenv;
+mod credentials;
 mod domain_list;
 mod envdetect;
 mod ephemeral;
@@ -26,11 +28,10 @@ mod podman;
 #[allow(dead_code)]
 mod qemu;
 mod qemu_img;
+mod repart;
 mod run_ephemeral;
 mod run_ephemeral_ssh;
 mod ssh;
-#[allow(dead_code)]
-mod sshcred;
 mod status_monitor;
 mod supervisor_status;
 pub(crate) mod systemd;

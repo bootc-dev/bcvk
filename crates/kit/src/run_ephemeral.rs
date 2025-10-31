@@ -241,10 +241,11 @@ pub struct RunEphemeralOpts {
     pub ro_bind_mounts: Vec<String>,
 
     #[clap(
-        long = "systemd-units",
-        help = "Directory with systemd units to inject (expects system/ subdirectory)"
+        long = "add-unit",
+        value_name = "FILE",
+        help = "Inject a systemd unit file via SMBIOS credentials"
     )]
-    pub systemd_units_dir: Option<String>,
+    pub add_unit: Vec<Utf8PathBuf>,
 
     #[clap(
         long = "bind-storage-ro",
@@ -264,6 +265,13 @@ pub struct RunEphemeralOpts {
 
     #[clap(long = "karg", help = "Additional kernel command line arguments")]
     pub kernel_args: Vec<String>,
+
+    #[clap(
+        long = "cloud-init",
+        value_name = "PATH",
+        help = "Path to cloud-config file (user-data) for cloud-init ConfigDrive"
+    )]
+    pub cloud_init: Option<Utf8PathBuf>,
 }
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
@@ -468,13 +476,82 @@ fn prepare_run_command_with_temp(
         cmd.args(["-v", &format!("{}:{}:rw", disk_file, container_disk_path)]);
     }
 
-    // Mount systemd units directory if specified
-    if let Some(ref units_dir) = opts.systemd_units_dir {
-        cmd.args(["-v", &format!("{}:/run/systemd-units:ro", units_dir)]);
+    // Mount individual unit files specified with --add-unit
+    // We need to mount them into the container so they're accessible when the container runs
+    for unit_file in &opts.add_unit {
+        let unit_path = std::path::Path::new(unit_file);
+        if !unit_path.exists() {
+            return Err(color_eyre::eyre::eyre!(
+                "Unit file does not exist: {}",
+                unit_file
+            ));
+        }
+
+        // Mount each unit file into /run/add-units/ with a unique name
+        let filename = unit_path
+            .file_name()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Invalid unit file path: {}", unit_file))?
+            .to_str()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Non-UTF8 unit file path: {}", unit_file))?;
+
+        let container_path = format!("/run/add-units/{}", filename);
+        cmd.args(["-v", &format!("{}:{}:ro", unit_file, container_path)]);
+    }
+
+    // Generate cloud-init ConfigDrive if provided
+    // This must happen on the host before entering the container, since we need
+    // mkfs.vfat and mtools which may not be available in the target bootc image.
+    // We create a uniquely-named file in the tempdir to avoid file locking conflicts when
+    // running tests in parallel. The file is cleaned up when the TempDir is dropped.
+    if let Some(ref cloud_init_file) = opts.cloud_init {
+        let cloud_init_path = std::path::Path::new(cloud_init_file.as_str());
+        if !cloud_init_path.exists() {
+            return Err(color_eyre::eyre::eyre!(
+                "Cloud-init config file does not exist: {}",
+                cloud_init_file
+            ));
+        }
+
+        debug!(
+            "Generating cloud-init ConfigDrive from: {}",
+            cloud_init_file
+        );
+
+        // Create a unique temporary file path in the tempdir
+        // We use a simple approach: generate a file in the existing tempdir
+        let configdrive_filename = format!("cloud-init-configdrive-{}.img", std::process::id());
+        let configdrive_path = Utf8PathBuf::from(td_path).join(configdrive_filename);
+
+        debug!("Creating ConfigDrive at: {}", configdrive_path);
+
+        // Generate the ConfigDrive on the host (before entering container)
+        crate::cloud_init::generate_configdrive_from_file(cloud_init_file, &configdrive_path)?;
+
+        debug!("Cloud-init ConfigDrive generated at: {}", configdrive_path);
+
+        // Mount the ConfigDrive into the container at a well-known location
+        // Note: We mount it as rw (not ro) because QEMU needs write access for file locking
+        cmd.args([
+            "-v",
+            &format!("{}:/run/cloud-init-configdrive.img:rw", configdrive_path),
+        ]);
     }
 
     // Pass configuration as JSON via BCK_CONFIG environment variable
-    let config = serde_json::to_string(&opts).unwrap();
+    // But first update add_unit paths to point to container paths
+    let mut opts_for_container = opts.clone();
+    opts_for_container.add_unit = opts
+        .add_unit
+        .iter()
+        .map(|unit_file| {
+            let name = unit_file
+                .file_name()
+                .ok_or_else(|| eyre!("Must specify a file: {unit_file}"))?;
+            Ok(format!("/run/add-units/{name}").into())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let config = serde_json::to_string(&opts_for_container).unwrap();
     cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
 
     // Handle --execute output files and virtio-serial devices
@@ -505,6 +582,8 @@ fn prepare_run_command_with_temp(
 
     cmd.args([&opts.image, ENTRYPOINT]);
 
+    // The TempDir will keep all temporary files (including cloud-init configdrive) alive
+    // until it's dropped at the end of the container's lifetime
     Ok((cmd, td))
 }
 
@@ -600,75 +679,6 @@ pub(crate) fn process_disk_files(
     }
 
     Ok(processed_disks)
-}
-
-/// Copy systemd units from /run/systemd-units/system/ to container image /etc/systemd/system/.
-/// Auto-enables .mount units in local-fs.target.wants/, preserves default.target.wants/ symlinks.
-fn inject_systemd_units() -> Result<()> {
-    use std::fs;
-
-    debug!("Injecting systemd units from /run/systemd-units");
-
-    let source_units = Utf8Path::new("/run/systemd-units/system");
-    if !source_units.exists() {
-        debug!("No systemd units to inject at {}", source_units);
-        return Ok(());
-    }
-    let target_units = "/run/source-image/etc/systemd/system";
-
-    // Create target directories
-    fs::create_dir_all(target_units)?;
-    fs::create_dir_all(&format!("{}/default.target.wants", target_units))?;
-    fs::create_dir_all(&format!("{}/local-fs.target.wants", target_units))?;
-
-    // Copy all .service and .mount files
-    for entry in fs::read_dir(source_units)? {
-        let entry = entry?;
-        let path = entry.path();
-        let extension = path.extension().map(|ext| ext.to_string_lossy());
-        if matches!(extension.as_deref(), Some("service") | Some("mount")) {
-            let filename = path.file_name().unwrap().to_string_lossy();
-            let target_path = format!("{}/{}", target_units, filename);
-            fs::copy(&path, &target_path)?;
-            debug!("Copied systemd unit: {}", filename);
-
-            // Create symlinks for mount units to enable them
-            if extension.as_deref() == Some("mount") {
-                let wants_dir = format!("{}/local-fs.target.wants", target_units);
-                let symlink_path = format!("{}/{}", wants_dir, filename);
-                let relative_target = format!("../{}", filename);
-                std::os::unix::fs::symlink(&relative_target, &symlink_path).ok();
-                debug!("Enabled mount unit: {}", filename);
-            }
-        }
-    }
-
-    // Copy wants directory if it exists
-    let source_wants = "/run/systemd-units/system/default.target.wants";
-    let target_wants = &format!("{}/default.target.wants", target_units);
-
-    if Utf8Path::new(source_wants).exists() {
-        for entry in fs::read_dir(source_wants)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_symlink() || path.is_file() {
-                let filename = path.file_name().unwrap().to_string_lossy();
-                let target_path = format!("{}/{}", target_wants, filename);
-
-                if path.is_symlink() {
-                    let link_target = fs::read_link(&path)?;
-                    let _ = fs::remove_file(&target_path); // Remove if exists
-                    std::os::unix::fs::symlink(link_target, &target_path)?;
-                } else {
-                    fs::copy(&path, &target_path)?;
-                }
-                debug!("Copied systemd wants link: {}", filename);
-            }
-        }
-    }
-
-    debug!("Systemd unit injection complete");
-    Ok(())
 }
 
 /// Parse exit code from systemd service status output
@@ -788,18 +798,15 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
 
     // Process host mounts and prepare virtiofsd instances for each using async manager
     let mut additional_mounts = Vec::new();
+    // Collect mount unit credentials to inject via SMBIOS instead of writing to filesystem
+    let mut mount_unit_smbios_creds = Vec::new();
 
     debug!(
         "Checking for host mounts directory: /run/host-mounts exists = {}",
         Utf8Path::new("/run/host-mounts").exists()
     );
-    debug!(
-        "Checking for systemd units directory: /run/systemd-units exists = {}",
-        Utf8Path::new("/run/systemd-units").exists()
-    );
 
-    let target_unitdir = "/run/source-image/etc/systemd/system";
-
+    let mut mount_unit_names = Vec::new();
     if Utf8Path::new("/run/host-mounts").exists() {
         for entry in fs::read_dir("/run/host-mounts")? {
             let entry = entry?;
@@ -832,73 +839,48 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
             };
             additional_mounts.push((virtiofsd_config, tag.clone()));
 
-            // Create individual .mount unit for this virtiofs mount
+            // Generate mount unit via SMBIOS credentials instead of writing to filesystem
             let mount_point = format!("/run/virtiofs-mnt-{}", mount_name_str);
+            let unit_name = crate::credentials::guest_path_to_unit_name(&mount_point);
+            let mount_unit_content =
+                crate::credentials::generate_mount_unit(&tag, &mount_point, is_readonly);
+            let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
 
-            // Use systemd-escape to properly escape the mount path
-            let escaped_path = Command::new("systemd-escape")
-                .args(["-p", &mount_point])
-                .output()
-                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-                .unwrap_or_else(|_| {
-                    // Fallback if systemd-escape is not available
-                    mount_point
-                        .replace("/", "-")
-                        .trim_start_matches('-')
-                        .to_string()
-                });
-
-            let mount_unit_name = format!("{}.mount", escaped_path);
-            let mount_options = if is_readonly { "ro" } else { "defaults" };
-
-            let mount_unit_content = format!(
-                r#"[Unit]
-Description=Mount virtiofs {}
-DefaultDependencies=no
-After=systemd-remount-fs.service
-Before=local-fs.target shutdown.target
-
-[Mount]
-What={}
-Where={}
-Type=virtiofs
-Options={}
-
-[Install]
-WantedBy=local-fs.target
-"#,
-                mount_name_str, tag, mount_point, mount_options
+            // Create SMBIOS credential for the mount unit
+            let mount_cred = format!(
+                "io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}"
             );
+            mount_unit_smbios_creds.push(mount_cred);
 
-            let mount_unit_path = format!("{target_unitdir}/{mount_unit_name}");
-            fs::write(&mount_unit_path, mount_unit_content)
-                .with_context(|| format!("Failed to write mount unit to {}", mount_unit_path))?;
-
-            // Enable the mount unit by creating symlink in local-fs.target.wants/
-            let wants_dir = format!("{target_unitdir}/local-fs.target.wants");
-            fs::create_dir_all(&wants_dir)?;
-            let wants_link = format!("{}/{}", wants_dir, mount_unit_name);
-            let relative_target = format!("../{}", mount_unit_name);
-            std::os::unix::fs::symlink(&relative_target, &wants_link)?;
-
-            // Create mount point directory in the image
-            let image_mount_point = format!("/run/source-image{}", mount_point);
-            fs::create_dir_all(&image_mount_point).ok();
+            // Collect unit name for the local-fs.target dropin
+            mount_unit_names.push(unit_name.clone());
 
             debug!(
-                "Generated mount unit: {} (enabled in local-fs.target)",
-                mount_unit_name
+                "Generated SMBIOS credential for mount unit: {} ({})",
+                unit_name, mode
             );
         }
+    }
+
+    // If we have mount units, create a single dropin for local-fs.target
+    if !mount_unit_names.is_empty() {
+        let wants_list = mount_unit_names.join(" ");
+        let dropin_content = format!("[Unit]\nWants={}\n", wants_list);
+        let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
+        let dropin_cred = format!(
+            "io.systemd.credential.binary:systemd.unit-dropin.local-fs.target~bcvk-mounts={encoded_dropin}"
+        );
+        mount_unit_smbios_creds.push(dropin_cred);
+        debug!(
+            "Created local-fs.target dropin for {} mount units",
+            mount_unit_names.len()
+        );
     }
 
     // Handle --execute: pipes will be created when adding to qemu_config later
     // No need to create files anymore as we're using pipes
 
-    let default_wantsdir = format!("{target_unitdir}/default.target.wants");
-    fs::create_dir_all(&default_wantsdir)?;
-
-    // Create systemd unit to stream journal to virtio-serial device
+    // Create systemd unit to stream journal to virtio-serial device via SMBIOS credential
     let journal_stream_unit = r#"[Unit]
 Description=Stream systemd journal to host via virtio-serial
 DefaultDependencies=no
@@ -916,17 +898,23 @@ RestartSec=1s
 [Install]
 WantedBy=sysinit.target
 "#;
-    let journal_unit_path = format!("{target_unitdir}/bcvk-journal-stream.service");
-    tokio::fs::write(&journal_unit_path, journal_stream_unit).await?;
-    debug!("Created journal streaming unit at {journal_unit_path}");
+    let encoded_journal = data_encoding::BASE64.encode(journal_stream_unit.as_bytes());
+    let journal_cred = format!(
+        "io.systemd.credential.binary:systemd.extra-unit.bcvk-journal-stream.service={encoded_journal}"
+    );
+    mount_unit_smbios_creds.push(journal_cred);
+    debug!("Generated SMBIOS credential for journal streaming unit");
 
-    // Enable the journal streaming unit
-    let sysinit_wantsdir = format!("{target_unitdir}/sysinit.target.wants");
-    tokio::fs::create_dir_all(&sysinit_wantsdir).await?;
-    let journal_wants_link = format!("{sysinit_wantsdir}/bcvk-journal-stream.service");
-    tokio::fs::symlink("../bcvk-journal-stream.service", &journal_wants_link).await?;
-    debug!("Enabled journal streaming unit in sysinit.target.wants");
+    // Create dropin for sysinit.target to enable journal streaming
+    let journal_dropin = "[Unit]\nWants=bcvk-journal-stream.service\n";
+    let encoded_dropin = data_encoding::BASE64.encode(journal_dropin.as_bytes());
+    let dropin_cred = format!(
+        "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-journal={encoded_dropin}"
+    );
+    mount_unit_smbios_creds.push(dropin_cred);
+    debug!("Created sysinit.target dropin to enable journal streaming unit");
 
+    // Create execute units via SMBIOS credentials if needed
     match opts.common.execute.as_slice() {
         [] => {}
         elts => {
@@ -945,9 +933,9 @@ StandardError=inherit
             for elt in elts {
                 service_content.push_str(&format!("ExecStart={elt}\n"));
             }
+            service_content.push_str("\n[Install]\nWantedBy=default.target\n");
 
-            let service_finish = format!(
-                r#"[Unit]
+            let service_finish = r#"[Unit]
 Description=Execute Script Service Completion
 After=bootc-execute.service
 Requires=dev-virtio\\x2dports-executestatus.device
@@ -957,25 +945,87 @@ Type=oneshot
 ExecStart=systemctl show bootc-execute
 ExecStart=systemctl poweroff
 StandardOutput=file:/dev/virtio-ports/executestatus
-"#
+
+[Install]
+WantedBy=default.target
+"#;
+
+            // Inject execute units via SMBIOS credentials
+            let encoded_execute = data_encoding::BASE64.encode(service_content.as_bytes());
+            let execute_cred = format!(
+                "io.systemd.credential.binary:systemd.extra-unit.bootc-execute.service={encoded_execute}"
             );
+            mount_unit_smbios_creds.push(execute_cred);
 
-            let service_path = format!("{target_unitdir}/bootc-execute.service");
-            fs::write(service_path, service_content)?;
-            let service_path = format!("{target_unitdir}/bootc-execute-finish.service");
-            fs::write(service_path, service_finish)?;
+            let encoded_finish = data_encoding::BASE64.encode(service_finish.as_bytes());
+            let finish_cred = format!(
+                "io.systemd.credential.binary:systemd.extra-unit.bootc-execute-finish.service={encoded_finish}"
+            );
+            mount_unit_smbios_creds.push(finish_cred);
 
-            for svc in ["bootc-execute.service", "bootc-execute-finish.service"] {
-                let wants_link = format!("{default_wantsdir}/{svc}");
-                debug!("Creating execute service symlink: {}", &wants_link);
-                std::os::unix::fs::symlink(format!("../{svc}"), wants_link)?;
-            }
+            // Use generic [Install] section parsing to generate dropins
+            let execute_install_creds = crate::credentials::smbios_creds_for_install_section(
+                "bootc-execute.service",
+                &service_content,
+            );
+            mount_unit_smbios_creds.extend(execute_install_creds);
+
+            let finish_install_creds = crate::credentials::smbios_creds_for_install_section(
+                "bootc-execute-finish.service",
+                service_finish,
+            );
+            mount_unit_smbios_creds.extend(finish_install_creds);
+
+            debug!("Generated SMBIOS credentials for execute units with [Install] sections");
         }
     }
 
-    // Copy systemd units if provided (after mount units have been generated)
-    // Also inject if we created mount units that need to be copied
-    inject_systemd_units()?;
+    // Process --add-unit files and inject via SMBIOS credentials
+    for unit_file_path in &opts.add_unit {
+        let unit_content = std::fs::read_to_string(unit_file_path)
+            .with_context(|| format!("Failed to read unit file: {}", unit_file_path))?;
+
+        // Extract the unit name from the file path
+        let unit_name = Utf8Path::new(unit_file_path)
+            .file_name()
+            .ok_or_else(|| eyre!("Invalid unit file path: {}", unit_file_path))?;
+
+        // Validate unit name ends with known systemd unit suffix
+        if !unit_name.ends_with(".service")
+            && !unit_name.ends_with(".mount")
+            && !unit_name.ends_with(".timer")
+            && !unit_name.ends_with(".socket")
+            && !unit_name.ends_with(".target")
+            && !unit_name.ends_with(".path")
+        {
+            return Err(eyre!(
+                "Unit file must have a valid systemd extension (.service, .mount, etc.): {}",
+                unit_name
+            ));
+        }
+
+        // Encode the unit content as a SMBIOS credential
+        let encoded_unit = data_encoding::BASE64.encode(unit_content.as_bytes());
+        let unit_cred =
+            format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_unit}");
+        mount_unit_smbios_creds.push(unit_cred);
+        debug!(
+            "Generated SMBIOS credential for user-provided unit: {}",
+            unit_name
+        );
+
+        // Parse [Install] section and generate dropins for WantedBy/RequiredBy
+        let install_creds =
+            crate::credentials::smbios_creds_for_install_section(unit_name, &unit_content);
+        if !install_creds.is_empty() {
+            debug!(
+                "Generated {} [Install] dropins for {}",
+                install_creds.len(),
+                unit_name
+            );
+            mount_unit_smbios_creds.extend(install_creds);
+        }
+    }
 
     // Prepare main virtiofsd config for the source image (will be spawned by QEMU)
     let mut main_virtiofsd_config = qemu::VirtiofsConfig::default();
@@ -999,12 +1049,33 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     let vsock_enabled = !vsock_force_disabled && qemu_config.enable_vsock().is_ok();
 
     // Handle SSH key generation and credential injection
+    let mut cloud_init_disk_path = None;
     if opts.common.ssh_keygen {
         let key_pair = crate::ssh::generate_default_keypair()?;
         // Create credential and add to kernel args
         let pubkey = std::fs::read_to_string(key_pair.public_key_path.as_path())?;
-        let credential = crate::sshcred::smbios_cred_for_root_ssh(&pubkey)?;
+
+        // Always use SMBIOS credential injection for SSH keys (not cloud-init)
+        let credential = crate::credentials::smbios_cred_for_root_ssh(&pubkey)?;
         qemu_config.add_smbios_credential(credential);
+    }
+
+    // Handle cloud-init ConfigDrive if user provided a cloud-config file
+    // The ConfigDrive was already generated on the host in prepare_run_command_with_temp,
+    // and mounted into the container at /run/cloud-init-configdrive.img
+    if let Some(ref _cloud_init_path) = opts.cloud_init {
+        let configdrive_path = Utf8PathBuf::from("/run/cloud-init-configdrive.img");
+
+        if cloudinit {
+            debug!(
+                "Using pre-generated cloud-init ConfigDrive at: {}",
+                configdrive_path
+            );
+            cloud_init_disk_path = Some(configdrive_path);
+        } else {
+            debug!("Warning: --cloud-init provided but target image does not have cloud-init installed. ConfigDrive will be attached but may not be used.");
+            cloud_init_disk_path = Some(configdrive_path);
+        }
     }
     // Build kernel command line
     let mut kernel_cmdline = [
@@ -1028,10 +1099,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     if opts.common.console {
         kernel_cmdline.push("console=hvc0".to_string());
     }
-    if cloudinit {
-        // We don't provide any cloud-init datasource right now,
-        // though in the future it would make sense to do so,
-        // and switch over our SSH key injection.
+    if !cloudinit {
+        // If cloud-init is not installed, disable the datasource search
         kernel_cmdline.push("ds=iid-datasource-none".to_string());
     }
 
@@ -1059,22 +1128,30 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             "swap".into(),
             crate::to_disk::Format::Raw,
         );
-        let svc = format!(
-            r#"[Unit]
+
+        // Create swap unit via SMBIOS credential
+        let svc = r#"[Unit]
 Description=bcvk ephemeral swap
 
 [Swap]
 What=/dev/disk/by-id/virtio-swap
 Options=
-"#
-        );
-
+"#;
         let service_name = r#"dev-disk-by\x2did-virtio\x2dswap.swap"#;
-        let service_path = format!("{target_unitdir}/{service_name}");
-        fs::write(&service_path, svc)?;
+        let encoded_swap = data_encoding::BASE64.encode(svc.as_bytes());
+        let swap_cred = format!(
+            "io.systemd.credential.binary:systemd.extra-unit.{service_name}={encoded_swap}"
+        );
+        mount_unit_smbios_creds.push(swap_cred);
 
-        let wants_link = format!("{default_wantsdir}/{service_name}");
-        std::os::unix::fs::symlink(format!("../{service_name}"), wants_link)?;
+        // Create dropin for default.target to enable swap
+        let swap_dropin = format!("[Unit]\nWants={service_name}\n");
+        let encoded_dropin = data_encoding::BASE64.encode(swap_dropin.as_bytes());
+        let dropin_cred = format!(
+            "io.systemd.credential.binary:systemd.unit-dropin.default.target~bcvk-swap={encoded_dropin}"
+        );
+        mount_unit_smbios_creds.push(dropin_cred);
+        debug!("Generated SMBIOS credential for swap unit");
 
         tmp_swapfile = Some(tmpf);
     }
@@ -1177,6 +1254,16 @@ Options=
         );
     }
 
+    // Attach cloud-init ConfigDrive if generated
+    if let Some(ref configdrive_path) = cloud_init_disk_path {
+        debug!("Attaching cloud-init ConfigDrive as virtio-blk device");
+        qemu_config.add_virtio_blk_device_with_format(
+            configdrive_path.to_string(),
+            "config-2".to_string(),
+            crate::to_disk::Format::Raw,
+        );
+    }
+
     let status_writer_clone = StatusWriter::new("/run/supervisor-status.json");
 
     // Only enable systemd notification debugging if the systemd version supports it
@@ -1203,6 +1290,13 @@ Options=
             ..Default::default()
         })?;
     };
+
+    // Add all SMBIOS credentials for mount units, journal, and execute services
+    let cred_count = mount_unit_smbios_creds.len();
+    for cred in mount_unit_smbios_creds {
+        qemu_config.add_smbios_credential(cred);
+    }
+    debug!("Added {} SMBIOS credentials to QEMU config", cred_count);
 
     debug!("Starting QEMU with systemd debugging enabled");
 

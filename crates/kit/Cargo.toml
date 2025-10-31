@@ -49,6 +49,7 @@ strum = { version = "0.26", features = ["derive"] }
 quick-xml = "0.36"
 oci-spec = "0.8.2"
 sha2 = "0.10"
+which = "7.0"
 
 [dev-dependencies]
 similar-asserts = "1.5"

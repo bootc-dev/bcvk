@@ -104,6 +104,36 @@ pub fn wait_for_vm_ssh(
     Err(eyre!("Monitor process exited unexpectedly: {status:?}"))
 }
 
+/// Scrape and print the systemd journal from the container for debugging
+fn scrape_and_print_journal(container_name: &str) {
+    eprintln!("\n=== Guest Journal Log (for debugging) ===");
+
+    let output = Command::new("podman")
+        .args(["exec", container_name, "cat", "/run/journal.log"])
+        .output();
+
+    match output {
+        Ok(result) if result.status.success() => {
+            let journal = String::from_utf8_lossy(&result.stdout);
+            if !journal.is_empty() {
+                eprintln!("{}", journal);
+            } else {
+                eprintln!("(journal log is empty)");
+            }
+        }
+        Ok(result) => {
+            eprintln!(
+                "Failed to read journal log: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        Err(e) => {
+            eprintln!("Failed to execute podman exec: {}", e);
+        }
+    }
+    eprintln!("=== End Journal Log ===\n");
+}
+
 /// Wait for SSH to be ready by polling SSH connection attempts
 ///
 /// Attempts to connect to the VM via SSH until successful or timeout.
@@ -143,6 +173,9 @@ pub fn wait_for_ssh_ready(
 
         thread::sleep(Duration::from_secs(1));
     }
+
+    // On timeout, scrape and print the journal for debugging
+    scrape_and_print_journal(container_name);
 
     Err(color_eyre::eyre::eyre!(
         "Timeout waiting for SSH connectivity after {}s",

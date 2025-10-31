@@ -119,9 +119,9 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Bind mount host directory (RO) at /run/virtiofs-mnt-<name>
 
-**--systemd-units**=*SYSTEMD_UNITS_DIR*
+**--add-unit**=*FILE*
 
-    Directory with systemd units to inject (expects system/ subdirectory)
+    Inject a systemd unit file via SMBIOS credentials
 
 **--bind-storage-ro**
 
@@ -138,6 +138,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 **--karg**=*KERNEL_ARGS*
 
     Additional kernel command line arguments
+
+**--cloud-init**=*PATH*
+
+    Path to cloud-config file (user-data) for cloud-init ConfigDrive
 
 <!-- END GENERATED OPTIONS -->
 
