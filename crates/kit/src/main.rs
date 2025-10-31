@@ -23,6 +23,7 @@ mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
+mod project;
 #[allow(dead_code)]
 mod qemu;
 mod qemu_img;
@@ -95,6 +96,10 @@ enum InternalsCmds {
     /// Dump CLI structure as JSON for man page generation
     #[cfg(feature = "docgen")]
     DumpCliJson,
+
+    /// Monitor parent process and shutdown VM when parent exits (internal use only)
+    #[clap(hide = true)]
+    LifecycleMonitor(libvirt::lifecycle_monitor::LifecycleMonitorOpts),
 }
 
 /// Available bcvk commands for container and VM management.
@@ -109,7 +114,7 @@ enum Commands {
     Images(images::ImagesOpts),
 
     /// Manage ephemeral VMs for bootc containers
-    #[clap(subcommand)]
+    #[clap(subcommand, alias = "e")]
     Ephemeral(ephemeral::EphemeralCommands),
 
     /// Install bootc images to persistent disk images
@@ -117,6 +122,7 @@ enum Commands {
     ToDisk(to_disk::ToDiskOpts),
 
     /// Manage libvirt integration for bootc containers
+    #[clap(alias = "v")]
     Libvirt {
         /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
         #[clap(short = 'c', long = "connect", global = true)]
@@ -125,6 +131,10 @@ enum Commands {
         #[command(subcommand)]
         command: libvirt::LibvirtSubcommands,
     },
+
+    /// Project-scoped VM management (Vagrant-like workflow)
+    #[clap(subcommand, alias = "p")]
+    Project(project::ProjectSubcommands),
 
     /// Upload bootc disk images to libvirt (deprecated)
     #[clap(name = "libvirt-upload-disk", hide = true)]
@@ -219,6 +229,14 @@ fn main() -> Result<(), Report> {
                 }
             }
         }
+        Commands::Project(cmd) => match cmd {
+            project::ProjectSubcommands::Init(opts) => project::init::run(opts)?,
+            project::ProjectSubcommands::Up(opts) => project::up::run(opts)?,
+            project::ProjectSubcommands::Ssh(opts) => project::ssh::run(opts)?,
+            project::ProjectSubcommands::Down(opts) => project::down::run(opts)?,
+            project::ProjectSubcommands::Rm(opts) => project::rm::run(opts)?,
+            project::ProjectSubcommands::Ls(opts) => project::ls::run(opts)?,
+        },
         Commands::LibvirtUploadDisk(opts) => {
             eprintln!(
                 "Warning: 'libvirt-upload-disk' is deprecated. Use 'libvirt upload' instead."
@@ -251,6 +269,9 @@ fn main() -> Result<(), Report> {
             InternalsCmds::DumpCliJson => {
                 let json = cli_json::dump_cli_json()?;
                 println!("{}", json);
+            }
+            InternalsCmds::LifecycleMonitor(opts) => {
+                libvirt::lifecycle_monitor::run(opts)?;
             }
         },
     }

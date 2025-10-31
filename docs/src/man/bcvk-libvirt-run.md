@@ -122,6 +122,10 @@ Run a bootable container as a persistent VM
 
     Create a transient VM that disappears on shutdown/reboot
 
+**--lifecycle-bind-parent**
+
+    Bind VM lifecycle to parent process (shutdown VM when parent exits)
+
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

@@ -15,6 +15,7 @@ a libvirt virtual machine, and connect with `ssh`.
 
 The toolkit includes commands for:
 
+- Project-scoped VM management with Vagrant-like workflow
 - Running ephemeral VMs for testing container images
 - Installing bootc containers to persistent disk images
 - Managing libvirt integration and VM lifecycle
@@ -29,6 +30,10 @@ The toolkit includes commands for:
 bcvk-hostexec(8)
 
 :   Execute commands on the host system from within containers
+
+bcvk-project(8)
+
+:   Project-scoped VM management (Vagrant-like workflow)
 
 bcvk-images(8)
 

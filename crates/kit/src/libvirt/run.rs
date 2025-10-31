@@ -241,6 +241,10 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub transient: bool,
 
+    /// Bind VM lifecycle to parent process (shutdown VM when parent exits)
+    #[clap(long)]
+    pub lifecycle_bind_parent: bool,
+
     /// Additional metadata key-value pairs (used internally, not exposed via CLI)
     #[clap(skip)]
     pub metadata: std::collections::HashMap<String, String>,
@@ -334,6 +338,13 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
 
     // VM is now managed by libvirt, no need to track separately
 
+    // Spawn lifecycle monitor if requested
+    if opts.lifecycle_bind_parent {
+        spawn_lifecycle_monitor(&vm_name, connect_uri)
+            .with_context(|| "Failed to spawn lifecycle monitor")?;
+        println!("Lifecycle monitor started for domain '{}'", vm_name);
+    }
+
     println!("VM '{}' created successfully!", vm_name);
     println!("  Image: {}", opts.image);
     println!("  Disk: {}", disk_path);
@@ -401,6 +412,64 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRunOpts) -
         println!("\nUse 'bcvk libvirt ssh {}' to connect", vm_name);
         Ok(())
     }
+}
+
+/// Spawn a background lifecycle monitor process for the VM
+pub(crate) fn spawn_lifecycle_monitor(domain_name: &str, connect_uri: Option<&str>) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    // Get the current executable path for spawning the monitor
+    let current_exe =
+        std::env::current_exe().with_context(|| "Failed to get current executable path")?;
+
+    // Get the parent process PID (the shell) to monitor
+    let parent_pid = rustix::process::getppid()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Failed to get parent process ID"))?;
+    let parent_pid_num = parent_pid.as_raw_nonzero().get() as u32;
+
+    debug!(
+        "Spawning lifecycle monitor for domain '{}' (parent PID: {})",
+        domain_name, parent_pid_num
+    );
+
+    // Build the virsh shutdown command
+    let mut virsh_args = vec!["virsh".to_string()];
+    if let Some(uri) = connect_uri {
+        virsh_args.push("-c".to_string());
+        virsh_args.push(uri.to_string());
+    }
+    virsh_args.push("shutdown".to_string());
+    virsh_args.push(domain_name.to_string());
+
+    // Build the command to spawn the monitor:
+    // internals lifecycle-monitor <parent-pid> virsh [-c <uri>] shutdown <domain>
+    let mut cmd = Command::new(&current_exe);
+    cmd.arg("internals")
+        .arg("lifecycle-monitor")
+        .arg(parent_pid_num.to_string())
+        .args(&virsh_args);
+
+    // Detach the process: redirect stdio to /dev/null and spawn in background
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    // Spawn the process
+    let child = cmd.spawn().with_context(|| {
+        format!(
+            "Failed to spawn lifecycle monitor process for domain '{}'",
+            domain_name
+        )
+    })?;
+
+    debug!(
+        "Lifecycle monitor spawned with PID {} for domain '{}' (command: {:?})",
+        child.id(),
+        domain_name,
+        virsh_args
+    );
+
+    Ok(())
 }
 
 /// Determine the appropriate default storage pool path based on connection type
@@ -749,30 +818,6 @@ fn process_bind_mounts(
     Ok(domain_builder)
 }
 
-/// Check if the libvirt version supports readonly virtiofs filesystems
-/// Requires libvirt 11.0+ and modern QEMU with rust-based virtiofsd
-fn check_libvirt_readonly_support() -> Result<()> {
-    let version = crate::libvirt::status::parse_libvirt_version()
-        .with_context(|| "Failed to check libvirt version")?;
-
-    if crate::libvirt::status::supports_readonly_virtiofs(&version) {
-        Ok(())
-    } else {
-        match version {
-            Some(v) => Err(color_eyre::eyre::eyre!(
-                "The --bind-storage-ro flag requires libvirt 11.0 or later for readonly virtiofs support. \
-                Current version: {}",
-                v.full_version
-            )),
-            None => Err(color_eyre::eyre::eyre!(
-                "Could not parse libvirt version. \
-                The --bind-storage-ro flag requires libvirt 11.0+ with rust-based virtiofsd support. \
-                Please ensure you have a compatible libvirt version installed."
-            ))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,7 +1003,7 @@ fn create_libvirt_domain_from_disk(
             opts.install
                 .filesystem
                 .as_ref()
-                .unwrap_or(&"ext4".to_string()),
+                .unwrap_or(&crate::libvirt::LIBVIRT_DEFAULT_FILESYSTEM.to_string()),
         )
         .with_metadata("bootc:network", &opts.network)
         .with_metadata("bootc:ssh-generated", "true")
@@ -1017,6 +1062,16 @@ fn create_libvirt_domain_from_disk(
     let mut mount_unit_smbios_creds = Vec::new();
     let mut mount_unit_names = Vec::new();
 
+    // Check if libvirt supports readonly virtiofs
+    let version = crate::libvirt::status::parse_libvirt_version()
+        .with_context(|| "Failed to check libvirt version")?;
+    let supports_readonly = crate::libvirt::status::supports_readonly_virtiofs(&version);
+
+    // Log once if we're falling back readonly mounts to read-write
+    if !supports_readonly && (!opts.bind_mounts_ro.is_empty() || opts.bind_storage_ro) {
+        info!("Libvirt version does not support readonly virtiofs; using read-write bind mounts");
+    }
+
     // Process bind mounts (read-write and read-only)
     domain_builder = process_bind_mounts(
         &opts.bind_mounts,
@@ -1027,20 +1082,30 @@ fn create_libvirt_domain_from_disk(
         &mut mount_unit_names,
     )?;
 
-    domain_builder = process_bind_mounts(
-        &opts.bind_mounts_ro,
-        "bcvk-bind-ro-",
-        true,
-        domain_builder,
-        &mut mount_unit_smbios_creds,
-        &mut mount_unit_names,
-    )?;
+    // Process readonly bind mounts - fall back to read-write if not supported
+    if supports_readonly {
+        domain_builder = process_bind_mounts(
+            &opts.bind_mounts_ro,
+            "bcvk-bind-ro-",
+            true,
+            domain_builder,
+            &mut mount_unit_smbios_creds,
+            &mut mount_unit_names,
+        )?;
+    } else {
+        // Fall back to read-write mounts
+        domain_builder = process_bind_mounts(
+            &opts.bind_mounts_ro,
+            "bcvk-bind-",
+            false,
+            domain_builder,
+            &mut mount_unit_smbios_creds,
+            &mut mount_unit_names,
+        )?;
+    }
 
     // Add container storage mount if requested
     if opts.bind_storage_ro {
-        // Check libvirt version compatibility for readonly virtiofs
-        check_libvirt_readonly_support().context("libvirt version compatibility check failed")?;
-
         let storage_path = crate::utils::detect_container_storage_path()
             .context("Failed to detect container storage path.")?;
         crate::utils::validate_container_storage_path(&storage_path)
@@ -1051,10 +1116,11 @@ fn create_libvirt_domain_from_disk(
             storage_path
         );
 
+        // Use readonly if supported, otherwise fall back to read-write
         let virtiofs_fs = VirtiofsFilesystem {
             source_dir: storage_path.to_string(),
             tag: "hoststorage".to_string(),
-            readonly: true,
+            readonly: supports_readonly,
         };
 
         domain_builder = domain_builder

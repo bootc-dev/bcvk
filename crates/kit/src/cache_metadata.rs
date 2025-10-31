@@ -12,8 +12,6 @@ use crate::install_options::InstallOptions;
 use cap_std_ext::cap_std::{self, fs::Dir};
 use cap_std_ext::dirext::CapStdExtDirExt;
 use color_eyre::{eyre::Context, Result};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::Path;
@@ -24,72 +22,27 @@ const BOOTC_CACHE_HASH_XATTR: &str = "user.bootc.cache_hash";
 /// Extended attribute name for storing container image digest
 const BOOTC_IMAGE_DIGEST_XATTR: &str = "user.bootc.image_digest";
 
-/// Build inputs used to generate a cache hash
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CacheInputs {
-    /// SHA256 digest of the source container image
-    image_digest: String,
-
-    /// Filesystem type used for installation (e.g., "ext4", "xfs", "btrfs")
-    filesystem: Option<String>,
-
-    /// Root filesystem size if specified
-    root_size: Option<String>,
-
-    /// Whether to use composefs-native storage
-    composefs_native: bool,
-
-    /// Kernel arguments used during installation
-    kernel_args: Vec<String>,
-
-    /// Version of the cache format for future compatibility
-    version: u32,
-}
-
 /// Metadata stored on disk images for caching purposes
 #[derive(Debug, Clone)]
 pub struct DiskImageMetadata {
     /// SHA256 digest of the source container image
     pub digest: String,
-
-    /// Filesystem type used for installation (e.g., "ext4", "xfs", "btrfs")
-    pub filesystem: Option<String>,
-
-    /// Root filesystem size if specified
-    pub root_size: Option<String>,
-
-    /// Whether to use composefs-native storage
-    pub composefs_native: bool,
-
-    /// Kernel arguments used during installation
-    pub kernel_args: Vec<String>,
-
-    /// Version of the metadata format for future compatibility
-    pub version: u32,
 }
 
 impl DiskImageMetadata {
     /// Generate SHA256 hash of all build inputs
-    pub fn compute_cache_hash(&self) -> String {
-        let inputs = CacheInputs {
-            image_digest: self.digest.clone(),
-            filesystem: self.filesystem.clone(),
-            root_size: self.root_size.clone(),
-            composefs_native: self.composefs_native,
-            kernel_args: self.kernel_args.clone(),
-            version: self.version,
-        };
-
-        let json = serde_json::to_string(&inputs).expect("Failed to serialize cache inputs");
-        let mut hasher = Sha256::new();
-        hasher.update(json.as_bytes());
-        format!("sha256:{:x}", hasher.finalize())
+    ///
+    /// Delegates to InstallOptions::compute_hash() to avoid duplication.
+    /// This ensures the hash includes all fields that affect the generated disk,
+    /// including target_transport.
+    pub fn compute_cache_hash(&self, install_options: &InstallOptions) -> String {
+        install_options.compute_hash(&self.digest)
     }
 
     /// Write metadata to a file using extended attributes via rustix
-    pub fn write_to_file(&self, file: &File) -> Result<()> {
+    pub fn write_to_file(&self, file: &File, install_options: &InstallOptions) -> Result<()> {
         // Write the cache hash
-        let cache_hash = self.compute_cache_hash();
+        let cache_hash = self.compute_cache_hash(install_options);
         rustix::fs::fsetxattr(
             file,
             BOOTC_CACHE_HASH_XATTR,
@@ -152,15 +105,10 @@ impl DiskImageMetadata {
 }
 
 impl DiskImageMetadata {
-    /// Create new metadata from InstallOptions and image digest
-    pub fn from(options: &InstallOptions, image: &str) -> Self {
+    /// Create new metadata from image digest
+    pub fn from(_options: &InstallOptions, image: &str) -> Self {
         Self {
-            version: 1,
             digest: image.to_owned(),
-            filesystem: options.filesystem.clone(),
-            root_size: options.root_size.clone(),
-            kernel_args: options.karg.clone(),
-            composefs_native: options.composefs_native,
         }
     }
 }
@@ -186,9 +134,8 @@ pub fn check_cached_disk(
         return Ok(Err(ValidationError::MissingFile));
     }
 
-    // Create metadata for the current request to compute expected hash
-    let expected_meta = DiskImageMetadata::from(install_options, image_digest);
-    let expected_hash = expected_meta.compute_cache_hash();
+    // Compute expected hash directly from install options
+    let expected_hash = install_options.compute_hash(image_digest);
 
     // Read the cache hash from the disk image
     let parent = path
@@ -242,32 +189,29 @@ mod tests {
             root_size: Some("20G".to_string()),
             ..Default::default()
         };
-        let metadata1 = DiskImageMetadata::from(&install_options1, "sha256:abc123");
 
         let install_options2 = InstallOptions {
             filesystem: Some("ext4".to_string()),
             root_size: Some("20G".to_string()),
             ..Default::default()
         };
-        let metadata2 = DiskImageMetadata::from(&install_options2, "sha256:abc123");
 
         // Same inputs should generate same hash
         assert_eq!(
-            metadata1.compute_cache_hash(),
-            metadata2.compute_cache_hash()
+            install_options1.compute_hash("sha256:abc123"),
+            install_options2.compute_hash("sha256:abc123")
         );
 
-        // Different inputs should generate different hashes
+        // Different image digest should generate different hash
         let install_options3 = InstallOptions {
             filesystem: Some("ext4".to_string()),
             root_size: Some("20G".to_string()),
             ..Default::default()
         };
-        let metadata3 = DiskImageMetadata::from(&install_options3, "sha256:xyz789");
 
         assert_ne!(
-            metadata1.compute_cache_hash(),
-            metadata3.compute_cache_hash()
+            install_options1.compute_hash("sha256:abc123"),
+            install_options3.compute_hash("sha256:xyz789")
         );
 
         // Different filesystem should generate different hash
@@ -276,33 +220,23 @@ mod tests {
             root_size: Some("20G".to_string()),
             ..Default::default()
         };
-        let metadata4 = DiskImageMetadata::from(&install_options4, "sha256:abc123");
 
         assert_ne!(
-            metadata1.compute_cache_hash(),
-            metadata4.compute_cache_hash()
+            install_options1.compute_hash("sha256:abc123"),
+            install_options4.compute_hash("sha256:abc123")
         );
-    }
 
-    #[test]
-    fn test_cache_inputs_serialization() -> Result<()> {
-        let inputs = CacheInputs {
-            image_digest: "sha256:abc123".to_string(),
+        // Different target_transport should generate different hash
+        let mut install_options5 = InstallOptions {
             filesystem: Some("ext4".to_string()),
             root_size: Some("20G".to_string()),
-            kernel_args: vec!["console=ttyS0".to_string()],
-            composefs_native: false,
-            version: 1,
+            ..Default::default()
         };
+        install_options5.target_transport = Some("containers-storage".to_string());
 
-        let json = serde_json::to_string(&inputs)?;
-        let deserialized: CacheInputs = serde_json::from_str(&json)?;
-
-        assert_eq!(inputs.image_digest, deserialized.image_digest);
-        assert_eq!(inputs.filesystem, deserialized.filesystem);
-        assert_eq!(inputs.root_size, deserialized.root_size);
-        assert_eq!(inputs.kernel_args, deserialized.kernel_args);
-        assert_eq!(inputs.version, deserialized.version);
-        Ok(())
+        assert_ne!(
+            install_options1.compute_hash("sha256:abc123"),
+            install_options5.compute_hash("sha256:abc123")
+        );
     }
 }
