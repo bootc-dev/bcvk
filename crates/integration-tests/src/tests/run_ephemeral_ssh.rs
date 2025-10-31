@@ -21,8 +21,8 @@ use std::thread;
 use std::time::Duration;
 
 use crate::{
-    get_alternative_test_image, get_test_image, run_bcvk, IntegrationTest, INTEGRATION_TESTS,
-    INTEGRATION_TEST_LABEL,
+    get_test_image, run_bcvk, IntegrationTest, ParameterizedIntegrationTest, INTEGRATION_TESTS,
+    INTEGRATION_TEST_LABEL, PARAMETERIZED_INTEGRATION_TESTS,
 };
 
 #[distributed_slice(INTEGRATION_TESTS)]
@@ -144,22 +144,18 @@ fn test_run_ephemeral_ssh_exit_code() -> Result<()> {
     Ok(())
 }
 
-#[distributed_slice(INTEGRATION_TESTS)]
-static TEST_RUN_EPHEMERAL_SSH_CROSS_DISTRO_COMPATIBILITY: IntegrationTest = IntegrationTest::new(
-    "run_ephemeral_ssh_cross_distro_compatibility",
-    test_run_ephemeral_ssh_cross_distro_compatibility,
-);
+#[distributed_slice(PARAMETERIZED_INTEGRATION_TESTS)]
+static TEST_RUN_EPHEMERAL_SSH_CROSS_DISTRO_COMPATIBILITY: ParameterizedIntegrationTest =
+    ParameterizedIntegrationTest::new(
+        "run_ephemeral_ssh_cross_distro_compatibility",
+        test_run_ephemeral_ssh_cross_distro_compatibility,
+    );
 
-/// Test SSH functionality across different bootc images (Fedora and CentOS)
-/// This test verifies that our systemd version compatibility fix works correctly
-/// with both newer systemd (Fedora) and older systemd (CentOS Stream 9)
-fn test_run_ephemeral_ssh_cross_distro_compatibility() -> Result<()> {
-    test_ssh_with_image(&get_test_image(), "primary")?;
-    test_ssh_with_image(&get_alternative_test_image(), "alternative")?;
-    Ok(())
-}
-
-fn test_ssh_with_image(image: &str, image_type: &str) -> Result<()> {
+/// Test SSH functionality across different bootc images
+/// This parameterized test runs once per image in BCVK_ALL_IMAGES and verifies
+/// that our systemd version compatibility fix works correctly with both newer
+/// systemd (Fedora) and older systemd (CentOS Stream 9)
+fn test_run_ephemeral_ssh_cross_distro_compatibility(image: &str) -> Result<()> {
     let output = run_bcvk(&[
         "ephemeral",
         "run-ssh",
@@ -173,21 +169,21 @@ fn test_ssh_with_image(image: &str, image_type: &str) -> Result<()> {
 
     assert!(
         output.success(),
-        "{} image SSH test failed: {}",
-        image_type,
+        "SSH test failed for image {}: {}",
+        image,
         output.stderr
     );
 
     assert!(
         output.stdout.contains("systemd"),
-        "{} image: systemd version not found. Got: {}",
-        image_type,
+        "systemd version not found for image {}. Got: {}",
+        image,
         output.stdout
     );
 
     // Log systemd version for diagnostic purposes
     if let Some(version_line) = output.stdout.lines().next() {
-        eprintln!("{} image systemd version: {}", image_type, version_line);
+        eprintln!("Image {} systemd version: {}", image, version_line);
 
         let version_parts: Vec<&str> = version_line.split_whitespace().collect();
         if version_parts.len() >= 2 {
@@ -195,12 +191,12 @@ fn test_ssh_with_image(image: &str, image_type: &str) -> Result<()> {
                 if version_num >= 254 {
                     eprintln!(
                         "✓ {} supports vmm.notify_socket (version {})",
-                        image_type, version_num
+                        image, version_num
                     );
                 } else {
                     eprintln!(
                         "✓ {} falls back to SSH polling (version {} < 254)",
-                        image_type, version_num
+                        image, version_num
                     );
                 }
             }

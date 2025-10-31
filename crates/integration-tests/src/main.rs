@@ -11,7 +11,8 @@ use xshell::{cmd, Shell};
 
 // Re-export constants from lib for internal use
 pub(crate) use integration_tests::{
-    IntegrationTest, INTEGRATION_TESTS, INTEGRATION_TEST_LABEL, LIBVIRT_INTEGRATION_TEST_LABEL,
+    image_to_test_suffix, IntegrationTest, ParameterizedIntegrationTest, INTEGRATION_TESTS,
+    INTEGRATION_TEST_LABEL, LIBVIRT_INTEGRATION_TEST_LABEL, PARAMETERIZED_INTEGRATION_TESTS,
 };
 use linkme::distributed_slice;
 
@@ -43,30 +44,38 @@ pub(crate) fn get_bck_command() -> Result<String> {
     return Ok("bcvk".to_owned());
 }
 
-/// Get the default bootc image to use for tests
+/// Get the primary bootc image to use for tests
 ///
-/// Checks BCVK_TEST_IMAGE environment variable first, then falls back to default.
-/// This allows easily overriding the base image for all integration tests.
-///
-/// Default images:
-/// - Primary: quay.io/fedora/fedora-bootc:42 (Fedora 42 with latest features)
-/// - Alternative: quay.io/centos-bootc/centos-bootc:stream9 (CentOS Stream 9 for compatibility testing)
+/// Checks BCVK_PRIMARY_IMAGE environment variable first, then falls back to BCVK_TEST_IMAGE
+/// for backwards compatibility, then to a hardcoded default.
 pub(crate) fn get_test_image() -> String {
-    std::env::var("BCVK_TEST_IMAGE")
-        .unwrap_or_else(|_| "quay.io/fedora/fedora-bootc:42".to_string())
+    std::env::var("BCVK_PRIMARY_IMAGE")
+        .or_else(|_| std::env::var("BCVK_TEST_IMAGE"))
+        .unwrap_or_else(|_| "quay.io/centos-bootc/centos-bootc:stream10".to_string())
 }
 
-/// Get an alternative bootc image for cross-platform testing
+/// Get all test images for matrix testing
 ///
-/// Returns a different image from the primary test image to test compatibility.
-/// If BCVK_TEST_IMAGE is set to Fedora, returns CentOS Stream 9.
-/// If BCVK_TEST_IMAGE is set to CentOS, returns Fedora.
-pub(crate) fn get_alternative_test_image() -> String {
-    let primary = get_test_image();
-    if primary.contains("centos") {
-        "quay.io/fedora/fedora-bootc:42".to_string()
+/// Parses BCVK_ALL_IMAGES environment variable, which should be a whitespace-separated
+/// list of container images (spaces, tabs, and newlines are all acceptable separators).
+/// Falls back to a single-element vec containing the primary image if not set or empty.
+///
+/// Example: `export BCVK_ALL_IMAGES="quay.io/fedora/fedora-bootc:42 quay.io/centos-bootc/centos-bootc:stream9"`
+pub(crate) fn get_all_test_images() -> Vec<String> {
+    if let Ok(all_images) = std::env::var("BCVK_ALL_IMAGES") {
+        let images: Vec<String> = all_images
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+
+        if images.is_empty() {
+            eprintln!("Warning: BCVK_ALL_IMAGES is set but empty, falling back to primary image");
+            vec![get_test_image()]
+        } else {
+            images
+        }
     } else {
-        "quay.io/centos-bootc/centos-bootc:stream9".to_string()
+        vec![get_test_image()]
     }
 }
 
@@ -183,15 +192,29 @@ fn test_images_list() -> Result<()> {
 fn main() {
     let args = Arguments::from_args();
 
-    // Collect tests from the distributed slice
-    let tests: Vec<Trial> = INTEGRATION_TESTS
-        .iter()
-        .map(|test| {
-            let name = test.name;
-            let f = test.f;
-            Trial::test(name, move || f().map_err(|e| format!("{:?}", e).into()))
-        })
-        .collect();
+    let mut tests: Vec<Trial> = Vec::new();
+
+    // Collect regular tests from the distributed slice
+    tests.extend(INTEGRATION_TESTS.iter().map(|test| {
+        let name = test.name;
+        let f = test.f;
+        Trial::test(name, move || f().map_err(|e| format!("{:?}", e).into()))
+    }));
+
+    // Collect parameterized tests and generate variants for each image
+    let all_images = get_all_test_images();
+    for param_test in PARAMETERIZED_INTEGRATION_TESTS.iter() {
+        for image in &all_images {
+            let image = image.clone();
+            let test_suffix = image_to_test_suffix(&image);
+            let test_name = format!("{}_{}", param_test.name, test_suffix);
+            let f = param_test.f;
+
+            tests.push(Trial::test(test_name, move || {
+                f(&image).map_err(|e| format!("{:?}", e).into())
+            }));
+        }
+    }
 
     // Run the tests and exit with the result
     libtest_mimic::run(&args, tests).exit();

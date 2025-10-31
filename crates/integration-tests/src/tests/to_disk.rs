@@ -20,7 +20,7 @@ use linkme::distributed_slice;
 use std::process::Command;
 use tempfile::TempDir;
 
-use crate::{run_bcvk, IntegrationTest, INTEGRATION_TESTS, INTEGRATION_TEST_LABEL};
+use crate::{get_test_image, run_bcvk, IntegrationTest, INTEGRATION_TESTS, INTEGRATION_TEST_LABEL};
 
 #[distributed_slice(INTEGRATION_TESTS)]
 static TEST_TO_DISK: IntegrationTest = IntegrationTest::new("to_disk", test_to_disk);
@@ -35,7 +35,7 @@ fn test_to_disk() -> Result<()> {
         "to-disk",
         "--label",
         INTEGRATION_TEST_LABEL,
-        "quay.io/centos-bootc/centos-bootc:stream10",
+        &get_test_image(),
         disk_path.as_str(),
     ])?;
 
@@ -104,7 +104,7 @@ fn test_to_disk_qcow2() -> Result<()> {
         "--format=qcow2",
         "--label",
         INTEGRATION_TEST_LABEL,
-        "quay.io/centos-bootc/centos-bootc:stream10",
+        &get_test_image(),
         disk_path.as_str(),
     ])?;
 
@@ -162,7 +162,7 @@ fn test_to_disk_caching() -> Result<()> {
         "to-disk",
         "--label",
         INTEGRATION_TEST_LABEL,
-        "quay.io/centos-bootc/centos-bootc:stream10",
+        &get_test_image(),
         disk_path.as_str(),
     ])?;
 
@@ -189,7 +189,7 @@ fn test_to_disk_caching() -> Result<()> {
         "to-disk",
         "--label",
         INTEGRATION_TEST_LABEL,
-        "quay.io/centos-bootc/centos-bootc:stream10",
+        &get_test_image(),
         disk_path.as_str(),
     ])?;
 

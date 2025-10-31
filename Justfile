@@ -1,3 +1,6 @@
+PRIMARY_IMAGE := "quay.io/centos-bootc/centos-bootc:stream10"
+ALL_BASE_IMAGES := "quay.io/fedora/fedora-bootc:42 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10"
+
 # Build the native binary
 build:
    make
@@ -17,17 +20,20 @@ unit *ARGS:
     fi
 
 pull-test-images:
-    podman pull -q quay.io/fedora/fedora-bootc:42 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10 >/dev/null
+    podman pull -q {{ALL_BASE_IMAGES}} >/dev/null
 
 # Run integration tests (auto-detects nextest, with cleanup)
 test-integration *ARGS: build pull-test-images
     #!/usr/bin/env bash
     set -euo pipefail
     export BCVK_PATH=$(pwd)/target/release/bcvk
-    
+    export BCVK_PRIMARY_IMAGE={{ PRIMARY_IMAGE }}
+    # Note: BCVK_ALL_IMAGES is quoted to preserve the space-separated list
+    export BCVK_ALL_IMAGES="{{ ALL_BASE_IMAGES }}"
+
     # Clean up any leftover containers before starting
     cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
-    
+
     # Run the tests
     if command -v cargo-nextest &> /dev/null; then
         cargo nextest run --release -P integration -p integration-tests {{ ARGS }}
@@ -36,10 +42,10 @@ test-integration *ARGS: build pull-test-images
         cargo test --release -p integration-tests -- {{ ARGS }}
         TEST_EXIT_CODE=$?
     fi
-    
+
     # Clean up containers after tests complete
     cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
-    
+
     exit $TEST_EXIT_CODE
 
 # Clean up integration test containers
