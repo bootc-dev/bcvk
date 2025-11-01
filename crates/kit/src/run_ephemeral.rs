@@ -374,6 +374,9 @@ fn prepare_run_command_with_temp(
     // Run the container with the setup script
     let mut cmd = Command::new("podman");
     cmd.arg("run");
+    // We don't do pulling because then we'd have to propagate all the authfile
+    // and status output for that in the general case.
+    cmd.arg("--pull=never");
     // We always have a label
     cmd.arg("--label=bcvk.ephemeral=1");
     for label in opts.podman.label.iter() {
