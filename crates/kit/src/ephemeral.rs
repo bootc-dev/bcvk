@@ -4,13 +4,14 @@
 //! Ephemeral VMs are temporary, non-persistent VMs that are useful for testing, development,
 //! and CI/CD workflows.
 
+use std::process::Command;
+
 use clap::Subcommand;
 use color_eyre::{eyre::eyre, Result};
 use comfy_table::{presets::UTF8_FULL, Table};
 use serde::{Deserialize, Serialize};
 
 // Re-export the existing implementations
-use crate::hostexec;
 use crate::run_ephemeral;
 use crate::run_ephemeral_ssh;
 use crate::ssh;
@@ -160,7 +161,7 @@ impl EphemeralCommands {
 fn list_ephemeral_containers() -> Result<Vec<ContainerListEntry>> {
     use bootc_utils::CommandRunExt;
 
-    let containers: Vec<ContainerListEntry> = hostexec::command("podman", None)?
+    let containers: Vec<ContainerListEntry> = Command::new("podman")
         .args([
             "ps",
             "--all",
@@ -214,7 +215,7 @@ fn remove_all_ephemeral_containers(force: bool) -> Result<()> {
             "Removing container {}",
             &container.id[..12.min(container.id.len())]
         );
-        let result = hostexec::command("podman", None)?
+        let result = Command::new("podman")
             .args(["rm", "-f", &container.id])
             .run();
 

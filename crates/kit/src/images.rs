@@ -4,13 +4,12 @@
 //! podman integration with both table and JSON output formats.
 
 use std::collections::HashMap;
+use std::process::Command;
 
 use bootc_utils::CommandRunExt;
 use color_eyre::{eyre::eyre, Result};
 use comfy_table::{presets::UTF8_FULL, Table};
 use serde::{Deserialize, Serialize};
-
-use crate::hostexec;
 
 /// Command-line options for image management operations.
 #[derive(clap::Subcommand, Debug)]
@@ -188,7 +187,7 @@ fn parse_osrelease(s: &str) -> Result<HashMap<String, String>> {
 /// List all bootc container images using podman.
 #[allow(dead_code)]
 pub fn list() -> Result<Vec<ImageListEntry>> {
-    let images: Vec<ImageListEntry> = hostexec::command("podman", None)?
+    let images: Vec<ImageListEntry> = Command::new("podman")
         .args([
             "images",
             "--format",
@@ -202,7 +201,7 @@ pub fn list() -> Result<Vec<ImageListEntry>> {
 
 /// Inspect a container image and return metadata.
 pub fn inspect(name: &str) -> Result<ImageInspect> {
-    let mut r: Vec<ImageInspect> = hostexec::command("podman", None)?
+    let mut r: Vec<ImageInspect> = Command::new("podman")
         .args(["image", "inspect", name])
         .run_and_parse_json()
         .map_err(|e| eyre!("{e}"))?;

@@ -2,8 +2,6 @@
 //!
 //! This module provides utilities for loading existing UEFI Secure Boot
 //! keys (PK, KEK, db) and customizing OVMF firmware variables for VMs.
-//! All operations are designed to work with host-side tools when running
-//! from a container environment.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::{eyre::eyre, Result};
@@ -34,10 +32,10 @@ pub struct SecureBootKeys {
 }
 
 impl SecureBootKeys {
-    /// Load existing secure boot keys from a directory using host-aware checks
+    /// Load existing secure boot keys from a directory
     pub fn load(key_dir: &Utf8Path) -> Result<Self> {
-        // Use host-side test command to check if directory exists
-        let mut test_dir = crate::hostexec::command("test", None)?;
+        // Check if directory exists
+        let mut test_dir = std::process::Command::new("test");
         test_dir.args(["-d", key_dir.as_str()]);
 
         if !test_dir.status()?.success() {
@@ -49,8 +47,8 @@ impl SecureBootKeys {
 
         let guid_file = key_dir.join("GUID.txt");
 
-        // Use host-side cat command to read GUID file
-        let mut cat_guid = crate::hostexec::command("cat", None)?;
+        // Read GUID file
+        let mut cat_guid = std::process::Command::new("cat");
         cat_guid.arg(guid_file.as_str());
         let guid_output = cat_guid.output()?;
 
@@ -73,7 +71,7 @@ impl SecureBootKeys {
             guid,
         };
 
-        // Verify all required files exist using host-side test commands
+        // Verify all required files exist
         let required_files = [
             (&keys.pk_cert, "PK.crt"),
             (&keys.kek_cert, "KEK.crt"),
@@ -81,7 +79,7 @@ impl SecureBootKeys {
         ];
 
         for (path, name) in &required_files {
-            let mut test_file = crate::hostexec::command("test", None)?;
+            let mut test_file = std::process::Command::new("test");
             test_file.args(["-f", path.as_str()]);
 
             if !test_file.status()?.success() {
@@ -97,25 +95,25 @@ impl SecureBootKeys {
     }
 }
 
-/// Customize OVMF variables with secure boot keys using host-side execution
+/// Customize OVMF variables with secure boot keys
 pub fn customize_ovmf_vars(
     keys: &SecureBootKeys,
     ovmf_vars_path: &Utf8Path,
     output_path: &Utf8Path,
 ) -> Result<()> {
-    // Check if virt-fw-vars is available on the host
-    let mut check = crate::hostexec::command("which", None)?;
+    // Check if virt-fw-vars is available
+    let mut check = std::process::Command::new("which");
     check.arg("virt-fw-vars");
     let check_output = check.output()?;
 
     if !check_output.status.success() {
         return Err(eyre!(
-            "virt-fw-vars not found on host. Install it with: dnf install -y python3-virt-firmware"
+            "virt-fw-vars not found. Install it with: dnf install -y python3-virt-firmware"
         ));
     }
 
-    // Use virt-fw-vars to inject keys into OVMF_VARS via host execution
-    let mut cmd = crate::hostexec::command("virt-fw-vars", None)?;
+    // Use virt-fw-vars to inject keys into OVMF_VARS
+    let mut cmd = std::process::Command::new("virt-fw-vars");
     cmd.args([
         "--input",
         ovmf_vars_path.as_str(),
@@ -156,8 +154,8 @@ pub fn setup_secure_boot(key_dir: &Utf8Path) -> Result<SecureBootConfig> {
     // Find the system OVMF_VARS.fd
     let ovmf_vars = find_ovmf_vars()?;
 
-    // Check if custom vars template already exists using host-side test
-    let mut test_template = crate::hostexec::command("test", None)?;
+    // Check if custom vars template already exists
+    let mut test_template = std::process::Command::new("test");
     test_template.args(["-f", vars_template.as_str()]);
 
     if !test_template.status()?.success() {
@@ -172,7 +170,7 @@ pub fn setup_secure_boot(key_dir: &Utf8Path) -> Result<SecureBootConfig> {
     })
 }
 
-/// Find the system OVMF_VARS.fd file using host-side checks
+/// Find the system OVMF_VARS.fd file
 fn find_ovmf_vars() -> Result<Utf8PathBuf> {
     // Common locations for OVMF_VARS.fd
     let locations = [
@@ -183,7 +181,7 @@ fn find_ovmf_vars() -> Result<Utf8PathBuf> {
     ];
 
     for path in &locations {
-        let mut test_file = crate::hostexec::command("test", None)?;
+        let mut test_file = std::process::Command::new("test");
         test_file.args(["-f", path]);
 
         if test_file.status()?.success() {
@@ -192,11 +190,11 @@ fn find_ovmf_vars() -> Result<Utf8PathBuf> {
     }
 
     Err(eyre!(
-        "Could not find OVMF_VARS.fd on host. Please install edk2-ovmf package."
+        "Could not find OVMF_VARS.fd. Please install edk2-ovmf package."
     ))
 }
 
-/// Find the secure boot OVMF_CODE file using host-side checks
+/// Find the secure boot OVMF_CODE file
 pub fn find_ovmf_code_secboot() -> Result<Utf8PathBuf> {
     // Common locations for OVMF_CODE.secboot.fd
     let locations = [
@@ -207,7 +205,7 @@ pub fn find_ovmf_code_secboot() -> Result<Utf8PathBuf> {
     ];
 
     for path in &locations {
-        let mut test_file = crate::hostexec::command("test", None)?;
+        let mut test_file = std::process::Command::new("test");
         test_file.args(["-f", path]);
 
         if test_file.status()?.success() {
@@ -216,7 +214,7 @@ pub fn find_ovmf_code_secboot() -> Result<Utf8PathBuf> {
     }
 
     Err(eyre!(
-        "Could not find OVMF_CODE.secboot.fd on host. Please install edk2-ovmf package."
+        "Could not find OVMF_CODE.secboot.fd. Please install edk2-ovmf package."
     ))
 }
 
@@ -226,9 +224,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    // Note: These tests assume we're running in an environment where
-    // hostexec::command can work directly (not in a container requiring systemd-run)
-    // In CI/testing environments, this should work as direct command execution
+    // Note: These tests use direct command execution
 
     #[test]
     fn test_load_missing_directory() {

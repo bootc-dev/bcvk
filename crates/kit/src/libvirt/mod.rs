@@ -47,13 +47,9 @@ pub struct LibvirtOptions {
 }
 
 impl LibvirtOptions {
-    /// Create a virsh Command with the appropriate connection URI using host execution
-    ///
-    /// Note: This method may panic if host execution setup fails, but this should
-    /// only happen in misconfigured environments where container lacks required privileges
+    /// Create a virsh Command with the appropriate connection URI
     pub fn virsh_command(&self) -> std::process::Command {
-        let mut cmd = crate::hostexec::command("virsh", None)
-            .expect("Failed to setup host execution for virsh - ensure container has --privileged and --pid=host");
+        let mut cmd = std::process::Command::new("virsh");
         if let Some(ref uri) = self.connect {
             cmd.arg("-c").arg(uri);
         }

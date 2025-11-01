@@ -1,7 +1,5 @@
 //! Bootc Virtualization Kit (bcvk) - A toolkit for bootc containers and local virtualization
 
-use std::ffi::OsString;
-
 use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{eyre::Context as _, Report, Result};
@@ -12,18 +10,14 @@ mod cache_metadata;
 mod cli_json;
 mod common_opts;
 mod container_entrypoint;
-pub(crate) mod containerenv;
 mod domain_list;
-mod envdetect;
 mod ephemeral;
-mod hostexec;
 mod images;
 mod install_options;
 mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
-#[allow(dead_code)]
 mod qemu;
 mod qemu_img;
 mod run_ephemeral;
@@ -51,25 +45,6 @@ pub const CONTAINER_STATEDIR: &str = "/var/lib/bcvk";
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-}
-
-/// Execute a command in the host context from within a container.
-///
-/// This allows containers to run host commands with proper isolation
-/// and resource management through the host execution system.
-#[derive(Parser)]
-struct HostExecOpts {
-    /// Binary executable to run on the host system
-    ///
-    /// Can be a full path or a command name available in PATH.
-    bin: OsString,
-
-    /// Command-line arguments to pass to the binary
-    ///
-    /// All arguments after the binary name, including flags and options.
-    /// Supports arguments starting with hyphens.
-    #[clap(allow_hyphen_values = true)]
-    args: Vec<OsString>,
 }
 
 #[derive(Parser)]
@@ -100,10 +75,6 @@ enum InternalsCmds {
 /// Available bcvk commands for container and VM management.
 #[derive(Subcommand)]
 enum Commands {
-    /// Execute commands on the host system from within containers
-    #[clap(hide = true)]
-    Hostexec(HostExecOpts),
-
     /// Manage and inspect bootc container images
     #[clap(subcommand)]
     Images(images::ImagesOpts),
@@ -186,9 +157,6 @@ fn main() -> Result<(), Report> {
         .context("Init tokio runtime")?;
 
     match cli.command {
-        Commands::Hostexec(opts) => {
-            hostexec::run(opts.bin, opts.args)?;
-        }
         Commands::Images(opts) => opts.run()?,
         Commands::Ephemeral(cmd) => cmd.run()?,
         Commands::ToDisk(opts) => {

@@ -1,8 +1,8 @@
+use std::process::Command;
+
 use bootc_utils::CommandRunExt;
 use color_eyre::{eyre::eyre, Result};
 use serde::Deserialize;
-
-use crate::hostexec;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +25,7 @@ pub struct ImageInspect {
 }
 
 pub fn get_system_info() -> Result<PodmanSystemInfo> {
-    hostexec::podman()?
+    Command::new("podman")
         .arg("system")
         .arg("info")
         .arg("--format=json")
@@ -35,7 +35,7 @@ pub fn get_system_info() -> Result<PodmanSystemInfo> {
 
 /// Get the size of a container image in bytes
 pub fn get_image_size(image: &str) -> Result<u64> {
-    let inspect_result: Vec<ImageInspect> = hostexec::podman()?
+    let inspect_result: Vec<ImageInspect> = Command::new("podman")
         .arg("inspect")
         .arg("--format=json")
         .arg("--type=image")
