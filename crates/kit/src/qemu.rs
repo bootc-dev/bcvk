@@ -1,7 +1,7 @@
 //! QEMU virtualization integration and VM management.
 //!
-//! Supports direct kernel boot and disk image boot with VirtIO devices,
-//! automatic process cleanup, and SMBIOS credential injection.
+//! Supports direct kernel boot with VirtIO devices, automatic process cleanup,
+//! and SMBIOS credential injection.
 
 use std::fs::{File, OpenOptions};
 use std::future::Future;
@@ -111,7 +111,7 @@ impl Default for ResourceLimits {
     }
 }
 
-/// VM boot configuration: direct kernel boot or disk image boot.
+/// VM boot configuration: direct kernel boot.
 #[derive(Debug)]
 pub enum BootMode {
     /// Direct kernel boot (fast, testing-focused)
@@ -121,12 +121,6 @@ pub enum BootMode {
         kernel_cmdline: Vec<String>,
         /// VirtIO-FS socket for root filesystem
         virtiofs_socket: Utf8PathBuf,
-    },
-    #[allow(dead_code)]
-    DiskBoot {
-        primary_disk: String,
-        /// Use UEFI instead of BIOS
-        uefi: bool,
     },
 }
 
@@ -153,10 +147,6 @@ pub struct QemuConfig {
     pub resource_limits: ResourceLimits,
     /// Deprecated: use display_mode
     pub enable_console: bool,
-    /// UEFI firmware path (auto-detected if None)
-    pub uefi_firmware_path: Option<String>,
-    /// UEFI variables file
-    pub uefi_vars_path: Option<String>,
     /// SMBIOS credentials for systemd
     smbios_credentials: Vec<String>,
 
@@ -203,18 +193,6 @@ impl QemuConfig {
     pub fn set_kernel_cmdline(&mut self, cmdline: Vec<String>) -> &mut Self {
         if let Some(BootMode::DirectBoot { kernel_cmdline, .. }) = self.boot_mode.as_mut() {
             *kernel_cmdline = cmdline;
-        }
-        self
-    }
-
-    /// Enable UEFI boot (only for disk boot)
-    #[allow(dead_code)]
-    pub fn set_uefi_boot(&mut self, uefi: bool) -> &mut Self {
-        if let Some(BootMode::DiskBoot {
-            uefi: uefi_flag, ..
-        }) = self.boot_mode.as_mut()
-        {
-            *uefi_flag = uefi;
         }
         self
     }
@@ -486,67 +464,6 @@ fn spawn(
             let append_str = kernel_cmdline.join(" ");
             cmd.args(["-append", &append_str]);
         }
-        Some(BootMode::DiskBoot { primary_disk, uefi }) => {
-            // Configure UEFI firmware if requested
-            if *uefi {
-                if let Some(ref firmware_path) = config.uefi_firmware_path {
-                    // UEFI firmware configuration
-                    cmd.args([
-                        "-drive",
-                        &format!("if=pflash,format=raw,readonly=on,file={}", firmware_path),
-                    ]);
-
-                    // UEFI variables (if specified)
-                    if let Some(ref vars_path) = config.uefi_vars_path {
-                        cmd.args([
-                            "-drive",
-                            &format!("if=pflash,format=raw,file={}", vars_path),
-                        ]);
-                    }
-
-                    // Disable default SeaBIOS
-                    cmd.args(["-machine", "q35"]);
-                    debug!("UEFI boot configured with firmware: {}", firmware_path);
-                } else {
-                    // Try to auto-detect UEFI firmware paths
-                    let common_uefi_paths = [
-                        "/usr/share/edk2/ovmf/OVMF_CODE.fd",
-                        "/usr/share/OVMF/OVMF_CODE.fd",
-                        "/usr/share/ovmf/OVMF.fd",
-                    ];
-
-                    let mut found_firmware = None;
-                    for path in &common_uefi_paths {
-                        if std::path::Path::new(path).exists() {
-                            found_firmware = Some(path);
-                            break;
-                        }
-                    }
-
-                    if let Some(firmware_path) = found_firmware {
-                        cmd.args([
-                            "-drive",
-                            &format!("if=pflash,format=raw,readonly=on,file={}", firmware_path),
-                        ]);
-                        cmd.args(["-machine", "q35"]);
-                        debug!(
-                            "UEFI boot configured with auto-detected firmware: {}",
-                            firmware_path
-                        );
-                    } else {
-                        warn!("UEFI boot requested but no firmware found, falling back to BIOS");
-                    }
-                }
-            }
-
-            // Add primary boot disk
-            cmd.args([
-                "-drive",
-                &format!("file={},format=raw,if=none,id=boot_drive", primary_disk),
-                "-device",
-                "virtio-blk-pci,drive=boot_drive,serial=boot_disk,bootindex=1",
-            ]);
-        }
         None => {}
     }
 
@@ -693,7 +610,9 @@ struct VsockCopier {
 
 pub struct RunningQemu {
     pub qemu_process: Child,
+    #[allow(dead_code)]
     pub virtiofsd_processes: Vec<Pin<Box<dyn Future<Output = std::io::Result<Output>>>>>,
+    #[allow(dead_code)]
     sd_notification: Option<VsockCopier>,
 }
 
@@ -1040,25 +959,6 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
     );
 
     Ok(child)
-}
-
-/// Wait for virtiofsd socket to become available.
-/// Polls every 100ms until socket exists or timeout.
-pub async fn wait_for_virtiofsd_socket(socket_path: &str, timeout: Duration) -> Result<()> {
-    let start = std::time::Instant::now();
-
-    while start.elapsed() < timeout {
-        if std::path::Path::new(socket_path).exists() {
-            debug!("Virtiofsd socket ready: {}", socket_path);
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    Err(eyre!(
-        "Timeout waiting for virtiofsd socket: {}",
-        socket_path
-    ))
 }
 
 /// Validate virtiofsd configuration.

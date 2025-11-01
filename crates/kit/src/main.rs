@@ -18,7 +18,6 @@ mod libvirt;
 mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
-#[allow(dead_code)]
 mod qemu;
 mod qemu_img;
 mod run_ephemeral;
