@@ -1,109 +1,10 @@
-//! SSH credential injection for bootc VMs
+//! Systemd credential injection for bootc VMs
 //!
-//! Injects SSH public keys into VMs via systemd credentials using either SMBIOS
-//! firmware variables (preferred) or kernel command-line arguments. Creates systemd
-//! tmpfiles.d configuration to set up SSH access during VM boot.
-//!
+//! Provides functions for injecting configuration into VMs via systemd credentials
+//! using SMBIOS firmware variables (preferred) or kernel command-line arguments.
+//! Supports SSH keys, mount units, environment configuration, and AF_VSOCK setup.
 
 use color_eyre::Result;
-
-/// Generate SMBIOS credential string for root SSH access
-///
-/// Creates a systemd credential for QEMU's SMBIOS interface. Preferred method
-/// as it keeps credentials out of kernel command line and boot logs.
-///
-/// Returns a string for use with `qemu -smbios type=11,value="..."`
-pub fn smbios_cred_for_root_ssh(pubkey: &str) -> Result<String> {
-    let k = key_to_root_tmpfiles_d(pubkey);
-    let encoded = data_encoding::BASE64.encode(k.as_bytes());
-    let r = format!("io.systemd.credential.binary:tmpfiles.extra={encoded}");
-    Ok(r)
-}
-
-/// Generate kernel command-line argument for root SSH access
-///
-/// Creates a systemd credential for kernel command-line delivery. Less secure
-/// than SMBIOS method as credentials are visible in /proc/cmdline and boot logs.
-///
-/// Returns a string for use in kernel boot parameters.
-pub fn karg_for_root_ssh(pubkey: &str) -> Result<String> {
-    let k = key_to_root_tmpfiles_d(pubkey);
-    let encoded = data_encoding::BASE64.encode(k.as_bytes());
-    let r = format!("systemd.set_credential_binary=tmpfiles.extra:{encoded}");
-    Ok(r)
-}
-
-/// Convert SSH public key to systemd tmpfiles.d configuration
-///
-/// Generates configuration to create `/root/.ssh` directory (0750) and
-/// `/root/.ssh/authorized_keys` file (700) with the Base64-encoded SSH key.
-/// Uses `f+~` to append to existing authorized_keys files.
-pub fn key_to_root_tmpfiles_d(pubkey: &str) -> String {
-    let buf = data_encoding::BASE64.encode(pubkey.as_bytes());
-    format!("d /root/.ssh 0750 - - -\nf+~ /root/.ssh/authorized_keys 700 - - - {buf}\n")
-}
-
-/// Generate SMBIOS credentials for STORAGE_OPTS configuration
-///
-/// Creates a systemd unit that conditionally appends STORAGE_OPTS to /etc/environment
-/// (for PAM sessions including SSH), plus a dropin to ensure it runs.
-///
-/// Returns a vector with:
-/// 1. The unit itself (systemd.extra-unit)
-/// 2. A dropin for sysinit.target to pull in the unit
-pub fn smbios_creds_for_storage_opts() -> Result<Vec<String>> {
-    // Create systemd unit that conditionally appends to /etc/environment
-    let unit_content = r#"[Unit]
-Description=Setup STORAGE_OPTS for bcvk
-DefaultDependencies=no
-Before=systemd-user-sessions.service
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -c 'grep -q STORAGE_OPTS /etc/environment || echo STORAGE_OPTS=additionalimagestore=/run/host-container-storage >> /etc/environment'
-RemainAfterExit=yes
-"#;
-    let encoded_unit = data_encoding::BASE64.encode(unit_content.as_bytes());
-    let unit_cred = format!(
-        "io.systemd.credential.binary:systemd.extra-unit.bcvk-storage-opts.service={encoded_unit}"
-    );
-
-    // Create dropin for sysinit.target to pull in our unit
-    let dropin_content = "[Unit]\nWants=bcvk-storage-opts.service\n";
-    let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
-    let dropin_cred = format!(
-        "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-storage={encoded_dropin}"
-    );
-
-    Ok(vec![unit_cred, dropin_cred])
-}
-
-/// Generate tmpfiles.d lines for STORAGE_OPTS in systemd contexts
-///
-/// Configures STORAGE_OPTS for:
-/// - /etc/environment.d/: systemd user manager and user services
-/// - /etc/systemd/system.conf.d/: system-level systemd services
-pub fn storage_opts_tmpfiles_d_lines() -> String {
-    concat!(
-        "f /etc/environment.d/90-bcvk-storage.conf 0644 root root - STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n",
-        "d /etc/systemd/system.conf.d 0755 root root -\n",
-        "f /etc/systemd/system.conf.d/90-bcvk-storage.conf 0644 root root - [Manager]\\nDefaultEnvironment=STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n"
-    ).to_string()
-}
-
-/// Generate SMBIOS credential string for AF_VSOCK systemd notification socket
-///
-/// Creates a systemd credential that configures systemd to send notifications
-/// via AF_VSOCK instead of the default Unix socket. This enables host-guest
-/// communication for debugging VM boot sequences.
-///
-/// Returns a string for use with `qemu -smbios type=11,value="..."`
-pub fn smbios_cred_for_vsock_notify(host_cid: u32, port: u32) -> String {
-    format!(
-        "io.systemd.credential:vmm.notify_socket=vsock-stream:{}:{}",
-        host_cid, port
-    )
-}
 
 /// Convert a guest mount path to a systemd unit name
 ///
@@ -174,6 +75,7 @@ pub fn generate_mount_unit(virtiofs_tag: &str, guest_path: &str, readonly: bool)
 /// 2. A dropin for local-fs.target that wants this mount unit
 ///
 /// Returns a vector of SMBIOS credential strings
+#[allow(dead_code)]
 pub fn smbios_creds_for_mount_unit(
     virtiofs_tag: &str,
     guest_path: &str,
@@ -197,6 +99,105 @@ pub fn smbios_creds_for_mount_unit(
     );
 
     Ok(vec![mount_cred, dropin_cred])
+}
+
+/// Generate SMBIOS credential string for AF_VSOCK systemd notification socket
+///
+/// Creates a systemd credential that configures systemd to send notifications
+/// via AF_VSOCK instead of the default Unix socket. This enables host-guest
+/// communication for debugging VM boot sequences.
+///
+/// Returns a string for use with `qemu -smbios type=11,value="..."`
+pub fn smbios_cred_for_vsock_notify(host_cid: u32, port: u32) -> String {
+    format!(
+        "io.systemd.credential:vmm.notify_socket=vsock-stream:{}:{}",
+        host_cid, port
+    )
+}
+
+/// Generate SMBIOS credentials for STORAGE_OPTS configuration
+///
+/// Creates a systemd unit that conditionally appends STORAGE_OPTS to /etc/environment
+/// (for PAM sessions including SSH), plus a dropin to ensure it runs.
+///
+/// Returns a vector with:
+/// 1. The unit itself (systemd.extra-unit)
+/// 2. A dropin for sysinit.target to pull in the unit
+pub fn smbios_creds_for_storage_opts() -> Result<Vec<String>> {
+    // Create systemd unit that conditionally appends to /etc/environment
+    let unit_content = r#"[Unit]
+Description=Setup STORAGE_OPTS for bcvk
+DefaultDependencies=no
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'grep -q STORAGE_OPTS /etc/environment || echo STORAGE_OPTS=additionalimagestore=/run/host-container-storage >> /etc/environment'
+RemainAfterExit=yes
+"#;
+    let encoded_unit = data_encoding::BASE64.encode(unit_content.as_bytes());
+    let unit_cred = format!(
+        "io.systemd.credential.binary:systemd.extra-unit.bcvk-storage-opts.service={encoded_unit}"
+    );
+
+    // Create dropin for sysinit.target to pull in our unit
+    let dropin_content = "[Unit]\nWants=bcvk-storage-opts.service\n";
+    let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
+    let dropin_cred = format!(
+        "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-storage={encoded_dropin}"
+    );
+
+    Ok(vec![unit_cred, dropin_cred])
+}
+
+/// Generate tmpfiles.d lines for STORAGE_OPTS in systemd contexts
+///
+/// Configures STORAGE_OPTS for:
+/// - /etc/environment.d/: systemd user manager and user services
+/// - /etc/systemd/system.conf.d/: system-level systemd services
+pub fn storage_opts_tmpfiles_d_lines() -> String {
+    concat!(
+        "f /etc/environment.d/90-bcvk-storage.conf 0644 root root - STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n",
+        "d /etc/systemd/system.conf.d 0755 root root -\n",
+        "f /etc/systemd/system.conf.d/90-bcvk-storage.conf 0644 root root - [Manager]\\nDefaultEnvironment=STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n"
+    ).to_string()
+}
+
+/// Generate SMBIOS credential string for root SSH access
+///
+/// Creates a systemd credential for QEMU's SMBIOS interface. Preferred method
+/// as it keeps credentials out of kernel command line and boot logs.
+///
+/// Returns a string for use with `qemu -smbios type=11,value="..."`
+pub fn smbios_cred_for_root_ssh(pubkey: &str) -> Result<String> {
+    let k = key_to_root_tmpfiles_d(pubkey);
+    let encoded = data_encoding::BASE64.encode(k.as_bytes());
+    let r = format!("io.systemd.credential.binary:tmpfiles.extra={encoded}");
+    Ok(r)
+}
+
+/// Generate kernel command-line argument for root SSH access
+///
+/// Creates a systemd credential for kernel command-line delivery. Less secure
+/// than SMBIOS method as credentials are visible in /proc/cmdline and boot logs.
+///
+/// Returns a string for use in kernel boot parameters.
+#[allow(dead_code)]
+pub fn karg_for_root_ssh(pubkey: &str) -> Result<String> {
+    let k = key_to_root_tmpfiles_d(pubkey);
+    let encoded = data_encoding::BASE64.encode(k.as_bytes());
+    let r = format!("systemd.set_credential_binary=tmpfiles.extra:{encoded}");
+    Ok(r)
+}
+
+/// Convert SSH public key to systemd tmpfiles.d configuration
+///
+/// Generates configuration to create `/root/.ssh` directory (0750) and
+/// `/root/.ssh/authorized_keys` file (700) with the Base64-encoded SSH key.
+/// Uses `f+~` to append to existing authorized_keys files.
+pub fn key_to_root_tmpfiles_d(pubkey: &str) -> String {
+    let buf = data_encoding::BASE64.encode(pubkey.as_bytes());
+    format!("d /root/.ssh 0750 - - -\nf+~ /root/.ssh/authorized_keys 700 - - - {buf}\n")
 }
 
 #[cfg(test)]

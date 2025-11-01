@@ -845,7 +845,7 @@ impl RunningQemu {
         let creds = sd_notification
             .as_ref()
             .map(|sd| {
-                let cred = crate::sshcred::smbios_cred_for_vsock_notify(2, sd.port.port());
+                let cred = crate::credentials::smbios_cred_for_vsock_notify(2, sd.port.port());
                 vec![cred]
             })
             .unwrap_or_default();

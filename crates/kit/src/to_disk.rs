@@ -226,6 +226,14 @@ impl ToDiskOpts {
             rm /var/lib/containers -rf
             ln -sr /var/tmp/containers /var/lib/containers
 
+            # Ensure virtiofs mount is available (fallback for older systemd without SMBIOS support)
+            AIS=/run/virtiofs-mnt-hoststorage/
+            if ! mountpoint -q ${AIS} &>/dev/null; then
+                echo "virtiofs mount not found at ${AIS}, mounting manually..."
+                mkdir -p ${AIS}
+                mount -t virtiofs mount_hoststorage ${AIS} -o ro
+            fi
+
             echo "Starting bootc installation..."
             echo "Source image: {SOURCE_IMGREF}"
             echo "Additional args: {BOOTC_ARGS}"
@@ -237,7 +245,6 @@ impl ToDiskOpts {
 
             # Execute bootc installation, having the outer podman pull from
             # the virtiofs store on the host, as well as the inner bootc.
-            AIS=/run/virtiofs-mnt-hoststorage/
             export STORAGE_OPTS=additionalimagestore=${AIS}
             podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
                  -v /var/lib/containers:/var/lib/containers -v /dev:/dev -v ${AIS}:${AIS} --security-opt label=type:unconfined_t \

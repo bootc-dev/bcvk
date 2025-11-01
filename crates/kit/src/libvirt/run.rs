@@ -736,9 +736,9 @@ fn process_bind_mounts(
         domain_builder = domain_builder.with_virtiofs_filesystem(virtiofs_fs);
 
         // Generate SMBIOS credential for mount unit (without dropin)
-        let unit_name = crate::sshcred::guest_path_to_unit_name(&bind_mount.guest_path);
+        let unit_name = crate::credentials::guest_path_to_unit_name(&bind_mount.guest_path);
         let mount_unit_content =
-            crate::sshcred::generate_mount_unit(&tag, &bind_mount.guest_path, readonly);
+            crate::credentials::generate_mount_unit(&tag, &bind_mount.guest_path, readonly);
         let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
         let mount_cred =
             format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}");
@@ -916,13 +916,13 @@ fn create_libvirt_domain_from_disk(
 
     // Generate SMBIOS credential for SSH key injection and systemd environment configuration
     // Combine SSH key setup and storage opts for systemd contexts
-    let mut tmpfiles_content = crate::sshcred::key_to_root_tmpfiles_d(&public_key_content);
-    tmpfiles_content.push_str(&crate::sshcred::storage_opts_tmpfiles_d_lines());
+    let mut tmpfiles_content = crate::credentials::key_to_root_tmpfiles_d(&public_key_content);
+    tmpfiles_content.push_str(&crate::credentials::storage_opts_tmpfiles_d_lines());
     let encoded = data_encoding::BASE64.encode(tmpfiles_content.as_bytes());
     let smbios_cred = format!("io.systemd.credential.binary:tmpfiles.extra={encoded}");
 
     // Generate SMBIOS credentials for storage opts unit (handles /etc/environment for PAM/SSH)
-    let storage_opts_creds = crate::sshcred::smbios_creds_for_storage_opts()?;
+    let storage_opts_creds = crate::credentials::smbios_creds_for_storage_opts()?;
 
     let memory = parse_memory_to_mb(&opts.memory.memory)?;
 
@@ -1064,9 +1064,9 @@ fn create_libvirt_domain_from_disk(
 
         // Generate mount unit for automatic mounting at /run/host-container-storage
         let guest_mount_path = "/run/host-container-storage";
-        let unit_name = crate::sshcred::guest_path_to_unit_name(guest_mount_path);
+        let unit_name = crate::credentials::guest_path_to_unit_name(guest_mount_path);
         let mount_unit_content =
-            crate::sshcred::generate_mount_unit("hoststorage", guest_mount_path, true);
+            crate::credentials::generate_mount_unit("hoststorage", guest_mount_path, true);
         let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
         let mount_cred =
             format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}");

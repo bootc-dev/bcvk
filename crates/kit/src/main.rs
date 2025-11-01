@@ -13,6 +13,7 @@ mod cli_json;
 mod common_opts;
 mod container_entrypoint;
 pub(crate) mod containerenv;
+mod credentials;
 mod domain_list;
 mod envdetect;
 mod ephemeral;
@@ -29,8 +30,6 @@ mod qemu_img;
 mod run_ephemeral;
 mod run_ephemeral_ssh;
 mod ssh;
-#[allow(dead_code)]
-mod sshcred;
 mod status_monitor;
 mod supervisor_status;
 pub(crate) mod systemd;
