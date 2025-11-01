@@ -18,17 +18,12 @@ The toolkit includes commands for:
 - Running ephemeral VMs for testing container images
 - Installing bootc containers to persistent disk images
 - Managing libvirt integration and VM lifecycle
-- Executing host commands from within containers
 - SSH access to running VMs
 
 <!-- BEGIN GENERATED OPTIONS -->
 <!-- END GENERATED OPTIONS -->
 
 # SUBCOMMANDS
-
-bcvk-hostexec(8)
-
-:   Execute commands on the host system from within containers
 
 bcvk-images(8)
 
