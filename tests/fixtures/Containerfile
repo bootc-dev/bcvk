@@ -1,0 +1,73 @@
+# Container for running bcvk ephemeral tests on C10S
+# This mirrors the CI workflow in .github/workflows/main-c10s.yml
+
+ARG base=quay.io/centos/centos:stream10
+FROM $base as build
+
+# Install build dependencies
+RUN dnf -y install dnf-utils && \
+    dnf config-manager --set-enabled crb && \
+    dnf install -y pkgconfig go-md2man gcc make openssl-devel openssh-clients && \
+    dnf clean all
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install nextest
+RUN cargo install cargo-nextest --locked
+
+# Copy source code
+COPY . /src
+WORKDIR /src
+
+# Build bcvk and create integration test archive
+RUN make && \
+    cargo nextest archive --release -P integration -p integration-tests --archive-file integration-tests.tar.zst
+
+# Runtime stage
+FROM $base
+
+# Install runtime dependencies for running VMs
+RUN dnf -y install dnf-utils && \
+    dnf config-manager --set-enabled crb && \
+    dnf install -y \
+        libvirt-daemon \
+        libvirt-daemon-driver-qemu \
+        libvirt-client \
+        qemu-kvm \
+        virtiofsd \
+        podman && \
+    dnf clean all
+
+# Copy cargo-nextest from build stage
+COPY --from=build /root/.cargo/bin/cargo-nextest /usr/local/bin/cargo-nextest
+
+# Copy built artifacts
+COPY --from=build /src/target/release/bcvk /usr/local/bin/bcvk
+COPY --from=build /src/integration-tests.tar.zst /tests/integration-tests.tar.zst
+
+# Copy source tree metadata needed by nextest
+# Nextest needs the workspace structure even when using archives
+COPY --from=build /src/Cargo.toml /src/Cargo.lock /tests/
+COPY --from=build /src/.config /tests/.config
+COPY --from=build /src/crates /tests/crates
+
+# Set up environment
+ENV BCVK_PATH=/usr/local/bin/bcvk
+ENV LIBVIRT_DEFAULT_URI=qemu:///system
+WORKDIR /tests
+
+# Create entrypoint script that pulls images and runs tests
+RUN <<EOF cat > /usr/local/bin/run-tests.sh
+#!/bin/bash
+set -euo pipefail
+echo "Pulling test images..."
+podman pull -q quay.io/fedora/fedora-bootc:42 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10
+echo "Running ephemeral integration tests..."
+exec /usr/local/bin/cargo-nextest nextest run --archive-file integration-tests.tar.zst --workspace-remap /tests ephemeral
+EOF
+RUN chmod +x /usr/local/bin/run-tests.sh
+
+# Default command runs the test script
+CMD ["/usr/local/bin/run-tests.sh"]

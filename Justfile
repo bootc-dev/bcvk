@@ -96,3 +96,10 @@ archive: build
 install: build
     cp target/release/bck ~/.local/bin/
 
+build-image-c10s:
+    podman build -f tests/fixtures/Containerfile -t localhost/bcvk:c10s .
+
+test-ephemeral-c10s: build-image-c10s
+    # TODO try downgrading to --cap-add=all --security-opt=label=type:container_runtime_t, I think
+    # we'll need to assume `--net=host` mainly in bcvk in this situation.
+    podman run --rm --privileged --device=/dev/kvm -v bcvk-test-storage:/var/lib/containers localhost/bcvk:c10s

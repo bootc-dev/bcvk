@@ -1,0 +1,27 @@
+name: CI (c10s)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-ephemeral:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Ubuntu environment with KVM
+        uses: ./.github/actions/bootc-ubuntu-setup
+
+      - name: Build C10S test container
+        run: podman build -f tests/fixtures/Containerfile -t localhost/bcvk:c10s .
+
+      - name: Run ephemeral integration tests
+        run: |
+          podman run --rm --privileged --device=/dev/kvm \
+            -v bcvk-test-storage:/var/lib/containers \
+            localhost/bcvk:c10s

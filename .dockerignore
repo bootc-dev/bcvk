@@ -1,0 +1,19 @@
+# Exclude everything by default, then include just what we need
+# Especially note this means that .git is not included, and not tests/
+# to avoid spurious rebuilds.
+*
+
+# Toplevel build bits
+!Makefile
+!Cargo.*
+# Docs
+!docs
+# We use the spec file
+!packaging/
+# Workaround for podman bug with secrets + remote
+# https://github.com/containers/podman/issues/25314
+!podman-build-secret*
+# Nextest configuration
+!.config/
+# And finally of course all the Rust sources
+!crates/
