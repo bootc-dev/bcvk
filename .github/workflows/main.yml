@@ -14,60 +14,64 @@ env:
 
 
 jobs:
-  build-and-test:
+  build:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y just pkg-config go-md2man libvirt-daemon libvirt-clients qemu-kvm qemu-system qemu-utils virtiofsd
-
-      - name: Install podman for heredoc support
-        run: |
-          set -eux
-          echo 'deb [trusted=yes] https://ftp.debian.org/debian/ testing main' | sudo tee /etc/apt/sources.list.d/testing.list
-          sudo apt update
-          sudo apt install -y crun/testing podman/testing just
-
-      - name: Enable KVM group perms
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/bootc-ubuntu-setup
+        with:
+          libvirt: 'true'
+
+      - name: Install additional dependencies
+        run: sudo apt install -y go-md2man
+
+      - name: Extract image lists from Justfile
+        run: |
+          echo "PRIMARY_IMAGE=$(just --evaluate PRIMARY_IMAGE)" >> $GITHUB_ENV
+          echo "ALL_BASE_IMAGES=$(just --evaluate ALL_BASE_IMAGES)" >> $GITHUB_ENV
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        
-      - uses: taiki-e/install-action@nextest
 
-      - name: Cache build artifacts
-        uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
 
       - name: Build
         run: just validate && just build
-        
+
       - name: Run unit tests
         run: just unit
-        
-      - name: Run integration tests
-        run: just test-integration
 
-      - name: Upload junit XML
-        if: always()
+      - name: Pull test images
+        run: just pull-test-images
+
+      - name: Create nextest archive
+        run: |
+          cargo nextest archive --release -p integration-tests --archive-file nextest-archive.tar.zst
+        env:
+          BCVK_PATH: ${{ github.workspace }}/target/release/bcvk
+          BCVK_PRIMARY_IMAGE: ${{ env.PRIMARY_IMAGE }}
+          BCVK_ALL_IMAGES: ${{ env.ALL_BASE_IMAGES }}
+
+      - name: Upload nextest archive
         uses: actions/upload-artifact@v4
         with:
-          name: integration-junit-xml
-          path: target/nextest/integration/junit.xml
+          name: nextest-archive
+          path: nextest-archive.tar.zst
           retention-days: 7
 
-      - name: Create archive
+      - name: Upload bcvk binary for tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcvk-binary-tests
+          path: target/release/bcvk
+          retention-days: 7
+
+      - name: Create bcvk archive
         run: just archive
-        
-      - name: Upload artifacts
+
+      - name: Upload bcvk binary artifacts
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
@@ -76,3 +80,81 @@ jobs:
             target/bcvk-*.tar.gz
             target/bcvk-*.tar.gz.sha256
           retention-days: 7
+
+  integration-tests:
+    runs-on: ubuntu-24.04
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/bootc-ubuntu-setup
+        with:
+          libvirt: 'true'
+
+      - name: Extract image lists from Justfile
+        run: |
+          echo "PRIMARY_IMAGE=$(just --evaluate PRIMARY_IMAGE)" >> $GITHUB_ENV
+          echo "ALL_BASE_IMAGES=$(just --evaluate ALL_BASE_IMAGES)" >> $GITHUB_ENV
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Pull test images
+        run: just pull-test-images
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive
+
+      - name: Download bcvk binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bcvk-binary-tests
+          path: target/release
+
+      - name: Make bcvk executable
+        run: chmod +x target/release/bcvk
+
+      - name: Run integration tests (partition ${{ matrix.partition }}/4)
+        run: |
+          # Clean up any leftover containers before starting
+          cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
+
+          # Run the partitioned tests
+          cargo nextest run --archive-file nextest-archive.tar.zst \
+            --profile integration \
+            --partition hash:${{ matrix.partition }}/4
+
+          # Clean up containers after tests complete
+          cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
+        env:
+          BCVK_PATH: ${{ github.workspace }}/target/release/bcvk
+          BCVK_PRIMARY_IMAGE: ${{ env.PRIMARY_IMAGE }}
+          BCVK_ALL_IMAGES: ${{ env.ALL_BASE_IMAGES }}
+
+      - name: Upload junit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-junit-xml-${{ matrix.partition }}
+          path: target/nextest/integration/junit.xml
+          retention-days: 7
+
+  # Sentinel job for required checks - configure this job name in repository settings
+  required-checks:
+    if: always()
+    needs: [build, integration-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+        if: >-
+          needs.build.result != 'success' ||
+          needs.integration-tests.result != 'success'

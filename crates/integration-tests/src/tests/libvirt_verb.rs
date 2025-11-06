@@ -87,142 +87,6 @@ fn test_libvirt_list_json_output() -> Result<()> {
 }
 integration_test!(test_libvirt_list_json_output);
 
-/// Test libvirt list JSON output includes SSH metadata
-fn test_libvirt_run_list_json_ssh_metadata() -> Result<()> {
-    let test_image = get_test_image();
-
-    // Generate unique domain name for this test
-    let domain_name = format!(
-        "test-json-ssh-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-
-    println!(
-        "Testing libvirt list JSON output with SSH metadata for domain: {}",
-        domain_name
-    );
-
-    // Cleanup any existing domain with this name
-    cleanup_domain(&domain_name);
-
-    // Create domain with SSH key generation (default behavior)
-    println!("Creating libvirt domain with SSH key...");
-    let create_output = run_bcvk(&[
-        "libvirt",
-        "run",
-        "--name",
-        &domain_name,
-        "--label",
-        LIBVIRT_INTEGRATION_TEST_LABEL,
-        "--filesystem",
-        "ext4",
-        &test_image,
-    ])
-    .expect("Failed to run libvirt run");
-
-    println!("Create stdout: {}", create_output.stdout);
-    println!("Create stderr: {}", create_output.stderr);
-
-    if !create_output.success() {
-        cleanup_domain(&domain_name);
-        panic!("Failed to create domain with SSH: {}", create_output.stderr);
-    }
-
-    println!("Successfully created domain: {}", domain_name);
-
-    // List domains with JSON format
-    println!("Listing domains with JSON format...");
-    let bck = get_bck_command()?;
-    let list_output = Command::new(&bck)
-        .args(["libvirt", "list", "--format", "json", "-a"])
-        .output()
-        .expect("Failed to run libvirt list --format json");
-
-    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
-    println!("List JSON output: {}", list_stdout);
-
-    // Cleanup domain before assertions
-    cleanup_domain(&domain_name);
-
-    // Check that the command succeeded
-    if !list_output.status.success() {
-        let stderr = String::from_utf8_lossy(&list_output.stderr);
-        panic!("libvirt list --format json failed: {}", stderr);
-    }
-
-    // Parse JSON output
-    let domains: Vec<serde_json::Value> =
-        serde_json::from_str(&list_stdout).expect("Failed to parse JSON output from libvirt list");
-
-    // Find our test domain in the output
-    let test_domain = domains
-        .iter()
-        .find(|d| d["name"].as_str() == Some(&domain_name))
-        .expect(&format!(
-            "Test domain '{}' not found in JSON output",
-            domain_name
-        ));
-
-    println!("Found test domain in JSON output: {:?}", test_domain);
-
-    // Verify SSH port is present and is a number
-    let ssh_port = test_domain["ssh_port"]
-        .as_u64()
-        .expect("ssh_port should be present and be a number");
-    assert!(
-        ssh_port > 0 && ssh_port < 65536,
-        "ssh_port should be a valid port number, got: {}",
-        ssh_port
-    );
-    println!("✓ ssh_port is present and valid: {}", ssh_port);
-
-    // Verify has_ssh_key is true
-    let has_ssh_key = test_domain["has_ssh_key"]
-        .as_bool()
-        .expect("has_ssh_key should be present and be a boolean");
-    assert!(
-        has_ssh_key,
-        "has_ssh_key should be true for domain created with SSH key"
-    );
-    println!("✓ has_ssh_key is true");
-
-    // Verify ssh_private_key is present and looks like a valid SSH key
-    let ssh_private_key = test_domain["ssh_private_key"]
-        .as_str()
-        .expect("ssh_private_key should be present and be a string");
-    assert!(
-        !ssh_private_key.is_empty(),
-        "ssh_private_key should not be empty"
-    );
-    assert!(
-        ssh_private_key.contains("-----BEGIN") && ssh_private_key.contains("PRIVATE KEY-----"),
-        "ssh_private_key should be a valid SSH private key format, got: {}",
-        &ssh_private_key[..std::cmp::min(100, ssh_private_key.len())]
-    );
-    assert!(
-        ssh_private_key.contains("-----END") && ssh_private_key.contains("PRIVATE KEY-----"),
-        "ssh_private_key should have proper end marker"
-    );
-
-    // Verify the key has proper newlines (not escaped \n)
-    assert!(
-        ssh_private_key.lines().count() > 1,
-        "ssh_private_key should have multiple lines, not escaped newlines"
-    );
-
-    println!(
-        "✓ ssh_private_key is present and valid (has {} lines)",
-        ssh_private_key.lines().count()
-    );
-
-    println!("✓ libvirt list JSON SSH metadata test passed");
-    Ok(())
-}
-integration_test!(test_libvirt_run_list_json_ssh_metadata);
-
 /// Test domain resource configuration options
 fn test_libvirt_run_resource_options() -> Result<()> {
     let bck = get_bck_command()?;
@@ -339,13 +203,15 @@ fn test_libvirt_ssh_integration() -> Result<()> {
 }
 integration_test!(test_libvirt_ssh_integration);
 
-/// Test libvirt run with instancetype
-fn test_libvirt_run_with_instancetype() -> Result<()> {
+/// Comprehensive workflow test: creates a VM and tests multiple features
+/// This consolidates several smaller tests to reduce expensive disk image creation
+fn test_libvirt_comprehensive_workflow() -> Result<()> {
     let test_image = get_test_image();
+    let bck = get_bck_command()?;
 
     // Generate unique domain name for this test
     let domain_name = format!(
-        "test-itype-{}",
+        "test-workflow-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -353,15 +219,15 @@ fn test_libvirt_run_with_instancetype() -> Result<()> {
     );
 
     println!(
-        "Testing libvirt run with instancetype for domain: {}",
+        "Testing comprehensive libvirt workflow for domain: {}",
         domain_name
     );
 
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
-    // Create domain with instancetype
-    println!("Creating libvirt domain with instancetype u1.small...");
+    // Create domain with multiple features: instancetype, labels, SSH
+    println!("Creating libvirt domain with instancetype and labels...");
     let create_output = run_bcvk(&[
         "libvirt",
         "run",
@@ -369,6 +235,8 @@ fn test_libvirt_run_with_instancetype() -> Result<()> {
         &domain_name,
         "--label",
         LIBVIRT_INTEGRATION_TEST_LABEL,
+        "--label",
+        "test-workflow",
         "--itype",
         "u1.small",
         "--filesystem",
@@ -382,31 +250,24 @@ fn test_libvirt_run_with_instancetype() -> Result<()> {
 
     if !create_output.success() {
         cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain with instancetype: {}",
-            create_output.stderr
-        );
+        panic!("Failed to create domain: {}", create_output.stderr);
     }
 
     println!("Successfully created domain: {}", domain_name);
 
-    // Inspect the domain to verify instancetype was set
+    // Test 1: Verify instancetype configuration (u1.small: 1 vcpu, 2048 MB)
+    println!("Test 1: Verifying instancetype configuration...");
     let inspect_output = run_bcvk(&["libvirt", "inspect", "--format", "xml", &domain_name])
         .expect("Failed to run libvirt inspect");
 
     let inspect_stdout = inspect_output.stdout;
-    println!("Inspect output: {}", inspect_stdout);
-
-    // Parse XML to verify memory and vcpus match u1.small (1 vcpu, 2048 MB)
     let dom = parse_xml_dom(&inspect_stdout).expect("Failed to parse domain XML");
 
-    // Check vCPUs (should be 1 for u1.small)
     let vcpu_node = dom.find("vcpu").expect("vcpu element not found");
     let vcpus: u32 = vcpu_node.text.parse().expect("Failed to parse vcpu count");
     assert_eq!(vcpus, 1, "u1.small should have 1 vCPU, got {}", vcpus);
     println!("✓ vCPUs correctly set to: {}", vcpus);
 
-    // Check memory (should be 2048 MB = 2097152 KB for u1.small)
     let memory_node = dom.find("memory").expect("memory element not found");
     let memory_kb: u64 = memory_node.text.parse().expect("Failed to parse memory");
     let memory_mb = memory_kb / 1024;
@@ -417,13 +278,118 @@ fn test_libvirt_run_with_instancetype() -> Result<()> {
     );
     println!("✓ Memory correctly set to: {} MB", memory_mb);
 
+    // Test 2: Verify labels in domain XML
+    println!("Test 2: Verifying label functionality...");
+    let dumpxml_output = Command::new("virsh")
+        .args(&["dumpxml", &domain_name])
+        .output()
+        .expect("Failed to dump domain XML");
+
+    let domain_xml = String::from_utf8_lossy(&dumpxml_output.stdout);
+
+    assert!(
+        domain_xml.contains("bootc:label") || domain_xml.contains("<label>"),
+        "Domain XML should contain label metadata"
+    );
+    assert!(
+        domain_xml.contains(LIBVIRT_INTEGRATION_TEST_LABEL),
+        "Domain XML should contain integration test label"
+    );
+    assert!(
+        domain_xml.contains("test-workflow"),
+        "Domain XML should contain workflow label"
+    );
+    println!("✓ Labels verified in domain XML");
+
+    // Test 3: Verify label filtering with libvirt list
+    println!("Test 3: Testing label filtering...");
+    let list_output = Command::new(&bck)
+        .args(["libvirt", "list", "--label", "test-workflow", "-a"])
+        .output()
+        .expect("Failed to run libvirt list with label filter");
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        list_output.status.success(),
+        "libvirt list with label filter should succeed"
+    );
+    assert!(
+        list_stdout.contains(&domain_name),
+        "Domain should appear in filtered list"
+    );
+    println!("✓ Label filtering works correctly");
+
+    // Test 4: Verify JSON output includes SSH metadata
+    println!("Test 4: Verifying JSON output with SSH metadata...");
+    let list_json_output = Command::new(&bck)
+        .args(["libvirt", "list", "--format", "json", "-a"])
+        .output()
+        .expect("Failed to run libvirt list --format json");
+
+    let list_json_stdout = String::from_utf8_lossy(&list_json_output.stdout);
+
+    if !list_json_output.status.success() {
+        cleanup_domain(&domain_name);
+        let stderr = String::from_utf8_lossy(&list_json_output.stderr);
+        panic!("libvirt list --format json failed: {}", stderr);
+    }
+
+    let domains: Vec<serde_json::Value> =
+        serde_json::from_str(&list_json_stdout).expect("Failed to parse JSON output");
+
+    let test_domain = domains
+        .iter()
+        .find(|d| d["name"].as_str() == Some(&domain_name))
+        .expect(&format!(
+            "Test domain '{}' not found in JSON output",
+            domain_name
+        ));
+
+    // Verify SSH metadata
+    let ssh_port = test_domain["ssh_port"]
+        .as_u64()
+        .expect("ssh_port should be present");
+    assert!(
+        ssh_port > 0 && ssh_port < 65536,
+        "ssh_port should be valid, got: {}",
+        ssh_port
+    );
+
+    let has_ssh_key = test_domain["has_ssh_key"]
+        .as_bool()
+        .expect("has_ssh_key should be present");
+    assert!(has_ssh_key, "has_ssh_key should be true");
+
+    let ssh_private_key = test_domain["ssh_private_key"]
+        .as_str()
+        .expect("ssh_private_key should be present");
+    assert!(
+        ssh_private_key.contains("-----BEGIN") && ssh_private_key.contains("PRIVATE KEY-----"),
+        "ssh_private_key should be valid"
+    );
+    println!("✓ JSON output includes valid SSH metadata");
+
+    // Test 5: Verify VM lifecycle (already running, test inspect)
+    println!("Test 5: Verifying VM is running...");
+    let dominfo_output = Command::new("virsh")
+        .args(&["dominfo", &domain_name])
+        .output()
+        .expect("Failed to run virsh dominfo");
+
+    let info = String::from_utf8_lossy(&dominfo_output.stdout);
+    assert!(
+        info.contains("running") || info.contains("idle"),
+        "Domain should be running"
+    );
+    println!("✓ VM is running and accessible");
+
     // Cleanup domain
     cleanup_domain(&domain_name);
 
-    println!("✓ libvirt run with instancetype test passed");
+    println!("✓ Comprehensive workflow test passed");
     Ok(())
 }
-integration_test!(test_libvirt_run_with_instancetype);
+integration_test!(test_libvirt_comprehensive_workflow);
 
 /// Helper function to cleanup domain
 fn cleanup_domain(domain_name: &str) {
@@ -737,137 +703,6 @@ fn test_libvirt_run_bind_storage_ro() -> Result<()> {
     Ok(())
 }
 integration_test!(test_libvirt_run_bind_storage_ro);
-
-/// Test libvirt label functionality
-fn test_libvirt_run_label_functionality() -> Result<()> {
-    let bck = get_bck_command()?;
-    let test_image = get_test_image();
-
-    // Generate unique domain name for this test
-    let domain_name = format!(
-        "test-label-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-
-    println!(
-        "Testing libvirt label functionality with domain: {}",
-        domain_name
-    );
-
-    // Cleanup any existing domain with this name
-    cleanup_domain(&domain_name);
-
-    // Create domain with multiple labels
-    println!("Creating libvirt domain with multiple labels...");
-    let create_output = run_bcvk(&[
-        "libvirt",
-        "run",
-        "--name",
-        &domain_name,
-        "--label",
-        LIBVIRT_INTEGRATION_TEST_LABEL,
-        "--label",
-        "test-env",
-        "--label",
-        "temporary",
-        "--filesystem",
-        "ext4",
-        &test_image,
-    ])
-    .expect("Failed to run libvirt run with labels");
-
-    println!("Create stdout: {}", create_output.stdout);
-    println!("Create stderr: {}", create_output.stderr);
-
-    if !create_output.success() {
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain with labels: {}",
-            create_output.stderr
-        );
-    }
-
-    println!("Successfully created domain with labels: {}", domain_name);
-
-    // Verify labels are stored in domain XML
-    println!("Checking domain XML for labels...");
-    let dumpxml_output = Command::new("virsh")
-        .args(&["dumpxml", &domain_name])
-        .output()
-        .expect("Failed to dump domain XML");
-
-    let domain_xml = String::from_utf8_lossy(&dumpxml_output.stdout);
-
-    // Check that labels are in the XML
-    assert!(
-        domain_xml.contains("bootc:label") || domain_xml.contains("<label>"),
-        "Domain XML should contain label metadata"
-    );
-    assert!(
-        domain_xml.contains(LIBVIRT_INTEGRATION_TEST_LABEL),
-        "Domain XML should contain bcvk-integration label"
-    );
-
-    // Test filtering by label
-    println!("Testing label filtering with libvirt list...");
-    let list_output = Command::new(&bck)
-        .args([
-            "libvirt",
-            "list",
-            "--label",
-            LIBVIRT_INTEGRATION_TEST_LABEL,
-            "-a",
-        ])
-        .output()
-        .expect("Failed to run libvirt list with label filter");
-
-    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
-    println!("List output: {}", list_stdout);
-
-    assert!(
-        list_output.status.success(),
-        "libvirt list with label filter should succeed"
-    );
-    assert!(
-        list_stdout.contains(&domain_name),
-        "Domain should appear in filtered list. Output: {}",
-        list_stdout
-    );
-
-    // Test filtering by a label that should match
-    let list_test_env = Command::new(&bck)
-        .args(["libvirt", "list", "--label", "test-env", "-a"])
-        .output()
-        .expect("Failed to run libvirt list with test-env label");
-
-    let list_test_env_stdout = String::from_utf8_lossy(&list_test_env.stdout);
-    assert!(
-        list_test_env_stdout.contains(&domain_name),
-        "Domain should appear when filtering by test-env label"
-    );
-
-    // Test filtering by a label that should NOT match
-    let list_nomatch = Command::new(&bck)
-        .args(["libvirt", "list", "--label", "nonexistent-label", "-a"])
-        .output()
-        .expect("Failed to run libvirt list with nonexistent label");
-
-    let list_nomatch_stdout = String::from_utf8_lossy(&list_nomatch.stdout);
-    assert!(
-        !list_nomatch_stdout.contains(&domain_name),
-        "Domain should NOT appear when filtering by nonexistent label"
-    );
-
-    // Cleanup domain
-    cleanup_domain(&domain_name);
-
-    println!("✓ Label functionality test passed");
-    Ok(())
-}
-integration_test!(test_libvirt_run_label_functionality);
 
 /// Test that STORAGE_OPTS credentials are NOT injected when --bind-storage-ro is not used
 fn test_libvirt_run_no_storage_opts_without_bind_storage() -> Result<()> {

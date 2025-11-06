@@ -91,6 +91,41 @@ fn test_base_disk_creation_and_reuse() -> Result<()> {
         "Should mention using base disk"
     );
 
+    // Test base-disks list shows creation timestamp
+    println!("Testing that base-disks list shows creation timestamp...");
+    let bck = get_bck_command()?;
+    let list_output = std::process::Command::new(&bck)
+        .args(["libvirt", "base-disks", "list"])
+        .output()
+        .expect("Failed to run base-disks list");
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let list_stderr = String::from_utf8_lossy(&list_output.stderr);
+
+    if list_output.status.success() {
+        println!("base-disks list output:\n{}", list_stdout);
+
+        // Should have CREATED column in header
+        assert!(
+            list_stdout.contains("CREATED"),
+            "Should show CREATED column in header"
+        );
+
+        // Should show timestamp values (either a date or "unknown")
+        // Timestamp format is YYYY-MM-DD HH:MM
+        let re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}|unknown").unwrap();
+        let has_timestamp = re.is_match(&list_stdout);
+        assert!(
+            has_timestamp,
+            "Should show timestamp values in CREATED column"
+        );
+
+        println!("✓ base-disks list shows creation timestamp");
+    } else {
+        println!("base-disks list failed: {}", list_stderr);
+        panic!("Failed to run base-disks list: {}", list_stderr);
+    }
+
     println!("✓ Base disk creation and reuse test passed");
     Ok(())
 }
@@ -136,76 +171,6 @@ fn test_base_disks_list_command() -> Result<()> {
     Ok(())
 }
 integration_test!(test_base_disks_list_command);
-
-/// Test base-disks list shows creation timestamp
-fn test_base_disks_list_shows_timestamp() -> Result<()> {
-    let test_image = get_test_image();
-    let bck = get_bck_command()?;
-
-    println!("Testing base-disks list shows creation timestamp");
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let vm_name = format!("test-base-timestamp-{}", timestamp);
-
-    cleanup_domain(&vm_name);
-
-    // Create a VM to ensure we have at least one base disk
-    println!("Creating VM to generate base disk...");
-    let vm_output = run_bcvk(&[
-        "libvirt",
-        "run",
-        "--name",
-        &vm_name,
-        "--filesystem",
-        "ext4",
-        &test_image,
-    ])?;
-
-    if !vm_output.success() {
-        cleanup_domain(&vm_name);
-        panic!("Failed to create VM: {}", vm_output.stderr);
-    }
-
-    // Run base-disks list
-    let output = Command::new(&bck)
-        .args(["libvirt", "base-disks", "list"])
-        .output()
-        .expect("Failed to run base-disks list");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    cleanup_domain(&vm_name);
-
-    if output.status.success() {
-        println!("base-disks list output:\n{}", stdout);
-
-        // Should have CREATED column in header
-        assert!(
-            stdout.contains("CREATED"),
-            "Should show CREATED column in header"
-        );
-
-        // Should show timestamp values (either a date or "unknown")
-        // Timestamp format is YYYY-MM-DD HH:MM
-        let re = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}|unknown").unwrap();
-        let has_timestamp = re.is_match(&stdout);
-        assert!(
-            has_timestamp,
-            "Should show timestamp values in CREATED column"
-        );
-
-        println!("✓ base-disks list shows creation timestamp");
-    } else {
-        println!("base-disks list failed: {}", stderr);
-        panic!("Failed to run base-disks list: {}", stderr);
-    }
-    Ok(())
-}
-integration_test!(test_base_disks_list_shows_timestamp);
 
 /// Test base-disks prune command with dry-run
 fn test_base_disks_prune_dry_run() -> Result<()> {
