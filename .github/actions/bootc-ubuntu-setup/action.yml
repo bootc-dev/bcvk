@@ -61,16 +61,6 @@ runs:
       id: set_arch
       shell: bash
       run: echo "ARCH=$(arch)" >> $GITHUB_ENV
-    # We often use Rust, so set up opinionated default caching
-    - name: Setup Rust cache
-      uses: Swatinem/rust-cache@v2
-      with:
-        cache-all-crates: true
-        # Only generate caches on push to git main
-        save-if: ${{ github.ref == 'refs/heads/main' }}
-        # Suppress actually using the cache for builds running from
-        # git main so that we avoid incremental compilation bugs
-        lookup-only: ${{ github.ref == 'refs/heads/main' }}
     # Install libvirt stack if requested
     - name: Install libvirt and virtualization stack
       if: ${{ inputs.libvirt == 'true' }}
