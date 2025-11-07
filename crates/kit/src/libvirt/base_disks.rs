@@ -7,9 +7,11 @@
 use crate::cache_metadata::DiskImageMetadata;
 use crate::install_options::InstallOptions;
 use camino::{Utf8Path, Utf8PathBuf};
+use cap_std_ext::cap_std;
+use cap_std_ext::cap_std::fs::Dir;
+use cap_std_ext::dirext::CapStdExtDirExt;
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
-use std::fs;
 use tracing::{debug, info};
 
 /// Find or create a base disk for the given parameters
@@ -33,47 +35,56 @@ pub fn find_or_create_base_disk(
     let base_disk_name = format!("bootc-base-{}.qcow2", short_hash);
 
     // Get storage pool path
+    let rootfs = Dir::open_ambient_dir("/", cap_std::ambient_authority())?;
     let pool_path = super::run::get_libvirt_storage_pool_path(connect_uri)?;
+    let pool_path = pool_path.strip_prefix("/").unwrap_or(&pool_path);
     let base_disk_path = pool_path.join(&base_disk_name);
 
     // Check if base disk already exists with valid metadata
-    if base_disk_path.exists() {
-        debug!("Checking existing base disk: {:?}", base_disk_path);
+    if let Some(pool_dir) = rootfs.open_dir_optional(pool_path)? {
+        if pool_dir.try_exists(&base_disk_name)? {
+            debug!("Checking existing base disk: {:?}", base_disk_path);
 
-        if crate::cache_metadata::check_cached_disk(
-            base_disk_path.as_std_path(),
+            if crate::cache_metadata::check_cached_disk(
+                &pool_dir,
+                &base_disk_name,
+                image_digest,
+                install_options,
+            )?
+            .is_ok()
+            {
+                return Ok(base_disk_path);
+            } else {
+                info!("Base disk exists but metadata doesn't match, will recreate");
+                pool_dir.remove_file(&base_disk_name).with_context(|| {
+                    format!("Failed to remove stale base disk: {:?}", base_disk_path)
+                })?;
+            }
+        }
+
+        // Base disk doesn't exist or was stale, create it
+        // Multiple concurrent processes may race to create this, but each uses
+        // a unique temp file, so they won't conflict
+        info!("Creating base disk: {:?}", base_disk_path);
+        create_base_disk(
+            &pool_dir,
+            Utf8Path::new(&base_disk_name),
+            source_image,
             image_digest,
             install_options,
-        )?
-        .is_ok()
-        {
-            return Ok(base_disk_path);
-        } else {
-            info!("Base disk exists but metadata doesn't match, will recreate");
-            fs::remove_file(&base_disk_path).with_context(|| {
-                format!("Failed to remove stale base disk: {:?}", base_disk_path)
-            })?;
-        }
+            connect_uri,
+        )?;
+
+        Ok(base_disk_path)
+    } else {
+        Err(eyre!("Pool directory does not exist: {}", pool_path))
     }
-
-    // Base disk doesn't exist or was stale, create it
-    // Multiple concurrent processes may race to create this, but each uses
-    // a unique temp file, so they won't conflict
-    info!("Creating base disk: {:?}", base_disk_path);
-    create_base_disk(
-        &base_disk_path,
-        source_image,
-        image_digest,
-        install_options,
-        connect_uri,
-    )?;
-
-    Ok(base_disk_path)
 }
 
 /// Create a new base disk
 fn create_base_disk(
-    base_disk_path: &Utf8Path,
+    dir: &Dir,
+    base_disk_name: &Utf8Path,
     source_image: &str,
     image_digest: &str,
     install_options: &InstallOptions,
@@ -84,18 +95,29 @@ fn create_base_disk(
 
     // Use a unique temporary file to avoid conflicts when multiple processes
     // race to create the same base disk
-    let temp_file = tempfile::Builder::new()
-        .prefix(&format!("{}.", base_disk_path.file_stem().unwrap()))
-        .suffix(".tmp.qcow2")
-        .tempfile_in(base_disk_path.parent().unwrap())
-        .with_context(|| {
-            format!(
-                "Failed to create temp file in {:?}",
-                base_disk_path.parent()
-            )
-        })?;
+    // We use a temp name pattern that includes a unique component to avoid collisions
+    let temp_name = format!(".{}.{}.tmp", base_disk_name, std::process::id());
 
-    let temp_disk_path = Utf8PathBuf::from(temp_file.path().to_str().unwrap());
+    // Get the actual path to use (need absolute path for to_disk)
+    let pool_path = super::run::get_libvirt_storage_pool_path(connect_uri)?;
+    let temp_disk_path = pool_path.join(&temp_name);
+
+    // Create a guard that will clean up the temp file on drop
+    struct TempFileGuard<'a> {
+        dir: &'a Dir,
+        name: String,
+    }
+
+    impl Drop for TempFileGuard<'_> {
+        fn drop(&mut self) {
+            let _ = self.dir.remove_file(&self.name);
+        }
+    }
+
+    let _temp_guard = TempFileGuard {
+        dir,
+        name: temp_name.clone(),
+    };
 
     // Keep the temp file open so it gets cleaned up automatically if we error out
     // We'll persist it manually on success
@@ -122,64 +144,59 @@ fn create_base_disk(
     };
 
     // Run bootc install - if it succeeds, the disk is valid
-    // On error, temp_file is automatically cleaned up when dropped
+    // On error, temp_guard is automatically cleaned up when dropped
     crate::to_disk::run(to_disk_opts)
         .with_context(|| format!("Failed to install bootc to base disk: {:?}", temp_disk_path))?;
 
     // If we got here, bootc install succeeded - verify metadata was written
-    let metadata_valid = crate::cache_metadata::check_cached_disk(
-        temp_disk_path.as_std_path(),
-        image_digest,
-        install_options,
-    )
-    .context("Querying cached disk")?;
-
-    match metadata_valid {
-        Ok(()) => {
-            // All validations passed - persist temp file to final location
-            // If another concurrent process already created the file, that's fine
-            match temp_file.persist(base_disk_path) {
-                Ok(_) => {
-                    debug!("Successfully created base disk: {:?}", base_disk_path);
-                }
-                Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // Another process won the race and created the base disk
-                    debug!(
-                        "Base disk already created by another process: {:?}",
-                        base_disk_path
-                    );
-                    // temp file is cleaned up when e is dropped
-                }
-                Err(e) => {
-                    return Err(e.error).with_context(|| {
-                        format!("Failed to persist base disk to {:?}", base_disk_path)
-                    });
-                }
-            }
-
-            // Refresh libvirt storage pool so the new disk is visible to virsh
-            let mut cmd = super::run::virsh_command(connect_uri)?;
-            cmd.args(&["pool-refresh", "default"]);
-
-            if let Err(e) = cmd
-                .output()
-                .with_context(|| "Failed to run virsh pool-refresh")
-            {
-                debug!("Warning: Failed to refresh libvirt storage pool: {}", e);
-                // Don't fail if pool refresh fails, the disk was created successfully
-            }
-
-            info!(
-                "Successfully created and validated base disk: {:?}",
-                base_disk_path
-            );
-            Ok(())
-        }
+    // Verify by reading back the xattrs using cap-std
+    match crate::cache_metadata::check_cached_disk(dir, &temp_name, image_digest, install_options)?
+    {
+        Ok(()) => {}
         Err(e) => {
-            // temp_file will be automatically cleaned up when dropped
-            Err(eyre!("Generated disk metadata validation failed: {e}"))
+            return Err(eyre!("Generated disk metadata validation failed: {e}"));
         }
     }
+
+    // All validations passed - rename temp file to final location
+    // If another concurrent process already created the file, that's fine
+    match dir.rename(&temp_name, dir, base_disk_name) {
+        Ok(_) => {
+            debug!("Successfully created base disk: {:?}", base_disk_name);
+            // Don't clean up the temp file since we successfully renamed it
+            std::mem::forget(_temp_guard);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Another process won the race and created the base disk
+            debug!(
+                "Base disk already created by another process: {:?}",
+                base_disk_name
+            );
+            // temp file is cleaned up when _temp_guard is dropped
+        }
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("Failed to persist base disk to {:?}", base_disk_name));
+        }
+    }
+
+    // Refresh libvirt storage pool so the new disk is visible to virsh
+    let mut cmd = super::run::virsh_command(connect_uri)?;
+    cmd.args(&["pool-refresh", "default"]);
+
+    if let Err(e) = cmd
+        .output()
+        .with_context(|| "Failed to run virsh pool-refresh")
+    {
+        debug!("Warning: Failed to refresh libvirt storage pool: {}", e);
+        // Don't fail if pool refresh fails, the disk was created successfully
+    }
+
+    info!(
+        "Successfully created and validated base disk: {:?}",
+        base_disk_name
+    );
+    Ok(())
 }
 
 /// Clone a base disk to create a VM-specific disk
@@ -191,7 +208,12 @@ pub fn clone_from_base(
     vm_name: &str,
     connect_uri: Option<&str>,
 ) -> Result<Utf8PathBuf> {
+    let rootfs = Dir::open_ambient_dir("/", cap_std::ambient_authority())?;
     let pool_path = super::run::get_libvirt_storage_pool_path(connect_uri)?;
+    let pool_path = pool_path.strip_prefix("/").unwrap_or(&pool_path);
+    let pool_dir = rootfs
+        .open_dir(pool_path)
+        .with_context(|| format!("Failed to open pool directory {:?}", pool_path))?;
 
     // Use predictable disk name
     let vm_disk_name = format!("{}.qcow2", vm_name);
@@ -231,9 +253,10 @@ pub fn clone_from_base(
     }
 
     // Also remove the file if it exists but wasn't tracked by libvirt
-    if vm_disk_path.exists() {
+    if pool_dir.try_exists(&vm_disk_name)? {
         debug!("Removing untracked disk file: {:?}", vm_disk_path);
-        fs::remove_file(&vm_disk_path)
+        pool_dir
+            .remove_file(&vm_disk_name)
             .with_context(|| format!("Failed to remove disk file: {:?}", vm_disk_path))?;
     }
 
@@ -243,7 +266,7 @@ pub fn clone_from_base(
     );
 
     // Get the virtual size of the base disk to use for the new volume
-    let info = crate::qemu_img::info(base_disk_path)?;
+    let info = crate::qemu_img::info(&pool_dir, base_disk_path)?;
     let virtual_size = info.virtual_size;
 
     // Create volume with backing file using vol-create-as
@@ -289,6 +312,8 @@ pub fn clone_from_base(
 pub fn list_base_disks(connect_uri: Option<&str>) -> Result<Vec<BaseDiskInfo>> {
     use super::run::list_storage_pool_volumes;
 
+    let rootfs = Dir::open_ambient_dir("/", cap_std::ambient_authority())?;
+
     let pool_path = super::run::get_libvirt_storage_pool_path(connect_uri)?;
     let mut base_disks = Vec::new();
 
@@ -305,37 +330,43 @@ pub fn list_base_disks(connect_uri: Option<&str>) -> Result<Vec<BaseDiskInfo>> {
         })
         .collect();
 
-    if let Ok(entries) = fs::read_dir(&pool_path) {
-        for entry in entries.flatten() {
-            if let Ok(file_name) = entry.file_name().into_string() {
-                // Check if this is a base disk
-                if file_name.starts_with("bootc-base-") && file_name.ends_with(".qcow2") {
-                    let path = pool_path.join(&file_name);
-
-                    // Try to read metadata
-                    let image_digest =
-                        crate::cache_metadata::DiskImageMetadata::read_image_digest_from_path(
-                            path.as_std_path(),
-                        )
-                        .unwrap_or(None);
-
-                    // Get file size and creation time
-                    let metadata = entry.metadata().ok();
-                    let size = metadata.as_ref().map(|m| m.len());
-                    let created = metadata.and_then(|m| m.created().ok());
-
-                    // Count references
-                    let ref_count = count_base_disk_references(&path, &vm_disks)?;
-
-                    base_disks.push(BaseDiskInfo {
-                        path,
-                        image_digest,
-                        size,
-                        ref_count,
-                        created,
-                    });
-                }
+    if let Some(d) = rootfs.open_dir_optional(&pool_path)? {
+        for entry in d.entries()? {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str().map(Utf8Path::new) else {
+                continue;
+            };
+            let path = pool_path.join(name);
+            let Some("qcow2") = name.extension() else {
+                continue;
+            };
+            if !name.starts_with("bootc-base-") {
+                continue;
             }
+
+            // Try to read metadata
+            let image_digest =
+                crate::cache_metadata::DiskImageMetadata::read_image_digest_from_path(
+                    &d, &file_name,
+                )
+                .unwrap_or(None);
+
+            // Get file size and creation time
+            let metadata = entry.metadata()?;
+            let size = Some(metadata.len());
+            let created = metadata.created()?.into_std();
+
+            // Count references
+            let ref_count = count_base_disk_references(&d, &name, &vm_disks)?;
+
+            base_disks.push(BaseDiskInfo {
+                path,
+                image_digest,
+                size,
+                ref_count,
+                created,
+            });
         }
     }
 
@@ -349,12 +380,18 @@ pub struct BaseDiskInfo {
     pub image_digest: Option<String>,
     pub size: Option<u64>,
     pub ref_count: usize,
-    pub created: Option<std::time::SystemTime>,
+    pub created: std::time::SystemTime,
 }
 
 /// Prune unreferenced base disks
 pub fn prune_base_disks(connect_uri: Option<&str>, dry_run: bool) -> Result<Vec<Utf8PathBuf>> {
     use super::run::list_storage_pool_volumes;
+
+    let rootfs = Dir::open_ambient_dir("/", cap_std::ambient_authority())?;
+    let pool_path = super::run::get_libvirt_storage_pool_path(connect_uri)?;
+    let pool_dir = rootfs
+        .open_dir(pool_path.strip_prefix("/").unwrap_or(&pool_path))
+        .with_context(|| format!("Failed to open pool directory {:?}", pool_path))?;
 
     let base_disks = list_base_disks(connect_uri)?;
     let all_volumes = list_storage_pool_volumes(connect_uri)?;
@@ -375,7 +412,7 @@ pub fn prune_base_disks(connect_uri: Option<&str>, dry_run: bool) -> Result<Vec<
 
     for base_disk in base_disks {
         // Check if any VM disk references this base
-        let is_referenced = check_base_disk_referenced(&base_disk.path, &vm_disks)?;
+        let is_referenced = check_base_disk_referenced(&pool_dir, &base_disk.path, &vm_disks)?;
 
         if !is_referenced {
             info!("Base disk not referenced by any VM: {:?}", base_disk.path);
@@ -415,13 +452,20 @@ pub fn prune_base_disks(connect_uri: Option<&str>, dry_run: bool) -> Result<Vec<
 }
 
 /// Count how many VM disks reference a specific base disk
-fn count_base_disk_references(base_disk: &Utf8Path, vm_disks: &[&Utf8PathBuf]) -> Result<usize> {
-    let base_disk_name = base_disk.file_name().unwrap();
+fn count_base_disk_references(
+    dir: &Dir,
+    base_disk: impl AsRef<Utf8Path>,
+    vm_disks: &[&Utf8PathBuf],
+) -> Result<usize> {
+    let base_disk = base_disk.as_ref();
+    let base_disk_name = base_disk
+        .file_name()
+        .ok_or_else(|| eyre!("Missing filename {base_disk}"))?;
     let mut count = 0;
 
     for vm_disk in vm_disks {
         // Use qemu-img info with --force-share to allow reading even if disk is locked by a running VM
-        let info = match crate::qemu_img::info(vm_disk) {
+        let info = match crate::qemu_img::info(dir, vm_disk) {
             Ok(info) => info,
             Err(_) => {
                 // If we can't read the disk, skip it for counting purposes
@@ -452,12 +496,16 @@ fn count_base_disk_references(base_disk: &Utf8Path, vm_disks: &[&Utf8PathBuf]) -
 }
 
 /// Check if a base disk is referenced by any VM disk (via qcow2 backing file)
-fn check_base_disk_referenced(base_disk: &Utf8Path, vm_disks: &[&Utf8PathBuf]) -> Result<bool> {
+fn check_base_disk_referenced(
+    dir: &Dir,
+    base_disk: &Utf8Path,
+    vm_disks: &[&Utf8PathBuf],
+) -> Result<bool> {
     let base_disk_name = base_disk.file_name().unwrap();
 
     for vm_disk in vm_disks {
         // Use qemu-img info with --force-share to allow reading even if disk is locked by a running VM
-        let info = match crate::qemu_img::info(vm_disk) {
+        let info = match crate::qemu_img::info(dir, vm_disk) {
             Ok(info) => info,
             Err(e) => {
                 // If we can't read the disk info, be conservative and assume it DOES reference this base

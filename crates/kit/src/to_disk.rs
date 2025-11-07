@@ -74,6 +74,7 @@
 //! ```
 
 use std::io::IsTerminal;
+use std::sync::Arc;
 
 use crate::cache_metadata::DiskImageMetadata;
 use crate::install_options::InstallOptions;
@@ -81,6 +82,9 @@ use crate::run_ephemeral::{run_detached, CommonVmOpts, RunEphemeralOpts};
 use crate::run_ephemeral_ssh::wait_for_ssh_ready;
 use crate::{images, ssh, utils};
 use camino::Utf8PathBuf;
+use cap_std_ext::cap_std;
+use cap_std_ext::cap_std::fs::Dir;
+use cap_std_ext::cmdext::CapStdExtCommandExt;
 use clap::{Parser, ValueEnum};
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
@@ -301,8 +305,14 @@ impl ToDiskOpts {
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
 pub fn run(opts: ToDiskOpts) -> Result<()> {
+    let rootfs = &Dir::open_ambient_dir("/", cap_std::ambient_authority())?;
+    let target_disk = opts
+        .target_disk
+        .strip_prefix("/")
+        .unwrap_or(&opts.target_disk);
+
     // Phase 0: Check for existing cached disk image
-    if opts.target_disk.exists() {
+    if rootfs.try_exists(target_disk)? {
         debug!(
             "Target disk {} already exists, checking cache metadata",
             opts.target_disk
@@ -314,10 +324,13 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
 
         // Check if cached disk matches our requirements
         match crate::cache_metadata::check_cached_disk(
-            opts.target_disk.as_std_path(),
+            &rootfs,
+            target_disk,
             &image_digest,
             &opts.install,
-        )? {
+        )
+        .context("Checking cached disk")?
+        {
             Ok(()) => {
                 println!(
                     "Reusing existing cached disk image (digest {image_digest}) at: {}",
@@ -327,10 +340,6 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
             }
             Err(e) => {
                 debug!("Existing disk does not match requirements, recreating: {e}");
-                // Remove the existing disk so we can recreate it
-                std::fs::remove_file(&opts.target_disk).with_context(|| {
-                    format!("Failed to remove existing disk {}", opts.target_disk)
-                })?;
             }
         }
     }
@@ -351,12 +360,13 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
 
     let disk_size = opts.calculate_disk_size()?;
 
+    // Open the target
+    let file = std::fs::File::create(&opts.target_disk)
+        .with_context(|| format!("Opening {}", opts.target_disk))?;
+
     // Create disk image based on format
     match opts.additional.format {
         Format::Raw => {
-            // Create sparse file - only allocates space as data is written
-            let file = std::fs::File::create(&opts.target_disk)
-                .with_context(|| format!("Opening {}", opts.target_disk))?;
             file.set_len(disk_size)?;
             // TODO pass to qemu via fdset
             drop(file);
@@ -366,13 +376,8 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
             debug!("Creating qcow2 with size {} bytes", disk_size);
             let size_arg = disk_size.to_string();
             let output = std::process::Command::new("qemu-img")
-                .args([
-                    "create",
-                    "-f",
-                    "qcow2",
-                    opts.target_disk.as_str(),
-                    &size_arg,
-                ])
+                .args(["create", "-f", "qcow2", "/proc/self/fd/3", &size_arg])
+                .take_fd_n(Arc::new(file.into()), 3)
                 .output()
                 .with_context(|| {
                     format!("Failed to run qemu-img create for {}", opts.target_disk)

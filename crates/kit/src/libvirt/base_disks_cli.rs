@@ -80,7 +80,8 @@ fn run_list(connect_uri: Option<&str>, opts: ListOpts) -> Result<()> {
 
                 let created = disk
                     .created
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
                     .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
                     .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                     .unwrap_or_else(|| "unknown".to_string());

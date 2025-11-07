@@ -9,14 +9,13 @@
 //! - The container image digest for visibility and tracking
 
 use crate::install_options::InstallOptions;
-use cap_std_ext::cap_std::{self, fs::Dir};
+use cap_std_ext::cap_std::fs::Dir;
 use cap_std_ext::dirext::CapStdExtDirExt;
 use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::File;
-use std::path::Path;
 
 /// Extended attribute name for storing bootc cache hash
 const BOOTC_CACHE_HASH_XATTR: &str = "user.bootc.cache_hash";
@@ -115,32 +114,13 @@ impl DiskImageMetadata {
         Ok(())
     }
 
-    /// Read image digest from a file path using extended attributes
-    pub fn read_image_digest_from_path(path: &Path) -> Result<Option<String>> {
-        // First check if file exists
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        // Get the parent directory and file name
-        // Use current directory if parent is empty (for bare filenames like "disk.img")
-        let parent = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Path has no file name"))?;
-
-        // Open the parent directory with cap-std
-        let dir = Dir::open_ambient_dir(parent, cap_std::ambient_authority())
-            .with_context(|| format!("Failed to open directory {:?}", parent))?;
-
+    /// Read image digest from a file using extended attributes
+    pub fn read_image_digest_from_path(dir: &Dir, file_name: &OsStr) -> Result<Option<String>> {
         // Get the image digest xattr
         let digest_data = match dir.getxattr(file_name, OsStr::new(BOOTC_IMAGE_DIGEST_XATTR))? {
             Some(data) => data,
             None => {
-                tracing::debug!("No image digest xattr found on {:?}", path);
+                tracing::debug!("No image digest xattr found on {:?}", file_name);
                 return Ok(None);
             }
         };
@@ -148,7 +128,7 @@ impl DiskImageMetadata {
         let digest = std::str::from_utf8(&digest_data)
             .with_context(|| "Invalid UTF-8 in image digest xattr")?;
 
-        tracing::debug!("Read image digest from {:?}: {}", path, digest);
+        tracing::debug!("Read image digest from {:?}: {}", file_name, digest);
         Ok(Some(digest.to_string()))
     }
 }
@@ -179,12 +159,15 @@ pub(crate) enum ValidationError {
 
 /// Check if a cached disk image can be reused by comparing cache hashes
 pub fn check_cached_disk(
-    path: &Path,
+    dir: &Dir,
+    file_name: impl AsRef<OsStr>,
     image_digest: &str,
     install_options: &InstallOptions,
 ) -> Result<Result<(), ValidationError>> {
-    if !path.exists() {
-        tracing::debug!("Disk image {:?} does not exist", path);
+    let file_name = file_name.as_ref();
+
+    if !dir.try_exists(file_name)? {
+        tracing::debug!("Disk image {:?} does not exist", file_name);
         return Ok(Err(ValidationError::MissingFile));
     }
 
@@ -193,24 +176,12 @@ pub fn check_cached_disk(
     let expected_hash = expected_meta.compute_cache_hash();
 
     // Read the cache hash from the disk image
-    // Use current directory if parent is empty (for bare filenames like "disk.img")
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| color_eyre::eyre::eyre!("Path has no file name"))?;
-
-    let dir = Dir::open_ambient_dir(parent, cap_std::ambient_authority())
-        .with_context(|| format!("Failed to open directory {:?}", parent))?;
-
     let cached_hash = match dir.getxattr(file_name, OsStr::new(BOOTC_CACHE_HASH_XATTR))? {
         Some(data) => std::str::from_utf8(&data)
             .with_context(|| "Invalid UTF-8 in cache hash xattr")?
             .to_string(),
         None => {
-            tracing::debug!("No cache hash xattr found on {:?}", path);
+            tracing::debug!("No cache hash xattr found on {:?}", file_name);
             return Ok(Err(ValidationError::MissingXattr));
         }
     };
@@ -218,16 +189,16 @@ pub fn check_cached_disk(
     let matches = expected_hash == cached_hash;
     if matches {
         tracing::debug!(
-            "Found cached disk image at {:?} matching cache hash {}",
-            path,
+            "Found cached disk image {:?} matching cache hash {}",
+            file_name,
             expected_hash
         );
         Ok(Ok(()))
     } else {
         tracing::debug!(
-            "Cached disk at {:?} does not match requirements. \
+            "Cached disk {:?} does not match requirements. \
              Expected hash: {}, found: {}",
-            path,
+            file_name,
             expected_hash,
             cached_hash
         );

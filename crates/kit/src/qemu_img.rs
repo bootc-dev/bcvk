@@ -1,6 +1,7 @@
 //! Helper functions for interacting with qemu-img
 
 use camino::Utf8Path;
+use cap_std_ext::{cap_std::fs::Dir, cmdext::CapStdExtCommandExt};
 use color_eyre::{eyre::Context, Result};
 use serde::Deserialize;
 use std::process::Command;
@@ -32,9 +33,10 @@ pub struct QemuImgInfo {
 ///
 /// The `--force-share` flag allows reading disk info even when the image
 /// is locked by a running VM.
-pub fn info(path: &Utf8Path) -> Result<QemuImgInfo> {
+pub fn info(dir: &Dir, path: &Utf8Path) -> Result<QemuImgInfo> {
     let output = Command::new("qemu-img")
         .args(["info", "--force-share", "--output=json", path.as_str()])
+        .cwd_dir(dir.try_clone()?)
         .output()
         .with_context(|| format!("Failed to run qemu-img info on {:?}", path))?;
 
