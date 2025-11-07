@@ -123,9 +123,11 @@ impl DiskImageMetadata {
         }
 
         // Get the parent directory and file name
+        // Use current directory if parent is empty (for bare filenames like "disk.img")
         let parent = path
             .parent()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Path has no parent directory"))?;
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let file_name = path
             .file_name()
             .ok_or_else(|| color_eyre::eyre::eyre!("Path has no file name"))?;
@@ -191,9 +193,11 @@ pub fn check_cached_disk(
     let expected_hash = expected_meta.compute_cache_hash();
 
     // Read the cache hash from the disk image
+    // Use current directory if parent is empty (for bare filenames like "disk.img")
     let parent = path
         .parent()
-        .ok_or_else(|| color_eyre::eyre::eyre!("Path has no parent directory"))?;
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let file_name = path
         .file_name()
         .ok_or_else(|| color_eyre::eyre::eyre!("Path has no file name"))?;
