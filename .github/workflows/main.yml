@@ -20,7 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/bootc-ubuntu-setup
+      - name: Setup bootc Ubuntu environment
+        uses: ./.github/actions/bootc-ubuntu-setup
         with:
           libvirt: 'true'
 
@@ -33,9 +34,7 @@ jobs:
           echo "ALL_BASE_IMAGES=$(just --evaluate ALL_BASE_IMAGES)" >> $GITHUB_ENV
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: taiki-e/install-action@nextest
+        uses: ./.github/actions/setup-rust
 
       - name: Build
         run: just validate && just build
@@ -102,9 +101,7 @@ jobs:
           echo "ALL_BASE_IMAGES=$(just --evaluate ALL_BASE_IMAGES)" >> $GITHUB_ENV
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: taiki-e/install-action@nextest
+        uses: ./.github/actions/setup-rust
 
       - name: Pull test images
         run: just pull-test-images
