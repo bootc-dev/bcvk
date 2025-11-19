@@ -453,6 +453,8 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
             opts.additional.format.as_str()
         )], // Attach target disk
         kernel_args: Default::default(),
+        cloud_init: None,        // No cloud-init for to-disk installation
+        cloud_init_empty: false, // No cloud-init for to-disk installation
     };
 
     // Phase 5: SSH-based VM configuration and execution

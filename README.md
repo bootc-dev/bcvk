@@ -7,6 +7,34 @@ disk images that can be imported into other virtualization frameworks.
 
 See [docs/src/installation.md](./docs/src/installation.md).
 
+## Dependencies
+
+bcvk requires the following runtime dependencies:
+
+### Core virtualization
+- **QEMU** - The core virtualization engine
+- **virtiofsd** - VirtIO filesystem daemon for sharing directories with VMs
+- **podman** - Container runtime for managing bootc images
+
+### For libvirt integration
+- **libvirt** - Virtualization management for persistent VMs
+
+### For cloud-init support
+- **dosfstools** - Provides `mkfs.vfat` for creating VFAT filesystems
+- **mtools** - Provides `mcopy` for populating VFAT images (used for cloud-init ConfigDrive)
+
+### Package installation
+
+**Debian/Ubuntu:**
+```bash
+sudo apt install qemu-kvm qemu-system qemu-utils virtiofsd podman libvirt-daemon libvirt-clients dosfstools mtools
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install qemu-kvm qemu-img virtiofsd podman libvirt libvirt-client dosfstools mtools
+```
+
 ## Quick Start
 
 ### Running a bootc container as ephemeral VM 

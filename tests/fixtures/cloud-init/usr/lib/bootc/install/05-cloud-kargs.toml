@@ -1,0 +1,5 @@
+[install]
+# See also:
+# - https://github.com/coreos/fedora-coreos-config/blob/testing-devel/platforms.yaml
+# - https://github.com/osbuild/images/blob/63a1eead26a7c802dbcebe863439f591be6dc6e5/pkg/distro/rhel9/qcow2.go#L159
+kargs = ["console=tty0", "console=ttyS0,115200n8"]
