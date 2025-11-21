@@ -453,6 +453,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
             opts.additional.format.as_str()
         )], // Attach target disk
         kernel_args: Default::default(),
+        debug_entrypoint: None,
     };
 
     // Phase 5: SSH-based VM configuration and execution

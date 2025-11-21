@@ -115,6 +115,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Set environment variables in the container (key=value)
 
+**--debug-entrypoint**=*DEBUG_ENTRYPOINT*
+
+    Do not run the default entrypoint directly, but instead invoke the provided command (e.g. `bash`)
+
 **--bind**=*HOST_PATH[:NAME]*
 
     Bind mount host directory (RW) at /run/virtiofs-mnt-<name>

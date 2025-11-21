@@ -240,6 +240,11 @@ pub struct RunEphemeralOpts {
     #[clap(flatten)]
     pub podman: CommonPodmanOptions,
 
+    /// Do not run the default entrypoint directly, but
+    /// instead invoke the provided command (e.g. `bash`).
+    #[clap(long)]
+    pub debug_entrypoint: Option<String>,
+
     #[clap(
         long = "bind",
         value_name = "HOST_PATH[:NAME]",
@@ -524,7 +529,8 @@ fn prepare_run_command_with_temp(
         cmd.args(["-e", &format!("BOOTC_DISK_FILES={}", disk_specs)]);
     }
 
-    cmd.args([&opts.image, ENTRYPOINT]);
+    let entrypoint = opts.debug_entrypoint.as_deref().unwrap_or(ENTRYPOINT);
+    cmd.args([&opts.image, entrypoint]);
 
     Ok((cmd, td))
 }
