@@ -882,8 +882,11 @@ fn process_bind_mounts(
 
         // Generate SMBIOS credential for mount unit (without dropin)
         let unit_name = crate::credentials::guest_path_to_unit_name(&bind_mount.guest_path);
-        let mount_unit_content =
-            crate::credentials::generate_mount_unit(&tag, &bind_mount.guest_path, readonly);
+        let mount_unit_content = crate::credentials::generate_virtiofs_mount_unit(
+            &tag,
+            &bind_mount.guest_path,
+            readonly,
+        );
         let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
         let mount_cred =
             format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}");
@@ -1211,7 +1214,7 @@ fn create_libvirt_domain_from_disk(
         let guest_mount_path = "/run/host-container-storage";
         let unit_name = crate::credentials::guest_path_to_unit_name(guest_mount_path);
         let mount_unit_content =
-            crate::credentials::generate_mount_unit("hoststorage", guest_mount_path, true);
+            crate::credentials::generate_virtiofs_mount_unit("hoststorage", guest_mount_path, true);
         let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
         let mount_cred =
             format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}");

@@ -915,7 +915,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
             let mount_point = format!("/run/virtiofs-mnt-{}", mount_name_str);
             let unit_name = crate::credentials::guest_path_to_unit_name(&mount_point);
             let mount_unit_content =
-                crate::credentials::generate_mount_unit(&tag, &mount_point, is_readonly);
+                crate::credentials::generate_virtiofs_mount_unit(&tag, &mount_point, is_readonly);
             let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
 
             // Create SMBIOS credential for the mount unit

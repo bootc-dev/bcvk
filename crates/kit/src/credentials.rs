@@ -45,8 +45,19 @@ pub fn guest_path_to_unit_name(guest_path: &str) -> String {
 /// Note: systemd automatically creates mount point directories, so DirectoryMode is not needed
 ///
 /// Returns the complete unit file content as a string
-pub fn generate_mount_unit(virtiofs_tag: &str, guest_path: &str, readonly: bool) -> String {
-    let options = if readonly { "Options=ro" } else { "Options=rw" };
+pub fn generate_virtiofs_mount_unit(
+    virtiofs_tag: &str,
+    guest_path: &str,
+    readonly: bool,
+) -> String {
+    let options = if readonly {
+        // Default readonly mounts to usr_t - this helps avoid SELinux
+        // issues when accessing them as container storage for example.
+        // TODO don't hardcode this, detect from the environment
+        "ro,context=system_u:object_r:usr_t:s0"
+    } else {
+        "rw"
+    };
 
     format!(
         "[Unit]\n\
@@ -61,7 +72,7 @@ pub fn generate_mount_unit(virtiofs_tag: &str, guest_path: &str, readonly: bool)
          What={tag}\n\
          Where={path}\n\
          Type=virtiofs\n\
-         {options}\n",
+         Options={options}\n",
         tag = virtiofs_tag,
         path = guest_path,
         options = options
@@ -82,7 +93,7 @@ pub fn smbios_creds_for_mount_unit(
     readonly: bool,
 ) -> Result<Vec<String>> {
     let unit_name = guest_path_to_unit_name(guest_path);
-    let mount_unit_content = generate_mount_unit(virtiofs_tag, guest_path, readonly);
+    let mount_unit_content = generate_virtiofs_mount_unit(virtiofs_tag, guest_path, readonly);
     let encoded_mount = data_encoding::BASE64.encode(mount_unit_content.as_bytes());
 
     let mount_cred =
