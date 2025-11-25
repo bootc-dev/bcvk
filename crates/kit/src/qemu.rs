@@ -884,6 +884,7 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
         "/usr/libexec/virtiofsd",
         "/usr/bin/virtiofsd",
         "/usr/local/bin/virtiofsd",
+        "/usr/lib/virtiofsd",
     ];
 
     let virtiofsd_binary = virtiofsd_paths
