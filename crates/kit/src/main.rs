@@ -8,6 +8,7 @@ mod arch;
 mod boot_progress;
 mod cache_metadata;
 mod cli_json;
+mod cloud_init;
 mod common_opts;
 mod container_entrypoint;
 mod credentials;
