@@ -247,12 +247,58 @@ impl ToDiskOpts {
                 tty=--tty
             fi
 
+            # Workaround for issue #126: Override container policy to allow signature changes.
+            # Some images (e.g., RHEL) have strict signature policies that prevent bootc install
+            # from changing layer representation. We create a permissive policy.json in a temp
+            # directory and mount only that file (not the entire /etc/containers directory) to
+            # avoid overwriting other files that might exist in that directory.
+            POLICY_DIR=$(mktemp -d)
+            trap 'rm -rf -- "${POLICY_DIR}"' EXIT
+            cat > "${POLICY_DIR}/policy.json" <<'EOF'
+{
+  "default": [
+    {
+      "type": "insecureAcceptAnything"
+    }
+  ],
+  "transports": {
+    "containers-storage": {
+      "": [
+        {
+          "type": "insecureAcceptAnything"
+        }
+      ]
+    },
+    "docker": {
+      "": [
+        {
+          "type": "insecureAcceptAnything"
+        }
+      ]
+    },
+    "docker-daemon": {
+      "": [
+        {
+          "type": "insecureAcceptAnything"
+        }
+      ]
+    }
+  }
+}
+EOF
+
             # Execute bootc installation, having the outer podman pull from
             # the virtiofs store on the host, as well as the inner bootc.
             # Mount /var/tmp into inner container to avoid cross-device link errors (issue #125)
+            # Override /etc/containers/policy.json with permissive policy.
+            # We mount the policy file to a temporary location first, then copy it to the final
+            # location using a wrapper script. This ensures we don't hide other files in /etc/containers
+            # that might be needed by the container image.
             export STORAGE_OPTS=additionalimagestore=${AIS}
             podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
-                 -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v ${AIS}:${AIS} --security-opt label=type:unconfined_t \
+                -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
+                --mount type=bind,source="${POLICY_DIR}/policy.json",target=/etc/containers/policy.json,readonly \
+                --security-opt label=type:unconfined_t \
                 --env=STORAGE_OPTS \
                 {INSTALL_LOG} \
                 {SOURCE_IMGREF} \
