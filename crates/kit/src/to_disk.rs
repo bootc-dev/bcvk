@@ -247,15 +247,34 @@ impl ToDiskOpts {
                 tty=--tty
             fi
 
+            # Workaround for issue #126: Copy image from additionalimagestore to local storage
+            # without signatures, since bootc install requires changing layer representation.
+            export STORAGE_OPTS=additionalimagestore=${AIS}
+            SOURCE_REF={SOURCE_IMGREF}
+            LOCAL_IMGREF="containers-storage:bcvk-temp-install:latest"
+            SIG_POLICY=$(mktemp)
+            trap 'rm -f -- "${SIG_POLICY}"' EXIT
+            cat > "${SIG_POLICY}" <<'EOF'
+{"default":[{"type":"insecureAcceptAnything"}],"transports":{"containers-storage":[{"type":"insecureAcceptAnything"}]}}
+EOF
+            if skopeo copy --signature-policy "${SIG_POLICY}" --remove-signatures \
+                --storage-opt "additionalimagestore=${AIS}" \
+                "${SOURCE_REF}" "${LOCAL_IMGREF}"; then
+                unset STORAGE_OPTS
+                PODMAN_ENV=""
+            else
+                LOCAL_IMGREF=${SOURCE_REF}
+                PODMAN_ENV="--env=STORAGE_OPTS"
+            fi
+
             # Execute bootc installation, having the outer podman pull from
             # the virtiofs store on the host, as well as the inner bootc.
             # Mount /var/tmp into inner container to avoid cross-device link errors (issue #125)
-            export STORAGE_OPTS=additionalimagestore=${AIS}
             podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
                  -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v ${AIS}:${AIS} --security-opt label=type:unconfined_t \
-                --env=STORAGE_OPTS \
+                ${PODMAN_ENV} \
                 {INSTALL_LOG} \
-                {SOURCE_IMGREF} \
+                ${LOCAL_IMGREF} \
                 bootc install to-disk \
                 --generic-image \
                 --skip-fetch-check \
