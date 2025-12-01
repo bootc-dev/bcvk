@@ -80,12 +80,17 @@ pub enum NetworkMode {
     User {
         /// Port forwarding rules: "tcp::2222-:22" format
         hostfwd: Vec<String>,
+        /// DNS servers to use (if None, QEMU's default 10.0.2.3 will be used)
+        dns_servers: Option<Vec<String>>,
     },
 }
 
 impl Default for NetworkMode {
     fn default() -> Self {
-        NetworkMode::User { hostfwd: vec![] }
+        NetworkMode::User {
+            hostfwd: vec![],
+            dns_servers: None,
+        }
     }
 }
 
@@ -322,8 +327,13 @@ impl QemuConfig {
     pub fn enable_ssh_access(&mut self, host_port: Option<u16>) -> &mut Self {
         let port = host_port.unwrap_or(2222); // Default to port 2222 on host
         let hostfwd = format!("tcp::{}-:22", port); // Forward host port to guest port 22
+                                                    // Preserve existing DNS servers if any
+        let dns_servers = match &self.network_mode {
+            NetworkMode::User { dns_servers, .. } => dns_servers.clone(),
+        };
         self.network_mode = NetworkMode::User {
             hostfwd: vec![hostfwd],
+            dns_servers,
         };
         self
     }
@@ -522,23 +532,40 @@ fn spawn(
 
     // Configure network (only User mode supported now)
     match &config.network_mode {
-        NetworkMode::User { hostfwd } => {
-            if hostfwd.is_empty() {
-                cmd.args([
-                    "-netdev",
-                    "user,id=net0",
-                    "-device",
-                    "virtio-net-pci,netdev=net0",
-                ]);
-            } else {
-                let hostfwd_arg = format!("user,id=net0,hostfwd={}", hostfwd.join(",hostfwd="));
-                cmd.args([
-                    "-netdev",
-                    &hostfwd_arg,
-                    "-device",
-                    "virtio-net-pci,netdev=net0",
-                ]);
+        NetworkMode::User {
+            hostfwd,
+            dns_servers,
+        } => {
+            let mut netdev_parts = vec!["user".to_string(), "id=net0".to_string()];
+
+            // Add DNS server if specified
+            // QEMU's dns= parameter only accepts a single IP address, so use the first one
+            if let Some(dns_list) = dns_servers {
+                if let Some(first_dns) = dns_list.first() {
+                    let dns_arg = format!("dns={}", first_dns);
+                    netdev_parts.push(dns_arg);
+                    if dns_list.len() > 1 {
+                        debug!(
+                            "QEMU dns= parameter only accepts a single IP, using first DNS server: {} (ignoring {} additional servers)",
+                            first_dns,
+                            dns_list.len() - 1
+                        );
+                    }
+                }
             }
+
+            // Add port forwarding rules
+            for fwd in hostfwd {
+                netdev_parts.push(format!("hostfwd={}", fwd));
+            }
+
+            let netdev_arg = netdev_parts.join(",");
+            cmd.args([
+                "-netdev",
+                &netdev_arg,
+                "-device",
+                "virtio-net-pci,netdev=net0",
+            ]);
         }
     }
 

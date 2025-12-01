@@ -283,6 +283,50 @@ pub struct RunEphemeralOpts {
 
     #[clap(long = "karg", help = "Additional kernel command line arguments")]
     pub kernel_args: Vec<String>,
+
+    /// Host DNS servers (read on host, passed to container for QEMU configuration)
+    /// Not a CLI option - populated automatically from host's /etc/resolv.conf
+    #[clap(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_dns_servers: Option<Vec<String>>,
+}
+
+/// Parse DNS servers from resolv.conf format content
+fn parse_resolv_conf(content: &str) -> Vec<String> {
+    let mut dns_servers = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        // Parse lines like "nameserver 8.8.8.8" or "nameserver 2001:4860:4860::8888"
+        if let Some(server) = line.strip_prefix("nameserver ") {
+            let server = server.trim();
+            if !server.is_empty() {
+                dns_servers.push(server.to_string());
+            }
+        }
+    }
+    dns_servers
+}
+
+/// Read DNS servers from host's /etc/resolv.conf
+/// Returns a vector of DNS server IP addresses, or None if unable to read/parse
+fn read_host_dns_servers() -> Option<Vec<String>> {
+    let resolv_conf = match std::fs::read_to_string("/etc/resolv.conf") {
+        Ok(content) => content,
+        Err(e) => {
+            debug!("Failed to read /etc/resolv.conf: {}", e);
+            return None;
+        }
+    };
+
+    let dns_servers = parse_resolv_conf(&resolv_conf);
+
+    if dns_servers.is_empty() {
+        debug!("No DNS servers found in /etc/resolv.conf");
+        None
+    } else {
+        debug!("Found DNS servers: {:?}", dns_servers);
+        Some(dns_servers)
+    }
 }
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
@@ -499,8 +543,20 @@ fn prepare_run_command_with_temp(
         cmd.args(["-v", &format!("{}:/run/systemd-units:ro", units_dir)]);
     }
 
+    // Read host DNS servers before entering container
+    // QEMU's slirp will use these instead of container's unreachable bridge DNS servers
+    let host_dns_servers = read_host_dns_servers();
+    if let Some(ref dns) = host_dns_servers {
+        debug!("Read host DNS servers: {:?}", dns);
+    } else {
+        debug!("No DNS servers found in host /etc/resolv.conf, QEMU will use default 10.0.2.3");
+    }
+
     // Pass configuration as JSON via BCK_CONFIG environment variable
-    let config = serde_json::to_string(&opts).unwrap();
+    // Include host DNS servers in the config so they're available inside the container
+    let mut opts_with_dns = opts.clone();
+    opts_with_dns.host_dns_servers = host_dns_servers;
+    let config = serde_json::to_string(&opts_with_dns).unwrap();
     cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
 
     // Handle --execute output files and virtio-serial devices
@@ -1228,6 +1284,34 @@ Options=
     // Add virtio-serial device for journal streaming
     qemu_config.add_virtio_serial_out("org.bcvk.journal", "/run/journal.log".to_string(), false);
     debug!("Added virtio-serial device for journal streaming to /run/journal.log");
+
+    // Configure DNS servers from host's /etc/resolv.conf
+    // This fixes DNS resolution issues when QEMU runs inside containers.
+    // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
+    // which contains unreachable bridge DNS servers (e.g., 169.254.1.1, 10.x.y.z).
+    // By passing host DNS servers via QEMU's dns= parameter, we bypass slirp's
+    // resolv.conf reading and use the host's actual DNS servers.
+    let dns_servers = opts.host_dns_servers.clone();
+    if let Some(ref dns) = dns_servers {
+        debug!(
+            "Using host DNS servers (from host /etc/resolv.conf): {:?}",
+            dns
+        );
+    } else {
+        debug!("No host DNS servers available, QEMU will use default 10.0.2.3");
+    }
+
+    // Configure DNS servers in network mode
+    if let Some(ref dns) = dns_servers {
+        match &mut qemu_config.network_mode {
+            crate::qemu::NetworkMode::User {
+                dns_servers: dns_opt,
+                ..
+            } => {
+                *dns_opt = Some(dns.clone());
+            }
+        }
+    }
 
     if opts.common.ssh_keygen {
         qemu_config.enable_ssh_access(None); // Use default port 2222
