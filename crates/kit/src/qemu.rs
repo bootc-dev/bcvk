@@ -523,22 +523,20 @@ fn spawn(
     // Configure network (only User mode supported now)
     match &config.network_mode {
         NetworkMode::User { hostfwd } => {
-            if hostfwd.is_empty() {
-                cmd.args([
-                    "-netdev",
-                    "user,id=net0",
-                    "-device",
-                    "virtio-net-pci,netdev=net0",
-                ]);
-            } else {
-                let hostfwd_arg = format!("user,id=net0,hostfwd={}", hostfwd.join(",hostfwd="));
-                cmd.args([
-                    "-netdev",
-                    &hostfwd_arg,
-                    "-device",
-                    "virtio-net-pci,netdev=net0",
-                ]);
+            let mut netdev_parts = vec!["user".to_string(), "id=net0".to_string()];
+
+            // Add port forwarding rules
+            for fwd in hostfwd {
+                netdev_parts.push(format!("hostfwd={}", fwd));
             }
+
+            let netdev_arg = netdev_parts.join(",");
+            cmd.args([
+                "-netdev",
+                &netdev_arg,
+                "-device",
+                "virtio-net-pci,netdev=net0",
+            ]);
         }
     }
 
