@@ -25,6 +25,12 @@ init_tmproot() {
     # Ensure we have /etc/passwd as ssh-keygen wants it for bad reasons
     systemd-sysusers --root $(pwd) &>/dev/null
 
+    # Copy DNS configuration from container's /etc/resolv.conf (configured by podman --dns)
+    # into the bwrap namespace so QEMU's slirp can use it for DNS resolution
+    if [ -f /etc/resolv.conf ]; then
+        cp /etc/resolv.conf /run/tmproot/etc/resolv.conf
+    fi
+
     # Shared directory between containers
     mkdir /run/inner-shared
 }

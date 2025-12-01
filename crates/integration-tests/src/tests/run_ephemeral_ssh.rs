@@ -358,3 +358,43 @@ fn test_run_ephemeral_ssh_broken_image_cleanup() -> Result<()> {
     Ok(())
 }
 integration_test!(test_run_ephemeral_ssh_broken_image_cleanup);
+
+/// Test ephemeral VM network and DNS
+///
+/// Verifies that ephemeral bootc VMs can access the network and resolve DNS correctly.
+/// Uses HTTP request to quay.io to test both DNS resolution and network connectivity.
+fn test_run_ephemeral_dns_resolution() -> Result<()> {
+    // Test DNS + network by connecting to quay.io
+    // Use curl or wget, whichever is available
+    // Any HTTP response (including 401) proves DNS resolution and network connectivity work
+    let network_test = run_bcvk(&[
+        "ephemeral",
+        "run-ssh",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        &get_test_image(),
+        "--",
+        "/bin/sh",
+        "-c",
+        r#"
+        if command -v curl >/dev/null 2>&1; then
+            curl -sS --max-time 10 https://quay.io/v2/ >/dev/null
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=10 -O /dev/null https://quay.io/v2/
+        else
+            echo "Neither curl nor wget available"
+            exit 1
+        fi
+        "#,
+    ])?;
+
+    assert!(
+        network_test.success(),
+        "Network connectivity test (HTTP request to quay.io) failed: stdout: {}\nstderr: {}",
+        network_test.stdout,
+        network_test.stderr
+    );
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_dns_resolution);

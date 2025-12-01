@@ -100,7 +100,7 @@ use color_eyre::Result;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const ENTRYPOINT: &str = "/var/lib/bcvk/entrypoint";
 
@@ -283,6 +283,87 @@ pub struct RunEphemeralOpts {
 
     #[clap(long = "karg", help = "Additional kernel command line arguments")]
     pub kernel_args: Vec<String>,
+
+    /// Host DNS servers (read on host, configured via podman --dns flags)
+    /// Not a CLI option - populated automatically from host's /etc/resolv.conf
+    #[clap(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_dns_servers: Option<Vec<String>>,
+}
+
+/// Parse DNS servers from resolv.conf format content
+fn parse_resolv_conf(content: &str) -> Vec<String> {
+    let mut dns_servers = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        // Parse lines like "nameserver 8.8.8.8" or "nameserver 2001:4860:4860::8888"
+        if let Some(server) = line.strip_prefix("nameserver ") {
+            let server = server.trim();
+            if !server.is_empty() {
+                dns_servers.push(server.to_string());
+            }
+        }
+    }
+    dns_servers
+}
+
+/// Read DNS servers from host's resolv.conf
+/// Returns a vector of DNS server IP addresses, or None if unable to read/parse
+///
+/// For systemd-resolved systems, reads from /run/systemd/resolve/resolv.conf
+/// which contains actual upstream DNS servers, not the stub resolver (127.0.0.53).
+/// Falls back to /etc/resolv.conf for non-systemd-resolved systems.
+fn read_host_dns_servers() -> Option<Vec<String>> {
+    // Try systemd-resolved's upstream DNS file first
+    // This avoids reading 127.0.0.53 (stub resolver) from /etc/resolv.conf
+    let paths = [
+        "/run/systemd/resolve/resolv.conf", // systemd-resolved upstream servers
+        "/etc/resolv.conf",                 // traditional or fallback
+    ];
+
+    for path in &paths {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let dns_servers = parse_resolv_conf(&content);
+
+                // Filter out localhost, link-local, and private network addresses
+                // QEMU runs in user networking mode (slirp) inside a container, which cannot
+                // reach private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x for IPv4,
+                // fc00::/7 ULA for IPv6). These are often VPN-only DNS servers that won't work.
+                // We'll fall back to public DNS (8.8.8.8, 1.1.1.1) which is more reliable.
+                let filtered_servers: Vec<String> = dns_servers
+                    .into_iter()
+                    .filter(|s| {
+                        // Try parsing as IPv4 first
+                        if let Ok(ip) = s.parse::<std::net::Ipv4Addr>() {
+                            // Reject loopback, link-local, and private addresses
+                            !ip.is_loopback() && !ip.is_link_local() && !ip.is_private()
+                        } else if let Ok(ip) = s.parse::<std::net::Ipv6Addr>() {
+                            // Reject loopback (::1), link-local (fe80::/10), ULA (fc00::/7), and multicast
+                            !ip.is_loopback() && !ip.is_multicast()
+                                && !(ip.segments()[0] & 0xffc0 == 0xfe80) // link-local fe80::/10
+                                && !(ip.segments()[0] & 0xfe00 == 0xfc00) // ULA fc00::/7 (private)
+                        } else {
+                            false // Reject invalid addresses
+                        }
+                    })
+                    .collect();
+
+                if !filtered_servers.is_empty() {
+                    debug!("Found DNS servers from {}: {:?}", path, filtered_servers);
+                    return Some(filtered_servers);
+                } else {
+                    debug!("No usable DNS servers in {}, trying next", path);
+                }
+            }
+            Err(e) => {
+                debug!("Failed to read {}: {}, trying next", path, e);
+            }
+        }
+    }
+
+    debug!("No DNS servers found in any resolv.conf file");
+    None
 }
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
@@ -499,8 +580,32 @@ fn prepare_run_command_with_temp(
         cmd.args(["-v", &format!("{}:/run/systemd-units:ro", units_dir)]);
     }
 
+    // Read host DNS servers and configure them via podman --dns flags
+    // This fixes DNS resolution issues when QEMU runs inside containers.
+    // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
+    // which would otherwise contain unreachable bridge DNS servers (e.g., 169.254.1.1).
+    // Using --dns properly configures /etc/resolv.conf in the container.
+    let host_dns_servers = read_host_dns_servers().or_else(|| {
+        // Fallback to public DNS if no usable DNS found in system configuration
+        // This ensures DNS works even when host has broken/unreachable DNS config
+        warn!("No usable DNS servers found in system configuration, falling back to public DNS (8.8.8.8, 1.1.1.1). This may not work in air-gapped environments.");
+        Some(vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()])
+    });
+
+    if let Some(ref dns) = host_dns_servers {
+        debug!("Using DNS servers for ephemeral VM: {:?}", dns);
+        // Configure DNS servers for the container using --dns flags
+        // This properly sets up /etc/resolv.conf in the container's network namespace
+        for server in dns {
+            cmd.args(["--dns", server]);
+        }
+    }
+
     // Pass configuration as JSON via BCK_CONFIG environment variable
-    let config = serde_json::to_string(&opts).unwrap();
+    // Include host DNS servers in the config so they're available inside the container
+    let mut opts_with_dns = opts.clone();
+    opts_with_dns.host_dns_servers = host_dns_servers;
+    let config = serde_json::to_string(&opts_with_dns).unwrap();
     cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
 
     // Handle --execute output files and virtio-serial devices
@@ -1228,6 +1333,16 @@ Options=
     // Add virtio-serial device for journal streaming
     qemu_config.add_virtio_serial_out("org.bcvk.journal", "/run/journal.log".to_string(), false);
     debug!("Added virtio-serial device for journal streaming to /run/journal.log");
+
+    // DNS is configured via podman --dns flags (see prepare_run_command_with_temp)
+    // This fixes DNS resolution issues when QEMU runs inside containers.
+    // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
+    // and podman properly sets it up using --dns instead of relying on bridge DNS.
+    if let Some(ref dns_servers) = opts.host_dns_servers {
+        debug!("DNS servers configured for QEMU slirp: {:?}", dns_servers);
+    } else {
+        warn!("No host DNS servers available, QEMU slirp will use container's resolv.conf which may not work");
+    }
 
     if opts.common.ssh_keygen {
         qemu_config.enable_ssh_access(None); // Use default port 2222
