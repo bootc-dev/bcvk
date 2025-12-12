@@ -202,6 +202,17 @@ impl ToDiskOpts {
             .map_err(|e| eyre!("Failed to quote source imgref '{}': {}", source_imgref, e))?
             .to_string();
 
+        // Quote the source image name for local storage operations
+        let quoted_source_image = shlex::try_quote(&self.source_image)
+            .map_err(|e| {
+                eyre!(
+                    "Failed to quote source image '{}': {}",
+                    self.source_image,
+                    e
+                )
+            })?
+            .to_string();
+
         let install_log = self
             .additional
             .install_log
@@ -247,12 +258,17 @@ impl ToDiskOpts {
                 tty=--tty
             fi
 
-            # Execute bootc installation, having the outer podman pull from
-            # the virtiofs store on the host, as well as the inner bootc.
-            # Mount /var/tmp into inner container to avoid cross-device link errors (issue #125)
+            # Try bootc install first with the image from additionalimagestore
+            # This avoids a deep copy when possible (issue #126)
             export STORAGE_OPTS=additionalimagestore=${AIS}
+
+            # Execute bootc installation
+            # Mount /var/tmp into inner container to avoid cross-device link errors (issue #125)
+            set +e  # Don't exit on error, we'll check for signature error and retry
+            ERROR_LOG=$(mktemp)
             podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
-                 -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v ${AIS}:${AIS} --security-opt label=type:unconfined_t \
+                -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
+                --security-opt label=type:unconfined_t \
                 --env=STORAGE_OPTS \
                 {INSTALL_LOG} \
                 {SOURCE_IMGREF} \
@@ -260,12 +276,59 @@ impl ToDiskOpts {
                 --generic-image \
                 --skip-fetch-check \
                 {BOOTC_ARGS} \
-                /dev/disk/by-id/virtio-output
+                /dev/disk/by-id/virtio-output 2> "$ERROR_LOG"
+            BOOTC_EXIT=$?
+            set -e
+
+            # Check if bootc failed with signature validation error
+            if [ $BOOTC_EXIT -ne 0 ] && grep -q "Would invalidate signatures" "$ERROR_LOG"; then
+                echo "Signature validation error detected, retrying with signature removal..."
+
+                # Workaround for issue #126 and containers/image#2590:
+                # Copy image to local storage without signatures when we hit the signature error.
+                # This is a fallback - we only do the deep copy when necessary.
+                # Note: containers/container-libs#144 would make this copy faster via reflinks.
+                # The real fix is containers/image#2590 to carry signatures across representation changes.
+                mkdir -p /etc/containers
+                cat > /etc/containers/policy.json <<'EOF'
+{
+  "default": [{"type": "insecureAcceptAnything"}],
+  "transports": {
+    "containers-storage": {"": [{"type": "insecureAcceptAnything"}]},
+    "docker": {"": [{"type": "insecureAcceptAnything"}]}
+  }
+}
+EOF
+
+                # Copy image without signatures
+                skopeo copy --remove-signatures {SOURCE_IMGREF} containers-storage:{SOURCE_IMAGE}
+
+                # Retry bootc install with the unsigned local copy
+                podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
+                    -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
+                    --security-opt label=type:unconfined_t \
+                    --env=STORAGE_OPTS \
+                    {INSTALL_LOG} \
+                    containers-storage:{SOURCE_IMAGE} \
+                    bootc install to-disk \
+                    --generic-image \
+                    --skip-fetch-check \
+                    {BOOTC_ARGS} \
+                    /dev/disk/by-id/virtio-output
+            elif [ $BOOTC_EXIT -ne 0 ]; then
+                # Some other error, display it and fail
+                cat "$ERROR_LOG" >&2
+                rm -f "$ERROR_LOG"
+                exit $BOOTC_EXIT
+            fi
+
+            rm -f "$ERROR_LOG"
 
             echo "Installation completed successfully!"
         "#}
         .replace("{TMPFS_SIZE}", &tmpfs_size_quoted)
         .replace("{SOURCE_IMGREF}", &quoted_source_imgref)
+        .replace("{SOURCE_IMAGE}", &quoted_source_image)
         .replace("{INSTALL_LOG}", &install_log)
         .replace("{BOOTC_ARGS}", &bootc_args);
 
