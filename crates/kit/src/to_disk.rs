@@ -430,6 +430,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
     // - Attach target disk via virtio-blk
     // - Disable networking (using local storage only)
     let ephemeral_opts = RunEphemeralOpts {
+        host_dns_servers: None,
         image: opts.get_installer_image().to_string(),
         common: common_opts,
         podman: crate::run_ephemeral::CommonPodmanOptions {
