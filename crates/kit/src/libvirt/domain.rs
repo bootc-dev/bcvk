@@ -465,7 +465,7 @@ impl DomainBuilder {
                 "filesystem",
                 &[("type", "mount"), ("accessmode", "passthrough")],
             )?;
-            writer.write_empty_element("driver", &[("type", "virtiofs"), ("queue", "1024")])?;
+            writer.write_empty_element("driver", &[("type", "virtiofs"), ("queue", "4096")])?;
             if filesystem.readonly {
                 writer.write_empty_element("readonly", &[])?;
             }
