@@ -326,23 +326,21 @@ fn read_host_dns_servers() -> Option<Vec<String>> {
             Ok(content) => {
                 let dns_servers = parse_resolv_conf(&content);
 
-                // Filter out localhost, link-local, and private network addresses
-                // QEMU runs in user networking mode (slirp) inside a container, which cannot
-                // reach private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x for IPv4,
-                // fc00::/7 ULA for IPv6). These are often VPN-only DNS servers that won't work.
-                // We'll fall back to public DNS (8.8.8.8, 1.1.1.1) which is more reliable.
+                // Filter out localhost and link-local addresses only
+                // Private network addresses (10.x, 172.16-31.x, 192.168.x, fc00::/7) are allowed
+                // because they may be reachable from the container/VM (e.g., VPN DNS servers).
                 let filtered_servers: Vec<String> = dns_servers
                     .into_iter()
                     .filter(|s| {
                         // Try parsing as IPv4 first
                         if let Ok(ip) = s.parse::<std::net::Ipv4Addr>() {
-                            // Reject loopback, link-local, and private addresses
-                            !ip.is_loopback() && !ip.is_link_local() && !ip.is_private()
+                            // Reject loopback and link-local addresses only
+                            !ip.is_loopback() && !ip.is_link_local()
                         } else if let Ok(ip) = s.parse::<std::net::Ipv6Addr>() {
-                            // Reject loopback (::1), link-local (fe80::/10), ULA (fc00::/7), and multicast
-                            !ip.is_loopback() && !ip.is_multicast()
+                            // Reject loopback (::1), link-local (fe80::/10), and multicast
+                            !ip.is_loopback()
+                                && !ip.is_multicast()
                                 && !(ip.segments()[0] & 0xffc0 == 0xfe80) // link-local fe80::/10
-                                && !(ip.segments()[0] & 0xfe00 == 0xfc00) // ULA fc00::/7 (private)
                         } else {
                             false // Reject invalid addresses
                         }
@@ -585,12 +583,7 @@ fn prepare_run_command_with_temp(
     // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
     // which would otherwise contain unreachable bridge DNS servers (e.g., 169.254.1.1).
     // Using --dns properly configures /etc/resolv.conf in the container.
-    let host_dns_servers = read_host_dns_servers().or_else(|| {
-        // Fallback to public DNS if no usable DNS found in system configuration
-        // This ensures DNS works even when host has broken/unreachable DNS config
-        warn!("No usable DNS servers found in system configuration, falling back to public DNS (8.8.8.8, 1.1.1.1). This may not work in air-gapped environments.");
-        Some(vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()])
-    });
+    let host_dns_servers = read_host_dns_servers();
 
     if let Some(ref dns) = host_dns_servers {
         debug!("Using DNS servers for ephemeral VM: {:?}", dns);
@@ -1474,4 +1467,43 @@ Options=
     status_writer.finish()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_resolv_conf() {
+        let cases = vec![
+            // (input, expected)
+            ("nameserver 8.8.8.8\n", vec!["8.8.8.8"]),
+            (
+                "nameserver 8.8.8.8\nnameserver 1.1.1.1\n",
+                vec!["8.8.8.8", "1.1.1.1"],
+            ),
+            ("# comment\nnameserver 8.8.8.8\n", vec!["8.8.8.8"]),
+            ("nameserver 127.0.0.1\n", vec!["127.0.0.1"]),
+            ("nameserver 169.254.1.1\n", vec!["169.254.1.1"]),
+            ("nameserver 10.0.0.1\n", vec!["10.0.0.1"]),
+            (
+                "nameserver 2001:4860:4860::8888\n",
+                vec!["2001:4860:4860::8888"],
+            ),
+            ("nameserver ::1\n", vec!["::1"]),
+            ("nameserver fe80::1\n", vec!["fe80::1"]),
+            ("nameserver fc00::1\n", vec!["fc00::1"]),
+            ("# only comments\n", vec![]),
+            ("", vec![]),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                parse_resolv_conf(input),
+                expected,
+                "failed for input: {:?}",
+                input
+            );
+        }
+    }
 }
