@@ -398,3 +398,62 @@ fn test_run_ephemeral_dns_resolution() -> Result<()> {
     Ok(())
 }
 integration_test!(test_run_ephemeral_dns_resolution);
+
+/// Test SSH timeout behavior when SSH is unavailable
+///
+/// Verifies that ephemeral run-ssh properly times out when SSH is masked.
+/// Uses systemd.mask=sshd.service to disable SSH, triggering the timeout mechanism.
+///
+/// Note: This tests the ephemeral timeout (~240s), not the libvirt SSH timeout (~60s).
+/// The libvirt SSH timeout (60s) is used by `bcvk libvirt ssh` and would require
+/// creating a libvirt VM to test properly.
+fn test_run_ephemeral_ssh_timeout() -> Result<()> {
+    eprintln!("Testing SSH timeout with masked sshd.service...");
+    eprintln!("This test takes ~240 seconds to complete...");
+
+    let start = Instant::now();
+
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run-ssh",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--karg",
+        "systemd.mask=sshd.service",
+        &get_test_image(),
+        "--",
+        "echo",
+        "should not reach here",
+    ])?;
+
+    let elapsed = start.elapsed();
+
+    // Command should fail (SSH timeout)
+    assert!(
+        !output.success(),
+        "Expected ephemeral run-ssh to fail with SSH timeout, but it succeeded"
+    );
+
+    // Verify the error message mentions timeout or readiness failure
+    assert!(
+        output.stderr.contains("Timeout waiting for readiness")
+            || output.stderr.contains("timeout")
+            || output.stderr.contains("failed after"),
+        "Expected error about timeout, got: {}",
+        output.stderr
+    );
+
+    // Verify timeout duration is approximately 240 seconds (±20s tolerance for CI variability)
+    let timeout_secs = elapsed.as_secs();
+    assert!(
+        timeout_secs >= 220 && timeout_secs <= 260,
+        "Expected timeout around 240 seconds, but got {} seconds. \
+         This suggests the ephemeral SSH timeout may not be working correctly.",
+        timeout_secs
+    );
+
+    eprintln!("✓ SSH timeout worked correctly ({}s)", timeout_secs);
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_ssh_timeout);

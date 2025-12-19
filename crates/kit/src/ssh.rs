@@ -220,7 +220,7 @@ impl Default for CommonSshOptions {
     fn default() -> Self {
         Self {
             strict_host_keys: false,
-            connect_timeout: 30,
+            connect_timeout: 1,
             server_alive_interval: 60,
             log_level: "ERROR".to_string(),
             extra_options: vec![],
@@ -363,7 +363,7 @@ mod tests {
     fn test_ssh_connection_options() {
         // Test default options
         let default_opts = SshConnectionOptions::default();
-        assert_eq!(default_opts.common.connect_timeout, 30);
+        assert_eq!(default_opts.common.connect_timeout, 1);
         assert!(default_opts.allocate_tty);
         assert_eq!(default_opts.common.log_level, "ERROR");
         assert!(default_opts.common.extra_options.is_empty());
