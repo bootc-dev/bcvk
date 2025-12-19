@@ -15,8 +15,14 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+use std::time::{Duration, Instant};
 use tempfile;
 use tracing::debug;
+
+// SSH retry configuration
+const SSH_RETRY_TIMEOUT_SECS: u64 = 60; // Total time to retry SSH connections
+const SSH_POLL_DELAY_SECS: u64 = 1; // Delay between SSH attempts
+const SSH_SERVER_ALIVE_INTERVAL: u32 = 60; // Server alive interval in seconds
 
 /// Configuration options for SSH connection to libvirt domain
 #[derive(Debug, Parser)]
@@ -36,7 +42,7 @@ pub struct LibvirtSshOpts {
     pub strict_host_keys: bool,
 
     /// SSH connection timeout in seconds
-    #[clap(long, default_value = "30")]
+    #[clap(long, default_value = "5")]
     pub timeout: u32,
 
     /// SSH log level
@@ -236,8 +242,39 @@ impl LibvirtSshOpts {
         Ok(temp_key)
     }
 
-    /// Execute SSH connection to domain
-    fn connect_ssh(&self, ssh_config: &DomainSshConfig) -> Result<()> {
+    /// Build SSH command with configured options
+    fn build_ssh_command(
+        &self,
+        ssh_config: &DomainSshConfig,
+        temp_key: &tempfile::NamedTempFile,
+        parsed_extra_options: Vec<(String, String)>,
+    ) -> Command {
+        let mut ssh_cmd = Command::new("ssh");
+        ssh_cmd
+            .arg("-i")
+            .arg(temp_key.path())
+            .arg("-p")
+            .arg(ssh_config.ssh_port.to_string());
+
+        let common_opts = crate::ssh::CommonSshOptions {
+            strict_host_keys: self.strict_host_keys,
+            connect_timeout: self.timeout,
+            server_alive_interval: SSH_SERVER_ALIVE_INTERVAL,
+            log_level: self.log_level.clone(),
+            extra_options: parsed_extra_options,
+        };
+        common_opts.apply_to_command(&mut ssh_cmd);
+        ssh_cmd.arg(format!("{}@127.0.0.1", self.user));
+
+        ssh_cmd
+    }
+
+    /// Execute SSH connection to domain with retries
+    fn connect_ssh(
+        &self,
+        _global_opts: &crate::libvirt::LibvirtOptions,
+        ssh_config: &DomainSshConfig,
+    ) -> Result<()> {
         debug!(
             "Connecting to domain '{}' via SSH on port {} (user: {})",
             self.domain_name, ssh_config.ssh_port, self.user
@@ -250,17 +287,7 @@ impl LibvirtSshOpts {
         // Create temporary SSH key file
         let temp_key = self.create_temp_ssh_key(ssh_config)?;
 
-        // Build SSH command
-        let mut ssh_cmd = Command::new("ssh");
-
-        // Add SSH key and port
-        ssh_cmd
-            .arg("-i")
-            .arg(temp_key.path())
-            .arg("-p")
-            .arg(ssh_config.ssh_port.to_string());
-
-        // Parse extra options from key=value format
+        // Parse extra options
         let mut parsed_extra_options = Vec::new();
         for option in &self.extra_options {
             if let Some((key, value)) = option.split_once('=') {
@@ -273,76 +300,98 @@ impl LibvirtSshOpts {
             }
         }
 
-        // Apply common SSH options
-        let common_opts = crate::ssh::CommonSshOptions {
-            strict_host_keys: self.strict_host_keys,
-            connect_timeout: self.timeout,
-            server_alive_interval: 60,
-            log_level: self.log_level.clone(),
-            extra_options: parsed_extra_options,
-        };
-        common_opts.apply_to_command(&mut ssh_cmd);
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs(SSH_RETRY_TIMEOUT_SECS);
 
-        // Target host
-        ssh_cmd.arg(format!("{}@127.0.0.1", self.user));
+        // First, do connectivity check with retries (for both interactive and command)
+        debug!("Testing SSH connectivity before session");
 
-        // Add command if specified - use the same argument escaping logic as container SSH
-        if !self.command.is_empty() {
-            ssh_cmd.arg("--");
-            if self.command.len() > 1 {
-                // Multiple arguments need proper shell escaping
-                let combined_command = crate::ssh::shell_escape_command(&self.command)
-                    .map_err(|e| eyre!("Failed to escape shell command: {}", e))?;
-                debug!("Combined escaped command: {}", combined_command);
-                ssh_cmd.arg(combined_command);
-            } else {
-                // Single argument can be passed directly
-                ssh_cmd.args(&self.command);
+        // Create progress bar for user feedback (only shown in terminals)
+        let pb = crate::boot_progress::create_boot_progress_bar();
+        pb.set_message("Waiting for SSH to be ready...");
+
+        loop {
+            let mut test_cmd =
+                self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options.clone());
+            test_cmd.arg("--").arg("true"); // Simple test command
+
+            let output = test_cmd.output().context("Failed to spawn SSH command")?;
+
+            if output.status.success() {
+                debug!(
+                    "SSH connectivity confirmed after {:.1}s",
+                    start_time.elapsed().as_secs_f64()
+                );
+                pb.finish_and_clear();
+                break;
             }
+
+            // Check if we've exceeded timeout
+            if start_time.elapsed() >= timeout {
+                pb.finish_and_clear();
+                if !self.suppress_output {
+                    let stderr_str = String::from_utf8_lossy(&output.stderr);
+                    eprint!("{}", stderr_str);
+                    eprintln!(
+                        "\nSSH connection failed after {:.1}s. To see VM console output, run: virsh console {}",
+                        start_time.elapsed().as_secs_f64(),
+                        self.domain_name
+                    );
+                }
+                return Err(eyre!("SSH connection failed after timeout"));
+            }
+
+            std::thread::sleep(Duration::from_secs(SSH_POLL_DELAY_SECS));
         }
 
-        debug!("Executing SSH command: {:?}", ssh_cmd);
-
-        // For commands (non-interactive SSH), capture output
-        // For interactive SSH (no command), exec to replace current process
+        // SSH is ready - now do the actual operation (oneshot)
         if self.command.is_empty() {
-            // Interactive SSH - exec to replace the current process
-            // This provides the cleanest terminal experience
-            debug!("Executing interactive SSH session via exec");
-
+            // Interactive: exec directly
+            debug!("SSH ready, launching interactive session");
+            let mut ssh_cmd = self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options);
             let error = ssh_cmd.exec();
-            // exec() only returns on error
             return Err(eyre!("Failed to exec SSH command: {}", error));
-        } else {
-            // Command execution - capture and forward output
-            let output = ssh_cmd
-                .output()
-                .map_err(|e| eyre!("Failed to execute SSH command: {}", e))?;
-
-            if !output.stdout.is_empty() {
-                if !self.suppress_output {
-                    // Forward stdout to parent process
-                    print!("{}", String::from_utf8_lossy(&output.stdout));
-                }
-                debug!("SSH stdout: {}", String::from_utf8_lossy(&output.stdout));
-            }
-            if !output.stderr.is_empty() {
-                if !self.suppress_output {
-                    // Forward stderr to parent process
-                    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-                }
-                debug!("SSH stderr: {}", String::from_utf8_lossy(&output.stderr));
-            }
-
-            if !output.status.success() {
-                return Err(eyre!(
-                    "SSH connection failed with exit code: {}",
-                    output.status.code().unwrap_or(-1)
-                ));
-            }
         }
 
-        Ok(())
+        // Command execution: single attempt since we already confirmed connectivity
+        debug!("SSH ready, executing command");
+        let mut ssh_cmd = self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options);
+
+        // Add command
+        ssh_cmd.arg("--");
+        if self.command.len() > 1 {
+            let combined_command = crate::ssh::shell_escape_command(&self.command)
+                .map_err(|e| eyre!("Failed to escape shell command: {}", e))?;
+            ssh_cmd.arg(combined_command);
+        } else {
+            ssh_cmd.args(&self.command);
+        }
+
+        // Execute command
+        let output = ssh_cmd
+            .output()
+            .map_err(|e| eyre!("Failed to execute SSH command: {}", e))?;
+
+        if output.status.success() {
+            if !output.stdout.is_empty() && !self.suppress_output {
+                print!("{}", String::from_utf8_lossy(&output.stdout));
+            }
+            debug!(
+                "Command completed successfully after {:.1}s total",
+                start_time.elapsed().as_secs_f64()
+            );
+            return Ok(());
+        }
+
+        // Command failed
+        if !self.suppress_output {
+            let stderr_str = String::from_utf8_lossy(&output.stderr);
+            eprint!("{}", stderr_str);
+        }
+        Err(eyre!(
+            "SSH command failed with exit code: {:?}",
+            output.status.code()
+        ))
     }
 }
 
@@ -377,8 +426,8 @@ pub fn run_ssh_impl(
     // Extract SSH configuration from domain metadata
     let ssh_config = opts.extract_ssh_config(global_opts)?;
 
-    // Connect via SSH
-    opts.connect_ssh(&ssh_config)?;
+    // Connect via SSH with retries
+    opts.connect_ssh(global_opts, &ssh_config)?;
 
     Ok(())
 }
