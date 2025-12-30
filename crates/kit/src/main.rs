@@ -18,6 +18,7 @@ mod install_options;
 mod instancetypes;
 mod libvirt;
 mod libvirt_upload_disk;
+mod osbuild_disk;
 #[allow(dead_code)]
 mod podman;
 mod qemu;
@@ -87,6 +88,10 @@ enum Commands {
     /// Install bootc images to persistent disk images
     #[clap(name = "to-disk")]
     ToDisk(to_disk::ToDiskOpts),
+
+    /// Build disk images using bootc-image-builder
+    #[clap(name = "osbuild-disk")]
+    OsbuildDisk(osbuild_disk::OsbuildDiskOpts),
 
     /// Manage libvirt integration for bootc containers
     Libvirt {
@@ -162,6 +167,9 @@ fn main() -> Result<(), Report> {
         Commands::Ephemeral(cmd) => cmd.run()?,
         Commands::ToDisk(opts) => {
             to_disk::run(opts)?;
+        }
+        Commands::OsbuildDisk(opts) => {
+            osbuild_disk::run(opts)?;
         }
         Commands::Libvirt { connect, command } => {
             let options = libvirt::LibvirtOptions { connect };
