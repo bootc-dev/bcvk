@@ -173,6 +173,10 @@ pub fn storage_opts_tmpfiles_d_lines() -> String {
         "f /etc/systemd/system.conf.d/90-bcvk-storage.conf 0644 root root - [Manager]\\nDefaultEnvironment=STORAGE_OPTS=additionalimagestore=/run/host-container-storage\n"
     ).to_string()
 }
+// Note: The /etc overlay and /var ephemeral units are now embedded directly in the
+// initramfs CPIO archive (see cpio.rs) rather than being injected via SMBIOS credentials.
+// This ensures they work on systemd <256 where credential import happens too late for
+// generators to process the credentials.
 
 /// Generate SMBIOS credential string for root SSH access
 ///

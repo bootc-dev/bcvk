@@ -10,6 +10,7 @@ mod cache_metadata;
 mod cli_json;
 mod common_opts;
 mod container_entrypoint;
+mod cpio;
 mod credentials;
 mod domain_list;
 mod ephemeral;

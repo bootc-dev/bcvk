@@ -299,3 +299,77 @@ fn test_run_ephemeral_instancetype_invalid() -> Result<()> {
     Ok(())
 }
 integration_test!(test_run_ephemeral_instancetype_invalid);
+
+/// Test that ephemeral VMs have the expected mount layout:
+/// - / is read-only virtiofs
+/// - /etc is overlayfs with tmpfs upper (writable)
+/// - /var is tmpfs (not overlayfs, so podman can use overlayfs inside)
+fn test_run_ephemeral_mount_layout() -> Result<()> {
+    // Check each mount point individually using findmnt
+    // Running all three at once with -J can hang on some configurations
+
+    // Check root mount
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--execute",
+        "findmnt -n -o FSTYPE,OPTIONS /",
+        &get_test_image(),
+    ])?;
+    output.assert_success("check root mount");
+    let root_line = output.stdout.trim();
+    assert!(
+        root_line.starts_with("virtiofs"),
+        "Root should be virtiofs, got: {}",
+        root_line
+    );
+    assert!(
+        root_line.contains("ro"),
+        "Root should be read-only, got: {}",
+        root_line
+    );
+
+    // Check /etc mount
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--execute",
+        "findmnt -n -o FSTYPE /etc",
+        &get_test_image(),
+    ])?;
+    output.assert_success("check /etc mount");
+    assert_eq!(
+        output.stdout.trim(),
+        "overlay",
+        "/etc should be overlay, got: {}",
+        output.stdout
+    );
+
+    // Check /var mount - should be tmpfs, NOT overlay
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--execute",
+        "findmnt -n -o FSTYPE /var",
+        &get_test_image(),
+    ])?;
+    output.assert_success("check /var mount");
+    assert_eq!(
+        output.stdout.trim(),
+        "tmpfs",
+        "/var should be tmpfs (not overlay), got: {}",
+        output.stdout
+    );
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_mount_layout);

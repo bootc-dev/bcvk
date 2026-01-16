@@ -1,0 +1,16 @@
+[Unit]
+Description=Copy bcvk units for post-switch-root on systemd <256
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+Before=initrd-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# On systemd <256, SMBIOS credentials with systemd.extra-unit.* are not processed
+# natively. We work around this by embedding the units in the initramfs and copying
+# them to /run/systemd/system/ before switch-root. The /run tmpfs is preserved
+# across switch-root via MS_MOVE.
+#
+# Copy journal-stream unit and create dropin for sysinit.target
+ExecStart=/bin/sh -c 'mkdir -p /run/systemd/system/sysinit.target.wants && cp /usr/lib/systemd/system/bcvk-journal-stream.service /run/systemd/system/ && ln -s ../bcvk-journal-stream.service /run/systemd/system/sysinit.target.wants/'
