@@ -1,0 +1,19 @@
+[Unit]
+Description=Setup ephemeral /etc overlay
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+Before=initrd-fs.target
+# Must run after sysroot.mount and initrd-parse-etc.service which scans /sysroot/etc/fstab
+After=sysroot.mount initrd-parse-etc.service
+Requires=sysroot.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=30
+# Bind-mount /sysroot/etc to a separate location first, then use that as lowerdir.
+# Using /sysroot/etc as both lowerdir and mount destination can hang on older kernels.
+ExecStart=/usr/bin/mkdir -p /run/etc-lower /run/etc-upper /run/etc-work
+ExecStart=/usr/bin/mount --bind /sysroot/etc /run/etc-lower
+# Use index=off,metacopy=off to avoid extended attr operations on virtiofs
+ExecStart=/usr/bin/mount -t overlay overlay -o lowerdir=/run/etc-lower,upperdir=/run/etc-upper,workdir=/run/etc-work,index=off,metacopy=off /sysroot/etc

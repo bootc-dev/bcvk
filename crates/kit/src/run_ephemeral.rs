@@ -944,28 +944,60 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     } else {
         let vmlinuz_path = vmlinuz_path
             .ok_or_else(|| eyre!("No kernel found in /run/source-image/usr/lib/modules"))?;
-        let initramfs_path = initramfs_path
+        let source_initramfs_path = initramfs_path
             .ok_or_else(|| eyre!("No initramfs found in /run/source-image/usr/lib/modules"))?;
 
         fs::File::create(&kernel_mount)?;
-        fs::File::create(&initramfs_mount)?;
 
-        // Bind mount kernel and initramfs
+        // Bind mount kernel (read-only is fine)
         Command::new("mount")
             .args(["--bind", "-o", "ro", vmlinuz_path.as_str(), &kernel_mount])
             .run()
             .map_err(|e| eyre!("Failed to bind mount kernel: {e}"))?;
 
-        Command::new("mount")
-            .args([
-                "--bind",
-                "-o",
-                "ro",
-                initramfs_path.as_str(),
-                &initramfs_mount,
-            ])
-            .run()
-            .map_err(|e| eyre!("Failed to bind mount initramfs: {e}"))?;
+        // Copy initramfs so we can append to it
+        fs::copy(&source_initramfs_path, &initramfs_mount)
+            .map_err(|e| eyre!("Failed to copy initramfs: {e}"))?;
+    }
+
+    // Append bcvk units to initramfs
+    // This includes:
+    // - /etc overlay and /var ephemeral services (run in initramfs)
+    // - bcvk-copy-units.service (copies journal-stream to /sysroot/etc for systemd <256)
+    // - bcvk-journal-stream.service (embedded for systemd <256 compatibility)
+    //
+    // The Linux kernel's initramfs parser requires uncompressed CPIO archives to start
+    // at a 4-byte aligned offset. We add NUL padding before our CPIO data to ensure
+    // proper alignment. The kernel skips NUL bytes between archives.
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let cpio_data = crate::cpio::create_initramfs_units_cpio()
+            .map_err(|e| eyre!("Failed to create initramfs CPIO: {e}"))?;
+        let mut initramfs_file = fs::OpenOptions::new()
+            .append(true)
+            .open(&initramfs_mount)
+            .map_err(|e| eyre!("Failed to open initramfs for appending: {e}"))?;
+
+        // Get current file size to calculate alignment padding
+        let current_size: u64 = initramfs_file
+            .seek(SeekFrom::End(0))
+            .map_err(|e| eyre!("Failed to get initramfs size: {e}"))?;
+        let aligned_size = current_size.next_multiple_of(4);
+        let padding_needed = aligned_size - current_size;
+        if padding_needed > 0 {
+            initramfs_file
+                .write_all(&vec![0u8; padding_needed as usize])
+                .map_err(|e| eyre!("Failed to write alignment padding: {e}"))?;
+        }
+
+        initramfs_file
+            .write_all(&cpio_data)
+            .map_err(|e| eyre!("Failed to append bcvk units to initramfs: {e}"))?;
+        debug!(
+            "Appended bcvk units to initramfs ({} bytes padding + {} bytes CPIO)",
+            padding_needed,
+            cpio_data.len()
+        );
     }
 
     // Process host mounts and prepare virtiofsd instances for each using async manager
@@ -1053,6 +1085,11 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         );
     }
 
+    // Note: /etc overlay and /var ephemeral units are now embedded directly in the
+    // initramfs CPIO (see cpio.rs) rather than injected via SMBIOS credentials.
+    // This ensures they work on systemd <256 where credential import happens too
+    // late for generators to process.
+
     // Handle --execute: pipes will be created when adding to qemu_config later
     // No need to create files anymore as we're using pipes
 
@@ -1099,6 +1136,8 @@ WantedBy=sysinit.target
 Description=Execute Script Service
 Requires=dev-virtio\x2dports-execute.device
 After=dev-virtio\x2dports-execute.device
+# Ensure we only run after switch-root in the real root filesystem
+ConditionPathExists=!/etc/initrd-release
 
 [Service]
 Type=oneshot
@@ -1116,6 +1155,8 @@ Description=Execute Script Service Completion
 After=bootc-execute.service
 Requires=dev-virtio\x2dports-executestatus.device
 After=dev-virtio\x2dports-executestatus.device
+# Ensure we only run after switch-root in the real root filesystem
+ConditionPathExists=!/etc/initrd-release
 
 [Service]
 Type=oneshot
@@ -1137,12 +1178,14 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             );
             mount_unit_smbios_creds.push(finish_cred);
 
-            // Create dropin for default.target to enable execute services
+            // Create dropin for multi-user.target to enable execute services
+            // Using multi-user.target instead of default.target ensures these only run
+            // after switch-root in the real root filesystem (not in initramfs)
             let execute_dropin =
                 "[Unit]\nWants=bootc-execute.service bootc-execute-finish.service\n";
             let encoded_dropin = data_encoding::BASE64.encode(execute_dropin.as_bytes());
             let dropin_cred = format!(
-                "io.systemd.credential.binary:systemd.unit-dropin.default.target~bcvk-execute={encoded_dropin}"
+                "io.systemd.credential.binary:systemd.unit-dropin.multi-user.target~bcvk-execute={encoded_dropin}"
             );
             mount_unit_smbios_creds.push(dropin_cred);
             debug!("Generated SMBIOS credentials for execute units");
@@ -1188,10 +1231,10 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         // At the core we boot from the mounted container's root,
         "rootfstype=virtiofs",
         "root=rootfs",
-        // But read-only, with an overlayfs in the VM backed
-        // by tmpfs
+        // But read-only. We set up /etc overlay and /var copyup via
+        // systemd credentials rather than systemd.volatile=overlay
+        // to have more control over individual directories.
         "rootflags=ro",
-        "systemd.volatile=overlay",
         // This avoids having journald interact with the rootfs
         // at all, which lessens the I/O traffic for virtiofs
         "systemd.journald.storage=volatile",

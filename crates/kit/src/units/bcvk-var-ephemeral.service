@@ -1,0 +1,15 @@
+[Unit]
+Description=Setup ephemeral /var from image content
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+Before=initrd-fs.target
+After=sysroot.mount initrd-parse-etc.service
+Requires=sysroot.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=60
+ExecStart=/usr/bin/mkdir -p /run/var-ephemeral
+ExecStart=/usr/bin/cp -a /sysroot/var/. /run/var-ephemeral/
+ExecStart=/usr/bin/mount --bind /run/var-ephemeral /sysroot/var
