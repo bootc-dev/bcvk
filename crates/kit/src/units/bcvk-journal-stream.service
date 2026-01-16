@@ -1,0 +1,18 @@
+[Unit]
+Description=Stream systemd journal to host via virtio-serial
+DefaultDependencies=no
+After=systemd-journald.service dev-virtio\x2dports-org.bcvk.journal.device
+Requires=systemd-journald.service dev-virtio\x2dports-org.bcvk.journal.device
+# Only run after switch-root (not in initramfs)
+ConditionPathExists=!/etc/initrd-release
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/journalctl -f -o short-precise --no-pager
+StandardOutput=file:/dev/virtio-ports/org.bcvk.journal
+StandardError=file:/dev/virtio-ports/org.bcvk.journal
+Restart=always
+RestartSec=1s
+
+[Install]
+WantedBy=sysinit.target
