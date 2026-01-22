@@ -1,14 +1,16 @@
 # NAME
 
-bcvk-ephemeral-run - Run bootc containers as ephemeral VMs
+bcvk-ephemeral-run - Run bootc containers as stateless VMs
 
 # SYNOPSIS
 
-**bcvk ephemeral run** [*OPTIONS*]
+**bcvk ephemeral run** \[*OPTIONS*\] *IMAGE*
 
 # DESCRIPTION
 
-Run bootc containers as ephemeral VMs using a sophisticated container-in-container approach.
+Run bootc containers as stateless VMs managed by podman. The VM boots directly
+from the container image's filesystem via virtiofs, with no disk image creation
+required. This makes startup fast and the VM stateless by default.
 
 ## How It Works
 
@@ -24,7 +26,6 @@ This command creates an ephemeral virtual machine by launching a podman containe
 5. **Kernel Boot**: The VM boots using the kernel and initramfs from the bootc container image
 
 This architecture provides several advantages:
-- **No Root Required**: Runs as a regular user without requiring root privileges on the host
 - **Isolation**: The VM runs in a contained environment separate from the host
 - **Fast I/O**: virtiofs provides efficient filesystem access between container and VM
 - **Resource Efficiency**: Leverages existing container infrastructure while providing full VM capabilities
@@ -38,7 +39,7 @@ The relationship between the podman container and the VM inside it:
 - **VM Guest**: The bootc container image runs as a complete operating system inside the VM
 - **Filesystem Sharing**: The container's root filesystem is shared with the VM via virtiofs at runtime
 
-This design allows bcvk to provide VM-like isolation and boot behavior while leveraging container tooling and not requiring root access on the host system.
+This design allows bcvk to provide VM-like isolation and boot behavior while leveraging container tooling.
 
 # OPTIONS
 
@@ -151,39 +152,111 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
 # EXAMPLES
 
-Run an ephemeral VM in the background:
+## Build and Test Workflow
 
-    bcvk ephemeral run -d --rm --name mytestvm quay.io/fedora/fedora-bootc:42
+The most common use case is testing container images you're building:
 
-Run with custom memory and CPU allocation:
+    # Build your bootc container image
+    podman build -t localhost/mybootc .
 
-    bcvk ephemeral run --memory 8G --vcpus 4 --name bigvm quay.io/fedora/fedora-bootc:42
+    # Run it as an ephemeral VM (background, auto-cleanup, SSH keys)
+    bcvk ephemeral run -d --rm -K --name test localhost/mybootc
 
-Run with automatic SSH key generation and removal when done:
+    # SSH in to verify it works
+    bcvk ephemeral ssh test
+
+    # Stop when done (container auto-removed due to --rm)
+    podman stop test
+
+For a faster iteration loop, use **bcvk-ephemeral-run-ssh**(8) which combines
+run and SSH into one command with automatic cleanup.
+
+## Common Flag Combinations
+
+**Testing a public image**:
 
     bcvk ephemeral run -d --rm -K --name testvm quay.io/fedora/fedora-bootc:42
+    bcvk ephemeral ssh testvm
 
-Run with host directory bind mount:
+**Development with mounted source code**:
 
-    bcvk ephemeral run --bind /home/user/code:workspace --name devvm quay.io/fedora/fedora-bootc:42
-
-Run with console output for debugging:
-
-    bcvk ephemeral run --console --name debugvm quay.io/fedora/fedora-bootc:42
-
-Run with custom kernel arguments:
-
-    bcvk ephemeral run --karg "console=ttyS0" --name serialvm quay.io/fedora/fedora-bootc:42
-
-Development workflow example:
-
-    # Start a development VM with code mounted
-    bcvk ephemeral run -d --rm -K --bind /home/user/project:code --name devvm quay.io/fedora/fedora-bootc:42
-    
-    # SSH into it for development
+    bcvk ephemeral run -d --rm -K \
+        --bind /home/user/project:src \
+        --name devvm localhost/mybootc
     bcvk ephemeral ssh devvm
-    
-    # VM automatically cleans up when stopped due to --rm flag
+    # Files available at /run/virtiofs-mnt-src inside VM
+
+**Resource-intensive workloads**:
+
+    bcvk ephemeral run -d --rm -K \
+        --memory 8G --vcpus 4 \
+        --name bigvm localhost/mybootc
+
+**Debugging boot issues**:
+
+    bcvk ephemeral run --console --name debugvm localhost/mybootc
+
+## Understanding the Flags
+
+**-d, --detach**: Run in background. Without this, the container runs in
+foreground and you see QEMU output directly.
+
+**--rm**: Auto-remove the container when it stops. Highly recommended for
+ephemeral testing to avoid accumulating stopped containers.
+
+**-K, --ssh-keygen**: Generate SSH keypair and inject into the VM via
+systemd credentials. Required for **bcvk ephemeral ssh** to work.
+
+**--name**: Assign a name for easy reference with other commands like
+**bcvk ephemeral ssh**.
+
+## Bind Mounts
+
+Share host directories with the VM using **--bind** or **--ro-bind**:
+
+    # Read-write mount
+    bcvk ephemeral run -d --rm -K --bind /host/path:name --name vm image
+
+    # Inside VM, access at:
+    /run/virtiofs-mnt-name
+
+    # Read-only mount (safer for sensitive data)
+    bcvk ephemeral run -d --rm -K --ro-bind /etc/myconfig:config --name vm image
+
+## Disk File Mounts
+
+Mount raw disk images as block devices:
+
+    # Create a test disk
+    truncate -s 10G /tmp/testdisk.raw
+
+    # Mount into VM
+    bcvk ephemeral run -d --rm -K \
+        --mount-disk-file /tmp/testdisk.raw:testdisk \
+        --name vm localhost/mybootc
+
+    # Inside VM: /dev/disk/by-id/virtio-testdisk
+
+## Port Forwarding
+
+For SSH port forwarding (recommended), use **bcvk ephemeral ssh** with **-L** or **-R**:
+
+    # Forward VM port 80 to localhost:8080
+    bcvk ephemeral ssh myvm -L 8080:localhost:80
+
+For network-level port forwarding via podman, configure slirp4netns:
+
+    bcvk ephemeral run -d --rm -K \
+        --network slirp4netns:port_handler=slirp4netns,allow_host_loopback=true \
+        --name webvm localhost/mybootc
+
+## Instance Types
+
+Use predefined instance types for consistent resource allocation:
+
+    bcvk ephemeral run -d --rm -K --itype u1.small --name vm localhost/mybootc
+    bcvk ephemeral run -d --rm -K --itype u1.medium --name vm localhost/mybootc
+    bcvk ephemeral run -d --rm -K --itype u1.large --name vm localhost/mybootc
 
 # DEBUGGING
 
