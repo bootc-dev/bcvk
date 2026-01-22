@@ -879,53 +879,49 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     // Create QEMU mount points
     fs::create_dir_all("/run/qemu")?;
 
-    // Find kernel and initramfs in /usr/lib/modules/
-    let modules_dir = Utf8Path::new("/run/source-image/usr/lib/modules");
-    let mut uki_file: Option<Utf8PathBuf> = None;
-    let mut vmlinuz_path: Option<Utf8PathBuf> = None;
-    let mut initramfs_path: Option<Utf8PathBuf> = None;
+    // Find kernel and initramfs using the kernel detection module
+    let source_root = cap_std_ext::cap_std::fs::Dir::open_ambient_dir(
+        "/run/source-image",
+        cap_std_ext::cap_std::ambient_authority(),
+    )
+    .context("opening /run/source-image")?;
 
-    let entries = fs::read_dir(modules_dir)
-        .with_context(|| format!("Failed to read kernel modules directory at {}. This container image may not be a valid bootc image.", modules_dir))?;
+    let kernel_info = crate::kernel::find_kernel(&source_root)
+        .context("searching for kernel")?
+        .ok_or_else(|| {
+            eyre!(
+                "No kernel found. Checked:\n\
+                 - /boot/EFI/Linux/*.efi (UKI)\n\
+                 - /usr/lib/modules/<version>/<version>.efi (UKI)\n\
+                 - /usr/lib/modules/<version>/vmlinuz + initramfs.img"
+            )
+        })?;
 
-    for entry in entries {
-        let entry = entry?;
-        let path = Utf8PathBuf::from_path_buf(entry.path())
-            .map_err(|p| eyre!("Path is not valid UTF-8: {}", p.display()))?;
+    // Add the source-image prefix to get absolute paths
+    let kernel_info =
+        crate::kernel::with_root_prefix(kernel_info, Utf8Path::new("/run/source-image"));
 
-        // Check for UKI (.efi file)
-        if path.is_file() && path.extension() == Some("efi") {
-            debug!("Found UKI file: {:?}", path);
-            uki_file = Some(path);
-            break;
-        }
-
-        // Check for traditional kernel in subdirectories
-        if path.is_dir() {
-            let vmlinuz = path.join("vmlinuz");
-            let initramfs = path.join("initramfs.img");
-            if vmlinuz.exists() && initramfs.exists() {
-                debug!("Found kernel at: {:?}", vmlinuz);
-                vmlinuz_path = Some(vmlinuz);
-                initramfs_path = Some(initramfs);
-                break;
-            }
-        }
-    }
+    debug!(
+        "Found kernel: {:?} (UKI: {})",
+        kernel_info.kernel_path, kernel_info.is_uki
+    );
 
     let kernel_mount = "/run/qemu/kernel";
     let initramfs_mount = "/run/qemu/initramfs";
 
     // Extract from UKI if found, otherwise use traditional kernel
-    if let Some(uki_path) = uki_file {
-        debug!("Extracting kernel and initramfs from UKI: {:?}", uki_path);
+    if kernel_info.is_uki {
+        debug!(
+            "Extracting kernel and initramfs from UKI: {:?}",
+            kernel_info.kernel_path
+        );
 
         // Extract .linux section (kernel) from UKI
         Command::new("objcopy")
             .args([
                 "--dump-section",
                 &format!(".linux={}", kernel_mount),
-                uki_path.as_str(),
+                kernel_info.kernel_path.as_str(),
             ])
             .run()
             .map_err(|e| eyre!("Failed to extract kernel from UKI: {e}"))?;
@@ -936,27 +932,33 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
             .args([
                 "--dump-section",
                 &format!(".initrd={}", initramfs_mount),
-                uki_path.as_str(),
+                kernel_info.kernel_path.as_str(),
             ])
             .run()
             .map_err(|e| eyre!("Failed to extract initramfs from UKI: {e}"))?;
         debug!("Extracted initramfs from UKI to {}", initramfs_mount);
     } else {
-        let vmlinuz_path = vmlinuz_path
-            .ok_or_else(|| eyre!("No kernel found in /run/source-image/usr/lib/modules"))?;
-        let source_initramfs_path = initramfs_path
-            .ok_or_else(|| eyre!("No initramfs found in /run/source-image/usr/lib/modules"))?;
+        let source_initramfs_path = kernel_info
+            .initramfs_path
+            .as_ref()
+            .ok_or_else(|| eyre!("Traditional kernel found but no initramfs path"))?;
 
-        fs::File::create(&kernel_mount)?;
+        fs::File::create(kernel_mount)?;
 
         // Bind mount kernel (read-only is fine)
         Command::new("mount")
-            .args(["--bind", "-o", "ro", vmlinuz_path.as_str(), &kernel_mount])
+            .args([
+                "--bind",
+                "-o",
+                "ro",
+                kernel_info.kernel_path.as_str(),
+                kernel_mount,
+            ])
             .run()
             .map_err(|e| eyre!("Failed to bind mount kernel: {e}"))?;
 
         // Copy initramfs so we can append to it
-        fs::copy(&source_initramfs_path, &initramfs_mount)
+        fs::copy(source_initramfs_path, initramfs_mount)
             .map_err(|e| eyre!("Failed to copy initramfs: {e}"))?;
     }
 

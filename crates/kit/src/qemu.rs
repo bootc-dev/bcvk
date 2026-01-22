@@ -115,7 +115,14 @@ impl Default for ResourceLimits {
 #[derive(Debug)]
 pub enum BootMode {
     /// Direct kernel boot (fast, testing-focused)
-    /// Also used for UKI boot after extracting kernel/initramfs from UKI PE sections
+    /// Also used for UKI boot after extracting kernel/initramfs from UKI PE sections.
+    ///
+    /// Note: For UKI images, we extract kernel/initramfs using objcopy rather than
+    /// booting the UKI directly via OVMF. This allows us to append bcvk units to
+    /// the initramfs for /etc overlay and /var setup. The tradeoff is that this
+    /// breaks the UKI signature chain, so Secure Boot is not supported for
+    /// ephemeral runs. See https://github.com/bootc-dev/bcvk/issues/161 for
+    /// future work on UEFI boot support.
     DirectBoot {
         kernel_path: String,
         initramfs_path: String,

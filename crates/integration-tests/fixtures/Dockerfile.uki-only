@@ -1,0 +1,55 @@
+# Test fixture: Bootc image with UKI-only boot (no separate vmlinuz/initramfs)
+#
+# This creates a "pure UKI" image for testing bcvk ephemeral boot compatibility
+# with images that only ship a Unified Kernel Image, not separate kernel/initramfs files.
+#
+# The UKI is placed in /boot/EFI/Linux/ which is the standard bootc location
+# (per Boot Loader Specification). This matches how real bootc sealed images work.
+#
+# Usage:
+#   podman build -f Dockerfile.uki-only -t bcvk-test-uki-only .
+#
+# Note: This requires ukify and systemd-boot packages in the base image.
+
+ARG BASE_IMAGE=ghcr.io/bootc-dev/dev-bootc:fedora-43-uki
+
+FROM ${BASE_IMAGE} AS builder
+
+# Install ukify if not present (should be in fedora-43-uki)
+RUN command -v ukify || dnf install -y systemd-ukify
+
+# Build UKI and place it in the standard /boot/EFI/Linux/ location
+RUN <<EORUN
+set -euxo pipefail
+
+# Get kernel version using bootc container inspect
+kver=$(bootc container inspect --format=json | jq -re .kernel.version)
+echo "Building UKI for kernel version: ${kver}"
+
+# Create the EFI/Linux directory (standard BLS location)
+mkdir -p /boot/EFI/Linux
+
+# Create the UKI using ukify, output to /boot/EFI/Linux/
+ukify build \
+    --linux="/usr/lib/modules/${kver}/vmlinuz" \
+    --initrd="/usr/lib/modules/${kver}/initramfs.img" \
+    --cmdline="rw" \
+    --os-release=@/usr/lib/os-release \
+    --output="/boot/EFI/Linux/${kver}.efi"
+
+# Verify the UKI was created
+ls -la "/boot/EFI/Linux/${kver}.efi"
+
+# Remove the separate kernel and initramfs (now embedded in UKI)
+rm -f "/usr/lib/modules/${kver}/vmlinuz" \
+      "/usr/lib/modules/${kver}/initramfs.img"
+
+# Show the final state
+echo "UKI location:"
+ls -la /boot/EFI/Linux/
+echo "Remaining in /usr/lib/modules/${kver}:"
+ls -la "/usr/lib/modules/${kver}/" | head -10
+EORUN
+
+# The final image just uses the builder stage with the UKI in place
+FROM builder
