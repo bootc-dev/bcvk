@@ -300,6 +300,141 @@ fn test_run_ephemeral_instancetype_invalid() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_instancetype_invalid);
 
+/// Test that ephemeral VMs can boot from UKI-only images (no separate vmlinuz/initramfs)
+///
+/// This tests compatibility with bootc images that only ship a Unified Kernel Image,
+/// verifying that bcvk can extract kernel/initramfs from the UKI using objcopy.
+fn test_run_ephemeral_uki_only() -> Result<()> {
+    let base_image = get_test_image();
+    let uki_image = "bcvk-test-uki-only:latest";
+
+    // Build the UKI-only test image from the fixture Dockerfile
+    let fixture_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/Dockerfile.uki-only");
+
+    debug!(
+        "Building UKI-only test image from {} using base {}",
+        fixture_path.display(),
+        base_image
+    );
+
+    let build_output = Command::new("podman")
+        .args([
+            "build",
+            "-f",
+            fixture_path.to_str().unwrap(),
+            "-t",
+            uki_image,
+            "--build-arg",
+            &format!("BASE_IMAGE={}", base_image),
+            fixture_path.parent().unwrap().to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to run podman build");
+
+    assert!(
+        build_output.status.success(),
+        "Failed to build UKI-only test image: {}",
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    // Verify the image has a UKI in /boot/EFI/Linux/ and no vmlinuz
+    let verify_output = Command::new("podman")
+        .args([
+            "run",
+            "--rm",
+            uki_image,
+            "sh",
+            "-c",
+            "ls /usr/lib/modules/*/vmlinuz 2>/dev/null && echo HAS_VMLINUZ || echo NO_VMLINUZ; ls /boot/EFI/Linux/*.efi 2>/dev/null && echo HAS_UKI || echo NO_UKI",
+        ])
+        .output()
+        .expect("Failed to verify image contents");
+
+    let verify_stdout = String::from_utf8_lossy(&verify_output.stdout);
+    debug!("Image verification: {}", verify_stdout);
+    assert!(
+        verify_stdout.contains("NO_VMLINUZ"),
+        "UKI-only image should not have vmlinuz: {}",
+        verify_stdout
+    );
+    assert!(
+        verify_stdout.contains("HAS_UKI"),
+        "UKI-only image should have a UKI in /boot/EFI/Linux/: {}",
+        verify_stdout
+    );
+
+    // Run ephemeral VM from UKI-only image
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--execute",
+        "echo UKI_BOOT_SUCCESS",
+        uki_image,
+    ])?;
+
+    output.assert_success("ephemeral run with UKI-only image");
+    assert!(
+        output.stdout.contains("UKI_BOOT_SUCCESS"),
+        "UKI boot should output success message: {}",
+        output.stdout
+    );
+
+    // Cleanup the test image
+    let _ = Command::new("podman")
+        .args(["rmi", "-f", uki_image])
+        .output();
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_uki_only);
+
+/// Test ephemeral boot with the CentOS 10 UKI image
+///
+/// This tests a real-world UKI image that may have both UKI and traditional
+/// kernel files, verifying that bcvk correctly prefers the UKI.
+fn test_run_ephemeral_centos_uki() -> Result<()> {
+    const CENTOS_UKI_IMAGE: &str = "ghcr.io/bootc-dev/dev-bootc:centos-10-uki";
+
+    debug!("Testing ephemeral boot with {}", CENTOS_UKI_IMAGE);
+
+    // Pull the image first (it's not in the standard test image set)
+    let pull_output = Command::new("podman")
+        .args(["pull", "-q", CENTOS_UKI_IMAGE])
+        .output()
+        .expect("Failed to run podman pull");
+
+    assert!(
+        pull_output.status.success(),
+        "Failed to pull CentOS UKI image: {}",
+        String::from_utf8_lossy(&pull_output.stderr)
+    );
+
+    let output = run_bcvk(&[
+        "ephemeral",
+        "run",
+        "--rm",
+        "--label",
+        INTEGRATION_TEST_LABEL,
+        "--execute",
+        "echo CENTOS_UKI_BOOT_SUCCESS && cat /etc/os-release | grep -E '^(ID|VERSION_ID)='",
+        CENTOS_UKI_IMAGE,
+    ])?;
+
+    output.assert_success("ephemeral run with CentOS 10 UKI image");
+    assert!(
+        output.stdout.contains("CENTOS_UKI_BOOT_SUCCESS"),
+        "CentOS UKI boot should output success message: {}",
+        output.stdout
+    );
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_centos_uki);
+
 /// Test that ephemeral VMs have the expected mount layout:
 /// - / is read-only virtiofs
 /// - /etc is overlayfs with tmpfs upper (writable)
