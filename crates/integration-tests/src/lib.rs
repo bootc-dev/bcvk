@@ -66,8 +66,9 @@ pub static PARAMETERIZED_INTEGRATION_TESTS: [ParameterizedIntegrationTest];
 ///
 /// ```ignore
 /// fn test_basic_functionality() -> Result<()> {
-///     let output = run_bcvk(&["some", "args"])?;
-///     output.assert_success("test");
+///     let sh = shell()?;
+///     let bck = get_bck_command()?;
+///     cmd!(sh, "{bck} some args").run()?;
 ///     Ok(())
 /// }
 /// integration_test!(test_basic_functionality);
@@ -91,8 +92,9 @@ macro_rules! integration_test {
 ///
 /// ```ignore
 /// fn test_with_image(image: &str) -> Result<()> {
-///     let output = run_bcvk(&["command", image])?;
-///     output.assert_success("test");
+///     let sh = shell()?;
+///     let bck = get_bck_command()?;
+///     cmd!(sh, "{bck} command {image}").run()?;
 ///     Ok(())
 /// }
 /// parameterized_integration_test!(test_with_image);

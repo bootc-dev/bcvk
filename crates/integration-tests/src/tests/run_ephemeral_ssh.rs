@@ -16,28 +16,28 @@
 
 use color_eyre::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
+use xshell::cmd;
 
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::{get_test_image, run_bcvk, INTEGRATION_TEST_LABEL};
+use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
 
 /// Poll until a container is removed or timeout is reached
 ///
 /// Returns Ok(()) if container is removed within timeout, Err otherwise.
 /// Timeout is set to 60 seconds to account for slow CI runners.
 fn wait_for_container_removal(container_name: &str) -> Result<()> {
+    let sh = shell()?;
     let timeout = Duration::from_secs(60);
     let start = Instant::now();
     let poll_interval = Duration::from_millis(100);
+    let format_arg = "{{.Names}}";
 
     loop {
-        let output = Command::new("podman")
-            .args(["ps", "-a", "--format", "{{.Names}}"])
-            .output()
-            .expect("Failed to list containers");
+        let containers = cmd!(sh, "podman ps -a --format {format_arg}")
+            .ignore_status()
+            .read()?;
 
-        let containers = String::from_utf8_lossy(&output.stdout);
         if !containers.lines().any(|line| line == container_name) {
             return Ok(());
         }
@@ -56,52 +56,37 @@ fn wait_for_container_removal(container_name: &str) -> Result<()> {
 
 /// Build a test fixture image with the kernel removed
 fn build_broken_image() -> Result<String> {
+    let sh = shell()?;
     let fixture_path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/Dockerfile.no-kernel");
     let image_name = format!("localhost/bcvk-test-no-kernel:{}", std::process::id());
+    let build_arg = format!("BASE_IMAGE={}", get_test_image());
 
-    let output = Command::new("podman")
-        .args([
-            "build",
-            "-f",
-            fixture_path,
-            "-t",
-            &image_name,
-            "--build-arg",
-            &format!("BASE_IMAGE={}", get_test_image()),
-            ".",
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(color_eyre::eyre::eyre!(
-            "Failed to build broken test image: {}",
-            stderr
-        ));
-    }
+    cmd!(
+        sh,
+        "podman build -f {fixture_path} -t {image_name} --build-arg {build_arg} ."
+    )
+    .run()?;
 
     Ok(image_name)
 }
 
 /// Test running a non-interactive command via SSH
 fn test_run_ephemeral_ssh_command() -> Result<()> {
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        "--",
-        "echo",
-        "hello world from SSH",
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
 
-    output.assert_success("ephemeral run-ssh");
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} {image} -- echo 'hello world from SSH'"
+    )
+    .read()?;
 
     assert!(
-        output.stdout.contains("hello world from SSH"),
+        stdout.contains("hello world from SSH"),
         "Expected output not found. Got: {}",
-        output.stdout
+        stdout
     );
     Ok(())
 }
@@ -109,22 +94,17 @@ integration_test!(test_run_ephemeral_ssh_command);
 
 /// Test that the container is cleaned up when SSH exits
 fn test_run_ephemeral_ssh_cleanup() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
     let container_name = format!("test-ssh-cleanup-{}", std::process::id());
 
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--name",
-        &container_name,
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        "--",
-        "echo",
-        "testing cleanup",
-    ])?;
-
-    output.assert_success("ephemeral run-ssh");
+    cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --name {container_name} --label {label} {image} -- echo 'testing cleanup'"
+    )
+    .run()?;
 
     // Poll for container removal with timeout
     wait_for_container_removal(&container_name)?;
@@ -135,37 +115,35 @@ integration_test!(test_run_ephemeral_ssh_cleanup);
 
 /// Test running system commands via SSH
 fn test_run_ephemeral_ssh_system_command() -> Result<()> {
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        "--",
-        "/bin/sh",
-        "-c",
-        "systemctl is-system-running || true",
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
 
-    output.assert_success("ephemeral run-ssh");
+    cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} {image} -- /bin/sh -c 'systemctl is-system-running || true'"
+    )
+    .run()?;
     Ok(())
 }
 integration_test!(test_run_ephemeral_ssh_system_command);
 
 /// Test that ephemeral run-ssh properly forwards exit codes
 fn test_run_ephemeral_ssh_exit_code() -> Result<()> {
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        "--",
-        "exit",
-        "42",
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
 
-    let exit_code = output.exit_code().expect("Failed to get exit code");
+    let output = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} {image} -- exit 42"
+    )
+    .ignore_status()
+    .output()?;
+
+    let exit_code = output.status.code().expect("Failed to get exit code");
     assert_eq!(
         exit_code, 42,
         "Exit code not properly forwarded. Expected 42, got {}",
@@ -180,33 +158,35 @@ integration_test!(test_run_ephemeral_ssh_exit_code);
 /// that our systemd version compatibility fix works correctly with both newer
 /// systemd (Fedora) and older systemd (CentOS Stream 9)
 fn test_run_ephemeral_ssh_cross_distro_compatibility(image: &str) -> Result<()> {
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        image,
-        "--",
-        "systemctl",
-        "--version",
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+
+    let output = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} {image} -- systemctl --version"
+    )
+    .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
-        output.success(),
+        output.status.success(),
         "SSH test failed for image {}: {}",
         image,
-        output.stderr
+        stderr
     );
 
     assert!(
-        output.stdout.contains("systemd"),
+        stdout.contains("systemd"),
         "systemd version not found for image {}. Got: {}",
         image,
-        output.stdout
+        stdout
     );
 
     // Log systemd version for diagnostic purposes
-    if let Some(version_line) = output.stdout.lines().next() {
+    if let Some(version_line) = stdout.lines().next() {
         eprintln!("Image {} systemd version: {}", image, version_line);
 
         let version_parts: Vec<&str> = version_line.split_whitespace().collect();
@@ -273,25 +253,23 @@ echo "All checks passed!"
         .to_str()
         .expect("Failed to convert path to string");
 
-    // Run the test via SSH with the script mounted via virtiofs
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        "--bind",
-        &format!("{}:testscripts", mount_path),
-        &get_test_image(),
-        "--",
-        "/run/virtiofs-mnt-testscripts/check_run_tmpfs.sh",
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+    let bind_arg = format!("{}:testscripts", mount_path);
 
-    output.assert_success("ephemeral run-ssh with tmpfs check");
+    // Run the test via SSH with the script mounted via virtiofs
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} --bind {bind_arg} {image} -- /run/virtiofs-mnt-testscripts/check_run_tmpfs.sh"
+    )
+    .read()?;
 
     assert!(
-        output.stdout.contains("All checks passed!"),
+        stdout.contains("All checks passed!"),
         "Test script did not complete successfully. Output: {}",
-        output.stdout
+        stdout
     );
 
     Ok(())
@@ -310,50 +288,44 @@ fn test_run_ephemeral_ssh_broken_image_cleanup() -> Result<()> {
     let broken_image = build_broken_image()?;
     eprintln!("Built broken image: {}", broken_image);
 
+    let sh = shell()?;
+    let bck = get_bck_command()?;
     let container_name = format!("test-broken-cleanup-{}", std::process::id());
+    let label = INTEGRATION_TEST_LABEL;
 
     // Try to run ephemeral SSH with the broken image - this should fail
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--name",
-        &container_name,
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &broken_image,
-        "--",
-        "echo",
-        "should not reach here",
-    ])?;
+    let output = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --name {container_name} --label {label} {broken_image} -- echo should_not_reach_here"
+    )
+    .ignore_status()
+    .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     // The command should fail (no kernel found)
     assert!(
-        !output.success(),
+        !output.status.success(),
         "Expected ephemeral run-ssh to fail with broken image, but it succeeded"
     );
 
     // Verify the error message indicates the problem
     assert!(
-        output
-            .stderr
-            .contains("Failed to read kernel modules directory")
-            || output
-                .stderr
-                .contains("Container exited before SSH became available")
-            || output
-                .stderr
-                .contains("Monitor process exited unexpectedly"),
+        stderr.contains("Failed to read kernel modules directory")
+            || stderr.contains("Container exited before SSH became available")
+            || stderr.contains("Monitor process exited unexpectedly"),
         "Expected error about missing kernel or container failure, got: {}",
-        output.stderr
+        stderr
     );
 
     // Poll for container removal with timeout
     wait_for_container_removal(&container_name)?;
 
     // Clean up the test image
-    let _ = Command::new("podman")
-        .args(["rmi", "-f", &broken_image])
-        .output();
+    let _ = cmd!(sh, "podman rmi -f {broken_image}")
+        .ignore_status()
+        .quiet()
+        .run();
 
     Ok(())
 }
@@ -364,36 +336,21 @@ integration_test!(test_run_ephemeral_ssh_broken_image_cleanup);
 /// Verifies that ephemeral bootc VMs can access the network and resolve DNS correctly.
 /// Uses HTTP request to quay.io to test both DNS resolution and network connectivity.
 fn test_run_ephemeral_dns_resolution() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+
     // Test DNS + network by connecting to quay.io
     // Use curl or wget, whichever is available
     // Any HTTP response (including 401) proves DNS resolution and network connectivity work
-    let network_test = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        "--",
-        "/bin/sh",
-        "-c",
-        r#"
-        if command -v curl >/dev/null 2>&1; then
-            curl -sS --max-time 10 https://quay.io/v2/ >/dev/null
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q --timeout=10 -O /dev/null https://quay.io/v2/
-        else
-            echo "Neither curl nor wget available"
-            exit 1
-        fi
-        "#,
-    ])?;
+    let dns_test_script = r#"if command -v curl >/dev/null 2>&1; then curl -sS --max-time 10 https://quay.io/v2/ >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q --timeout=10 -O /dev/null https://quay.io/v2/; else echo 'Neither curl nor wget available'; exit 1; fi"#;
 
-    assert!(
-        network_test.success(),
-        "Network connectivity test (HTTP request to quay.io) failed: stdout: {}\nstderr: {}",
-        network_test.stdout,
-        network_test.stderr
-    );
+    cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} {image} -- /bin/sh -c {dns_test_script}"
+    )
+    .run()?;
 
     Ok(())
 }
@@ -411,36 +368,36 @@ fn test_run_ephemeral_ssh_timeout() -> Result<()> {
     eprintln!("Testing SSH timeout with masked sshd.service...");
     eprintln!("This test takes ~240 seconds to complete...");
 
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+
     let start = Instant::now();
 
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run-ssh",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        "--karg",
-        "systemd.mask=sshd.service",
-        &get_test_image(),
-        "--",
-        "echo",
-        "should not reach here",
-    ])?;
+    let output = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} --karg systemd.mask=sshd.service {image} -- echo should_not_reach_here"
+    )
+    .ignore_status()
+    .output()?;
 
     let elapsed = start.elapsed();
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Command should fail (SSH timeout)
     assert!(
-        !output.success(),
+        !output.status.success(),
         "Expected ephemeral run-ssh to fail with SSH timeout, but it succeeded"
     );
 
     // Verify the error message mentions timeout or readiness failure
     assert!(
-        output.stderr.contains("Timeout waiting for readiness")
-            || output.stderr.contains("timeout")
-            || output.stderr.contains("failed after"),
+        stderr.contains("Timeout waiting for readiness")
+            || stderr.contains("timeout")
+            || stderr.contains("failed after"),
         "Expected error about timeout, got: {}",
-        output.stderr
+        stderr
     );
 
     // Verify timeout duration is approximately 240 seconds (±20s tolerance for CI variability)

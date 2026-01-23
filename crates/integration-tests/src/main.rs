@@ -1,7 +1,8 @@
 //! Integration tests for bcvk
 
-use camino::Utf8Path;
 use std::process::Output;
+
+use camino::Utf8Path;
 
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
@@ -24,6 +25,11 @@ mod tests {
     pub mod run_ephemeral;
     pub mod run_ephemeral_ssh;
     pub mod to_disk;
+}
+
+/// Create a new xshell Shell for running commands
+pub(crate) fn shell() -> Result<Shell> {
+    Shell::new().map_err(|e| eyre!("Failed to create shell: {}", e))
 }
 
 /// Get the path to the bcvk binary, checking BCVK_PATH env var first, then falling back to "bcvk"
@@ -97,16 +103,6 @@ impl CapturedOutput {
         }
     }
 
-    /// Assert that the command succeeded, printing debug info on failure
-    pub fn assert_success(&self, context: &str) {
-        assert!(
-            self.output.status.success(),
-            "{} failed: {}",
-            context,
-            self.stderr
-        );
-    }
-
     /// Get the exit code
     pub fn exit_code(&self) -> Option<i32> {
         self.output.status.code()
@@ -118,47 +114,16 @@ impl CapturedOutput {
     }
 }
 
-/// Run a command, capturing output
-pub(crate) fn run_command(program: &str, args: &[&str]) -> std::io::Result<CapturedOutput> {
-    let output = std::process::Command::new(program).args(args).output()?;
-    Ok(CapturedOutput::new(output))
-}
-
-/// Run the bcvk command, capturing output
-pub(crate) fn run_bcvk(args: &[&str]) -> std::io::Result<CapturedOutput> {
-    let bck = get_bck_command().expect("Failed to get bcvk command");
-    run_command(&bck, args)
-}
-
-/// Run the bcvk command with inherited stdout/stderr (no capture)
-/// Use this when you just need to verify the command succeeded without checking output
-pub(crate) fn run_bcvk_nocapture(args: &[&str]) -> std::io::Result<()> {
-    let bck = get_bck_command().expect("Failed to get bcvk command");
-    let status = std::process::Command::new(&bck).args(args).status()?;
-    assert!(
-        status.success(),
-        "bcvk command failed with args: {:?}",
-        args
-    );
-    Ok(())
-}
-
 fn test_images_list() -> Result<()> {
     println!("Running test: bcvk images list --json");
 
-    let sh = Shell::new()?;
+    let sh = shell()?;
     let bck = get_bck_command()?;
 
     // Run the bcvk images list command with JSON output
-    let output = cmd!(sh, "{bck} images list --json").output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(eyre!("Failed to run 'bcvk images list --json': {}", stderr));
-    }
+    let stdout = cmd!(sh, "{bck} images list --json").read()?;
 
     // Parse the JSON output
-    let stdout = String::from_utf8(output.stdout)?;
     let images: Value = serde_json::from_str(&stdout).context("Failed to parse JSON output")?;
 
     // Verify the structure and content of the JSON
