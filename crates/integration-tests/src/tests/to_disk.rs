@@ -17,11 +17,11 @@
 use camino::Utf8PathBuf;
 use color_eyre::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
+use xshell::cmd;
 
-use std::process::Command;
 use tempfile::TempDir;
 
-use crate::{get_test_image, run_bcvk, CapturedOutput, INTEGRATION_TEST_LABEL};
+use crate::{get_bck_command, get_test_image, shell, CapturedOutput, INTEGRATION_TEST_LABEL};
 
 /// Validate that a disk image was created successfully with proper bootc installation
 ///
@@ -44,20 +44,8 @@ fn validate_disk_image(
     let is_qcow2 = disk_path.as_str().ends_with(".qcow2");
     if !is_qcow2 {
         // Verify the disk has partitions using sfdisk -l
-        let sfdisk_output = Command::new("sfdisk")
-            .arg("-l")
-            .arg(disk_path.as_str())
-            .output()
-            .expect("Failed to run sfdisk");
-
-        let sfdisk_stdout = String::from_utf8_lossy(&sfdisk_output.stdout);
-
-        assert!(
-            sfdisk_output.status.success(),
-            "{}: sfdisk failed with exit code: {:?}",
-            context,
-            sfdisk_output.status.code()
-        );
+        let sh = shell().expect("Failed to create shell");
+        let sfdisk_stdout = cmd!(sh, "sfdisk -l {disk_path}").read()?;
 
         assert!(
             sfdisk_stdout.contains("Disk ")
@@ -89,17 +77,23 @@ fn validate_disk_image(
 
 /// Test actual bootc installation to a disk image
 fn test_to_disk() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
         .expect("temp path is not UTF-8");
 
-    let output = run_bcvk(&[
-        "to-disk",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        disk_path.as_str(),
-    ])?;
+    let raw_output = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}")
+        .ignore_status()
+        .output()?;
+    let output = CapturedOutput::new(std::process::Output {
+        status: raw_output.status,
+        stdout: raw_output.stdout,
+        stderr: raw_output.stderr,
+    });
 
     assert!(
         output.success(),
@@ -116,18 +110,26 @@ integration_test!(test_to_disk);
 
 /// Test bootc installation to a qcow2 disk image
 fn test_to_disk_qcow2() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.qcow2"))
         .expect("temp path is not UTF-8");
 
-    let output = run_bcvk(&[
-        "to-disk",
-        "--format=qcow2",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        disk_path.as_str(),
-    ])?;
+    let raw_output = cmd!(
+        sh,
+        "{bck} to-disk --format=qcow2 --label {label} {image} {disk_path}"
+    )
+    .ignore_status()
+    .output()?;
+    let output = CapturedOutput::new(std::process::Output {
+        status: raw_output.status,
+        stdout: raw_output.stdout,
+        stderr: raw_output.stderr,
+    });
 
     assert!(
         output.success(),
@@ -138,18 +140,7 @@ fn test_to_disk_qcow2() -> Result<()> {
     );
 
     // Verify the file is actually qcow2 format using qemu-img info
-    let qemu_img_output = Command::new("qemu-img")
-        .args(["info", disk_path.as_str()])
-        .output()
-        .expect("Failed to run qemu-img info");
-
-    let qemu_img_stdout = String::from_utf8_lossy(&qemu_img_output.stdout);
-
-    assert!(
-        qemu_img_output.status.success(),
-        "qemu-img info failed with exit code: {:?}",
-        qemu_img_output.status.code()
-    );
+    let qemu_img_stdout = cmd!(sh, "qemu-img info {disk_path}").read()?;
 
     assert!(
         qemu_img_stdout.contains("file format: qcow2"),
@@ -164,18 +155,24 @@ integration_test!(test_to_disk_qcow2);
 
 /// Test disk image caching functionality
 fn test_to_disk_caching() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk-cache.img"))
         .expect("temp path is not UTF-8");
 
     // First run: Create the disk image
-    let output1 = run_bcvk(&[
-        "to-disk",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        disk_path.as_str(),
-    ])?;
+    let raw_output1 = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}")
+        .ignore_status()
+        .output()?;
+    let output1 = CapturedOutput::new(std::process::Output {
+        status: raw_output1.status,
+        stdout: raw_output1.stdout,
+        stderr: raw_output1.stderr,
+    });
 
     assert!(
         output1.success(),
@@ -196,13 +193,14 @@ fn test_to_disk_caching() -> Result<()> {
     );
 
     // Second run: Should reuse the cached disk
-    let output2 = run_bcvk(&[
-        "to-disk",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &get_test_image(),
-        disk_path.as_str(),
-    ])?;
+    let raw_output2 = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}")
+        .ignore_status()
+        .output()?;
+    let output2 = CapturedOutput::new(std::process::Output {
+        status: raw_output2.status,
+        stdout: raw_output2.stdout,
+        stderr: raw_output2.stderr,
+    });
 
     assert!(
         output2.success(),
@@ -236,43 +234,31 @@ integration_test!(test_to_disk_caching);
 
 /// Test that different image references with the same digest create separate cached disks
 fn test_to_disk_different_imgref_same_digest() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // First, pull the test image
     let test_image = get_test_image();
-    let output = Command::new("podman")
-        .args(["pull", &test_image])
-        .output()
-        .expect("Failed to run podman pull");
-    assert!(
-        output.status.success(),
-        "Failed to pull test image: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    cmd!(sh, "podman pull {test_image}").run()?;
 
     // Create a second tag pointing to the same digest
     let second_tag = format!("{}-alias", test_image);
-    let output = Command::new("podman")
-        .args(["tag", &test_image, &second_tag])
-        .output()
-        .expect("Failed to run podman tag");
-    assert!(
-        output.status.success(),
-        "Failed to tag image: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    cmd!(sh, "podman tag {test_image} {second_tag}").run()?;
 
     // Create first disk with original image reference
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
         .expect("temp path is not UTF-8");
 
-    let output1 = run_bcvk(&[
-        "to-disk",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &test_image,
-        disk_path.as_str(),
-    ])?;
+    let raw_output1 = cmd!(sh, "{bck} to-disk --label {label} {test_image} {disk_path}")
+        .ignore_status()
+        .output()?;
+    let output1 = CapturedOutput::new(std::process::Output {
+        status: raw_output1.status,
+        stdout: raw_output1.stdout,
+        stderr: raw_output1.stderr,
+    });
 
     assert!(
         output1.success(),
@@ -288,14 +274,17 @@ fn test_to_disk_different_imgref_same_digest() -> Result<()> {
 
     // Use --dry-run with the aliased image reference (same digest, different imgref)
     // to verify it would regenerate instead of reusing the cache
-    let output2 = run_bcvk(&[
-        "to-disk",
-        "--dry-run",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        &second_tag,
-        disk_path.as_str(),
-    ])?;
+    let raw_output2 = cmd!(
+        sh,
+        "{bck} to-disk --dry-run --label {label} {second_tag} {disk_path}"
+    )
+    .ignore_status()
+    .output()?;
+    let output2 = CapturedOutput::new(std::process::Output {
+        status: raw_output2.status,
+        stdout: raw_output2.stdout,
+        stderr: raw_output2.stderr,
+    });
 
     assert!(
         output2.success(),
@@ -314,7 +303,10 @@ fn test_to_disk_different_imgref_same_digest() -> Result<()> {
     );
 
     // Clean up: remove the aliased tag
-    let _ = Command::new("podman").args(["rmi", &second_tag]).output();
+    let _ = cmd!(sh, "podman rmi {second_tag}")
+        .ignore_status()
+        .quiet()
+        .run();
 
     Ok(())
 }
@@ -325,19 +317,26 @@ integration_test!(test_to_disk_different_imgref_same_digest);
 /// This parameterized test runs to-disk with multiple container images,
 /// particularly testing AlmaLinux which had cross-device link issues (issue #125)
 fn test_to_disk_for_image(image: &str) -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
         .expect("temp path is not UTF-8");
 
-    let output = run_bcvk(&[
-        "to-disk",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        // Not all iamges have one
-        "--filesystem=ext4",
-        image,
-        disk_path.as_str(),
-    ])?;
+    // Not all images have a default filesystem, so explicitly specify ext4
+    let raw_output = cmd!(
+        sh,
+        "{bck} to-disk --label {label} --filesystem=ext4 {image} {disk_path}"
+    )
+    .ignore_status()
+    .output()?;
+    let output = CapturedOutput::new(std::process::Output {
+        status: raw_output.status,
+        stdout: raw_output.stdout,
+        stderr: raw_output.stderr,
+    });
 
     assert!(
         output.success(),

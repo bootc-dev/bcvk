@@ -21,7 +21,9 @@ use integration_tests::integration_test;
 use std::fs;
 use tempfile::TempDir;
 
-use crate::{get_test_image, run_bcvk, INTEGRATION_TEST_LABEL};
+use xshell::cmd;
+
+use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
 
 /// Create a systemd unit that verifies a mount exists and tests writability
 fn create_mount_verify_unit(
@@ -95,27 +97,20 @@ fn test_mount_feature_bind() -> Result<()> {
 
     println!("Testing bind mount with temp directory: {}", temp_dir_path);
 
-    // Run with bind mount and verification unit
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run",
-        "--rm",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        "--console",
-        "-K",
-        "--bind",
-        &format!("{}:testmount", temp_dir_path),
-        "--systemd-units",
-        units_dir_path.as_str(),
-        "--karg",
-        "systemd.unit=verify-mount-testmount.service",
-        "--karg",
-        "systemd.journald.forward_to_console=1",
-        &get_test_image(),
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+    let bind_arg = format!("{}:testmount", temp_dir_path);
 
-    assert!(output.stdout.contains("ok mount verify"));
+    // Run with bind mount and verification unit
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run --rm --label {label} --console -K --bind {bind_arg} --systemd-units {units_dir_path} --karg systemd.unit=verify-mount-testmount.service --karg systemd.journald.forward_to_console=1 {image}"
+    )
+    .read()?;
+
+    assert!(stdout.contains("ok mount verify"));
 
     println!("Successfully tested and verified bind mount feature");
     Ok(())
@@ -144,27 +139,20 @@ fn test_mount_feature_ro_bind() -> Result<()> {
         temp_dir_path
     );
 
-    // Run with read-only bind mount and verification unit
-    let output = run_bcvk(&[
-        "ephemeral",
-        "run",
-        "--rm",
-        "--label",
-        INTEGRATION_TEST_LABEL,
-        "--console",
-        "-K",
-        "--ro-bind",
-        &format!("{}:romount", temp_dir_path),
-        "--systemd-units",
-        units_dir_path.as_str(),
-        "--karg",
-        "systemd.unit=verify-ro-mount-romount.service",
-        "--karg",
-        "systemd.journald.forward_to_console=1",
-        &get_test_image(),
-    ])?;
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+    let ro_bind_arg = format!("{}:romount", temp_dir_path);
 
-    assert!(output.stdout.contains("ok mount verify"));
+    // Run with read-only bind mount and verification unit
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run --rm --label {label} --console -K --ro-bind {ro_bind_arg} --systemd-units {units_dir_path} --karg systemd.unit=verify-ro-mount-romount.service --karg systemd.journald.forward_to_console=1 {image}"
+    )
+    .read()?;
+
+    assert!(stdout.contains("ok mount verify"));
     Ok(())
 }
 integration_test!(test_mount_feature_ro_bind);
