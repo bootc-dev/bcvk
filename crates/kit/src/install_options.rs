@@ -40,6 +40,10 @@ pub struct InstallOptions {
     /// Default to composefs-native storage
     #[clap(long)]
     pub composefs_backend: bool,
+
+    /// Which bootloader to use for composefs-native backend
+    #[clap(long, requires = "composefs_backend")]
+    pub bootloader: Option<String>,
 }
 
 impl InstallOptions {
@@ -68,6 +72,11 @@ impl InstallOptions {
 
         if self.composefs_backend {
             args.push("--composefs-backend".to_owned());
+        }
+
+        if let Some(b) = &self.bootloader {
+            args.push("--bootloader".into());
+            args.push(b.clone());
         }
 
         args
