@@ -43,7 +43,7 @@ pub struct DomainBuilder {
     disk_path: Option<String>,
     transient_disk: bool, // Use transient disk with temporary overlay
     network: Option<String>,
-    vnc_port: Option<u16>,
+    graphical_console: bool,
     kernel_args: Option<String>,
     metadata: HashMap<String, String>,
     qemu_args: Vec<String>,
@@ -76,7 +76,7 @@ impl DomainBuilder {
             disk_path: None,
             transient_disk: false,
             network: None,
-            vnc_port: None,
+            graphical_console: false,
             kernel_args: None,
             metadata: HashMap::new(),
             qemu_args: Vec::new(),
@@ -129,10 +129,9 @@ impl DomainBuilder {
         self
     }
 
-    /// Enable VNC on specified port
-    #[allow(dead_code)]
-    pub fn with_vnc(mut self, port: u16) -> Self {
-        self.vnc_port = Some(port);
+    /// Enable graphical console (SPICE) for virt-manager access
+    pub fn with_graphical_console(mut self) -> Self {
+        self.graphical_console = true;
         self
     }
 
@@ -474,19 +473,23 @@ impl DomainBuilder {
             }
         }
 
-        // VNC graphics if enabled
-        if let Some(vnc_port) = self.vnc_port {
-            writer.write_empty_element(
-                "graphics",
-                &[
-                    ("type", "vnc"),
-                    ("port", &vnc_port.to_string()),
-                    ("listen", "127.0.0.1"),
-                ],
-            )?;
+        // Graphical console (SPICE) for virt-manager access
+        if self.graphical_console {
+            writer.start_element("graphics", &[("type", "spice"), ("autoport", "yes")])?;
+            writer.write_empty_element("listen", &[("type", "address")])?;
+            writer.end_element("graphics")?;
             writer.start_element("video", &[])?;
-            writer.write_empty_element("model", &[("type", "vga")])?;
+            writer.write_empty_element(
+                "model",
+                &[("type", "virtio"), ("heads", "1"), ("primary", "yes")],
+            )?;
             writer.end_element("video")?;
+            writer.start_element("channel", &[("type", "spicevmc")])?;
+            writer.write_empty_element(
+                "target",
+                &[("type", "virtio"), ("name", "com.redhat.spice.0")],
+            )?;
+            writer.end_element("channel")?;
         }
 
         // Virtiofs filesystems
@@ -633,15 +636,28 @@ mod tests {
     }
 
     #[test]
-    fn test_vnc_configuration() {
+    fn test_graphical_console_configuration() {
+        // Test with graphical console enabled
         let xml = DomainBuilder::new()
             .with_name("test")
-            .with_vnc(5901)
+            .with_graphical_console()
             .build_xml()
             .unwrap();
 
-        assert!(xml.contains("graphics type=\"vnc\" port=\"5901\""));
-        assert!(xml.contains("model type=\"vga\""));
+        assert!(xml.contains("graphics type=\"spice\" autoport=\"yes\""));
+        assert!(xml.contains("model type=\"virtio\" heads=\"1\" primary=\"yes\""));
+        assert!(xml.contains("channel type=\"spicevmc\""));
+        assert!(xml.contains("target type=\"virtio\" name=\"com.redhat.spice.0\""));
+
+        // Test without graphical console (default)
+        let xml_no_graphics = DomainBuilder::new()
+            .with_name("test-no-graphics")
+            .build_xml()
+            .unwrap();
+
+        assert!(!xml_no_graphics.contains("<graphics"));
+        assert!(!xml_no_graphics.contains("<video"));
+        assert!(!xml_no_graphics.contains("spicevmc"));
     }
 
     #[test]
