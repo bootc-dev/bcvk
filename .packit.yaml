@@ -1,0 +1,69 @@
+---
+upstream_package_name: bcvk
+downstream_package_name: bcvk
+
+upstream_tag_template: v{version}
+
+specfile_path: contrib/packaging/bcvk.spec
+
+srpm_build_deps:
+  - cargo
+  - git
+  - zstd
+  - libzstd-devel
+  - openssl-devel
+  - go-md2man
+
+actions:
+  # The last step here is required by Packit to return the archive name
+  # https://packit.dev/docs/configuration/actions#create-archive
+  create-archive:
+    - bash -c "cargo install cargo-vendor-filterer"
+    - bash -c "cargo xtask spec"
+    - bash -c "cat target/bcvk.spec"
+    - bash -c "cp target/bcvk* contrib/packaging/"
+    - bash -c "ls -1 target/bcvk*.tar.zstd | grep -v 'vendor'"
+  # Do nothing with spec file. Two steps here are for debugging
+  fix-spec-file:
+    - bash -c "cat contrib/packaging/bcvk.spec"
+    - bash -c "ls -al contrib/packaging/"
+
+jobs:
+  - job: copr_build
+    trigger: pull_request
+    targets:
+      # Primary targets: supported Fedora (x86_64 and aarch64 only)
+      # bcvk only supports x86_64 and aarch64 architectures
+      # CentOS Stream support can be added later
+      # - centos-stream-9-x86_64
+      # - centos-stream-9-aarch64
+      # - centos-stream-10-x86_64
+      # - centos-stream-10-aarch64
+      - fedora-43-x86_64
+      - fedora-43-aarch64
+      - fedora-rawhide-x86_64
+      - fedora-rawhide-aarch64
+
+  # Build on new commit to main branch
+  - job: copr_build
+    trigger: commit
+    branch: main
+    owner: rhcontainerbot
+    project: bootc
+    enable_net: true
+
+  - job: propose_downstream
+    trigger: release
+    dist_git_branches:
+      - fedora-all
+
+  - job: koji_build
+    trigger: commit
+    dist_git_branches:
+      - fedora-all
+
+  - job: bodhi_update
+    trigger: commit
+    dist_git_branches:
+      # Fedora rawhide updates are created automatically
+      - fedora-branched
