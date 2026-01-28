@@ -459,6 +459,15 @@ impl DomainBuilder {
             writer.end_element("video")?;
         }
 
+        // SPICE graphics for virt-manager access
+        // Always enable SPICE with auto-port allocation for easy debugging via virt-manager
+        writer.start_element("graphics", &[("type", "spice"), ("autoport", "yes")])?;
+        writer.write_empty_element("listen", &[("type", "address"), ("address", "127.0.0.1")])?;
+        writer.end_element("graphics")?;
+        writer.start_element("video", &[])?;
+        writer.write_empty_element("model", &[("type", "virtio")])?;
+        writer.end_element("video")?;
+
         // Virtiofs filesystems
         for filesystem in &self.virtiofs_filesystems {
             writer.start_element(
