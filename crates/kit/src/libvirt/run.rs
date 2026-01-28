@@ -297,6 +297,10 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub label: Vec<String>,
 
+    /// Enable graphical console (SPICE) for virt-manager access
+    #[clap(long)]
+    pub graphical_console: bool,
+
     /// Create a transient VM that disappears on shutdown/reboot
     #[clap(long)]
     pub transient: bool,
@@ -1208,6 +1212,9 @@ fn create_libvirt_domain_from_disk(
     if opts.firmware_log {
         domain_builder =
             domain_builder.with_firmware_log(crate::libvirt::domain::FirmwareLogOutput::Console);
+    }
+    if opts.graphical_console {
+        domain_builder = domain_builder.with_graphical_console();
     }
     domain_builder = domain_builder
         .with_metadata("bootc:source-image", &opts.image)
