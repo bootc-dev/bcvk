@@ -17,6 +17,7 @@ ExcludeArch:    %{ix86}
 BuildRequires: make
 BuildRequires: openssl-devel
 BuildRequires: go-md2man
+BuildRequires: openssh-clients
 %if 0%{?rhel}
 BuildRequires: rust-toolset
 %else
