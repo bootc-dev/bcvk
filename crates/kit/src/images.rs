@@ -216,6 +216,14 @@ pub fn get_image_size(name: &str) -> Result<u64> {
     Ok(info.size)
 }
 
+/// Check if image has a UKI (required for --composefs-backend)
+pub fn has_uki(name: &str) -> Result<bool> {
+    let status = Command::new("podman")
+        .args(["run", "--rm", name, "sh", "-c", "ls /boot/EFI/Linux/*.efi >/dev/null 2>&1"])
+        .status()?;
+    Ok(status.success())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

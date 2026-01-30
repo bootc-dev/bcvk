@@ -369,6 +369,13 @@ EOF
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
 pub fn run(opts: ToDiskOpts) -> Result<()> {
+    if opts.install.composefs_backend && !images::has_uki(&opts.source_image)? {
+        return Err(eyre!(
+            "Image '{}' has no UKI - not suitable for --composefs-backend",
+            opts.source_image
+        ));
+    }
+
     // Phase 0: Check for existing cached disk image
     let would_reuse = if opts.target_disk.exists() {
         debug!(
