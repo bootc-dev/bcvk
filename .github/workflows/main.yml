@@ -80,6 +80,39 @@ jobs:
             target/bcvk-*.tar.gz.sha256
           retention-days: 7
 
+  publish-binary:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Install ORAS CLI
+        run: |
+          # renovate: datasource=github-releases depName=oras-project/oras
+          VERSION=1.2.2
+          curl -LO https://github.com/oras-project/oras/releases/download/v${VERSION}/oras_${VERSION}_linux_amd64.tar.gz
+          tar -xzf oras_${VERSION}_linux_amd64.tar.gz
+          sudo mv oras /usr/local/bin/
+
+      - name: Download bcvk binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bcvk-binary
+
+      - name: Login to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io --username ${{ github.repository_owner }} --password-stdin
+
+      - name: Push binary as OCI artifact
+        run: |
+          for file in bcvk-*.tar.gz; do
+            ARCH=$(echo "$file" | sed 's/bcvk-\(.*\)-unknown-linux-gnu\.tar\.gz/\1/')
+            oras push "ghcr.io/bootc-dev/bcvk-binary:${ARCH}-latest" "$file:application/gzip" "${file}.sha256:text/plain"
+          done
+
   integration-tests:
     runs-on: ubuntu-24.04
     needs: build
