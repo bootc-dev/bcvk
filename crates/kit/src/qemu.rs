@@ -923,8 +923,12 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
         config.socket_path.as_str(),
         "--shared-dir",
         config.shared_dir.as_str(),
-        // Ensure we don't hit fd exhaustion
+        // Ensure we don't hit fd exhaustion; see commit 50e7601.
         "--cache=never",
+        // Allowing mmap is needed in the general case for loading shared libraries
+        // etc. This flag negotiates FUSE_DIRECT_IO_ALLOW_MMAP with the kernel (requires kernel 6.2+).
+        // Per the documentation this is safe because the underlying filesystem tree is immutable.
+        "--allow-mmap",
         // We always run in a container
         "--sandbox=none",
     ]);

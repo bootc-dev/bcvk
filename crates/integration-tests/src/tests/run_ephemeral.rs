@@ -360,6 +360,45 @@ fn test_run_ephemeral_centos_uki() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_centos_uki);
 
+/// Test that mmap() works on virtiofs files
+///
+/// The --allow-mmap flag (added to virtiofsd) negotiates FUSE_DIRECT_IO_ALLOW_MMAP
+/// with the kernel (requires kernel 6.2+), allowing mmap() on virtiofs files.
+/// Without this flag, mmap() returns ENODEV when --cache=never is used.
+///
+/// This test verifies that shared libraries can be loaded (which requires mmap())
+/// and that we can explicitly mmap a file from the virtiofs root.
+fn test_run_ephemeral_virtiofs_mmap() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+
+    // Test that mmap works by running a dynamically linked binary.
+    // Loading shared libraries requires mmap() - if virtiofs mmap doesn't work,
+    // dynamically linked binaries will fail to execute.
+    //
+    // We use python3 to explicitly test mmap() on a virtiofs file (/etc/os-release).
+    // This directly validates that the --allow-mmap flag is working.
+    let script =
+        "python3 -c 'import mmap; f=open(\"/etc/os-release\",\"rb\"); m=mmap.mmap(f.fileno(),0,access=mmap.ACCESS_READ); print(\"MMAP_SUCCESS\" if b\"ID=\" in m.read(100) else \"MMAP_FAIL\")'";
+
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run --rm --label {label} --execute {script} {image}"
+    )
+    .read()?;
+
+    assert!(
+        stdout.contains("MMAP_SUCCESS"),
+        "mmap test should succeed - if this fails, --allow-mmap may not be working: {}",
+        stdout
+    );
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_virtiofs_mmap);
+
 /// Test that ephemeral VMs have the expected mount layout:
 /// - / is read-only virtiofs
 /// - /etc is overlayfs with tmpfs upper (writable)
