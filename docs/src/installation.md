@@ -16,6 +16,18 @@ Optional:
   sudo usermod -a -G libvirt $USER
   ```
 
+## Development Binaries
+
+Pre-built binaries from `main` are available as OCI artifacts:
+
+```bash
+# Requires ORAS (https://oras.land/)
+# Note: This command pulls the x86_64 architecture binary
+oras pull ghcr.io/bootc-dev/bcvk-binary:x86_64-latest
+tar -xzf bcvk-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 bcvk-x86_64-unknown-linux-gnu /usr/local/bin/bcvk
+```
+
 ## Building from Source
 
 Without cloning the repo:
