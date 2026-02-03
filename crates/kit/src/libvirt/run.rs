@@ -1244,14 +1244,15 @@ fn create_libvirt_domain_from_disk(
         );
     }
 
-    // Create a single dropin for local-fs.target that wants all mount units
-    // This must be done AFTER all mount units have been added (including bind-storage-ro)
+    // Create a dropin for remote-fs.target that wants all virtiofs mount units.
+    // We use remote-fs.target because virtiofs is conceptually similar to a remote
+    // filesystem - it requires virtio transport infrastructure, like NFS needs network.
     if !mount_unit_names.is_empty() {
         let wants_list = mount_unit_names.join(" ");
         let dropin_content = format!("[Unit]\nWants={}\n", wants_list);
         let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
         let dropin_cred = format!(
-            "io.systemd.credential.binary:systemd.unit-dropin.local-fs.target~bcvk-mounts={encoded_dropin}"
+            "io.systemd.credential.binary:systemd.unit-dropin.remote-fs.target~bcvk-mounts={encoded_dropin}"
         );
         smbios_creds.push(dropin_cred);
     }

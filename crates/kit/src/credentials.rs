@@ -37,12 +37,12 @@ pub fn guest_path_to_unit_name(guest_path: &str) -> String {
 /// Creates a systemd mount unit that mounts a virtiofs filesystem at the specified
 /// guest path. The unit is configured to:
 /// - Mount type: virtiofs
-/// - Options: Include readonly flag if specified
-/// - TimeoutSec=10: Fail quickly if mount hangs instead of blocking boot
-/// - DefaultDependencies=no to avoid ordering cycles
-/// - Before=local-fs.target and After=systemd-remount-fs.service
+/// - Options: Include readonly flag if specified, plus SELinux context for RO mounts
+/// - Before=remote-fs.target to integrate with standard systemd mount ordering
 ///
-/// Note: systemd automatically creates mount point directories, so DirectoryMode is not needed
+/// We use remote-fs.target rather than local-fs.target because virtiofs is
+/// conceptually similar to a "remote" filesystem - it requires virtio transport
+/// infrastructure to be available, similar to how NFS requires network.
 ///
 /// Returns the complete unit file content as a string
 pub fn generate_virtiofs_mount_unit(
@@ -63,10 +63,7 @@ pub fn generate_virtiofs_mount_unit(
         "[Unit]\n\
          Description=Mount virtiofs tag {tag} at {path}\n\
          ConditionPathExists=!/etc/initrd-release\n\
-         DefaultDependencies=no\n\
-         Conflicts=umount.target\n\
-         Before=local-fs.target umount.target\n\
-         After=systemd-remount-fs.service\n\
+         Before=remote-fs.target\n\
          \n\
          [Mount]\n\
          What={tag}\n\
