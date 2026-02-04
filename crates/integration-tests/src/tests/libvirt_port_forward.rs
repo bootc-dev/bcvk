@@ -7,6 +7,7 @@
 
 use color_eyre::Result;
 use integration_tests::integration_test;
+use scopeguard::defer;
 use xshell::cmd;
 
 use crate::{get_bck_command, get_test_image, shell, LIBVIRT_INTEGRATION_TEST_LABEL};
@@ -25,25 +26,13 @@ fn test_libvirt_port_forward_parsing() -> Result<()> {
     ];
 
     for ports in valid_port_tests {
-        let output = cmd!(sh, "{bck} libvirt run {ports...} --help")
-            .ignore_status()
-            .output()?;
+        let output = cmd!(sh, "{bck} libvirt run {ports...} --help").output()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
 
-        if !output.status.success() {
-            assert!(
-                !stderr.contains("invalid") && !stderr.contains("parse"),
-                "Port forwarding options should be parsed correctly: {:?}, stderr: {}",
-                ports,
-                stderr
-            );
-        } else {
-            assert!(
-                stdout.contains("Usage") || stdout.contains("USAGE"),
-                "Should show help output when using --help"
-            );
-        }
+        assert!(
+            stdout.contains("Usage") || stdout.contains("USAGE"),
+            "Should show help output when using --help"
+        );
     }
 
     println!("✓ Port forwarding argument parsing validated");
@@ -132,29 +121,20 @@ fn test_libvirt_port_forward_xml() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create domain with port forwarding
     println!("Creating libvirt domain with port forwarding...");
-    let create_output = cmd!(
+    let create_stdout = cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --port 8080:80 --port 9090:8080 --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
+    .read()?;
 
     println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain with port forwarding: {}",
-            create_stderr
-        );
-    }
-
     println!("Successfully created domain: {}", domain_name);
 
     // Verify port forwarding in output
@@ -193,10 +173,6 @@ fn test_libvirt_port_forward_xml() -> Result<()> {
     );
 
     println!("✓ Domain XML contains expected port forwarding configuration");
-
-    // Cleanup domain
-    cleanup_domain(&domain_name);
-
     println!("✓ Port forwarding XML configuration test passed");
     Ok(())
 }
@@ -230,31 +206,21 @@ fn test_libvirt_port_forward_connectivity() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create domain with port forwarding (forward host_port to guest port 8080)
     println!(
         "Creating libvirt domain with port forwarding {}:8080...",
         host_port
     );
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --port {port_mapping} --filesystem ext4 --ssh-wait {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
-
-    println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain with port forwarding: {}",
-            create_stderr
-        );
-    }
+    .run()?;
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -267,18 +233,11 @@ fn test_libvirt_port_forward_connectivity() -> Result<()> {
     // Create a test file to serve
     println!("Creating test file in VM...");
     let create_file_cmd = "echo 'port-forward-test-success' > /tmp/test.txt";
-    let create_file_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt ssh --timeout 10 {domain_name} -- sh -c {create_file_cmd}"
     )
-    .ignore_status()
-    .output()?;
-
-    if !create_file_output.status.success() {
-        let stderr = String::from_utf8_lossy(&create_file_output.stderr);
-        cleanup_domain(&domain_name);
-        panic!("Failed to create test file in VM: {}", stderr);
-    }
+    .run()?;
     println!("✓ Test file created successfully");
 
     // Start HTTP server in background
@@ -290,18 +249,11 @@ fn test_libvirt_port_forward_connectivity() -> Result<()> {
     println!("Starting background HTTP server...");
     let start_server_cmd =
         "(cd /tmp && exec python3 -m http.server 8080 > /tmp/http.log 2>&1 < /dev/null &) && sleep 0.1";
-    let start_server_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt ssh --timeout 10 {domain_name} -- bash -c {start_server_cmd}"
     )
-    .ignore_status()
-    .output()?;
-
-    if !start_server_output.status.success() {
-        let stderr = String::from_utf8_lossy(&start_server_output.stderr);
-        cleanup_domain(&domain_name);
-        panic!("Failed to start HTTP server in VM: {}", stderr);
-    }
+    .run()?;
     println!("✓ HTTP server command executed");
 
     // Wait a bit for the server to start
@@ -353,9 +305,6 @@ fn test_libvirt_port_forward_connectivity() -> Result<()> {
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
     }
-
-    // Cleanup domain before assertions
-    cleanup_domain(&domain_name);
 
     assert!(
         connection_success,

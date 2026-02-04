@@ -9,6 +9,7 @@
 
 use color_eyre::Result;
 use integration_tests::integration_test;
+use scopeguard::defer;
 use xshell::cmd;
 
 use crate::{get_bck_command, get_test_image, shell, LIBVIRT_INTEGRATION_TEST_LABEL};
@@ -29,28 +30,15 @@ fn test_libvirt_list_functionality() -> Result<()> {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
-    let output = cmd!(sh, "{bck} libvirt list").ignore_status().output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = cmd!(sh, "{bck} libvirt list").read()?;
 
-    // May succeed or fail depending on libvirt availability, but should not crash
-    if output.status.success() {
-        println!("libvirt list succeeded: {}", stdout);
-        // Should show domain listing format
-        assert!(
-            stdout.contains("NAME")
-                || stdout.contains("No VMs found")
-                || stdout.contains("No running VMs found"),
-            "Should show domain listing format or empty message"
-        );
-    } else {
-        println!("libvirt list failed (expected in CI): {}", stderr);
-        // Verify it fails with proper error message about libvirt connectivity
-        assert!(
-            stderr.contains("libvirt") || stderr.contains("connect") || stderr.contains("virsh"),
-            "Should have meaningful error about libvirt connectivity"
-        );
-    }
+    // Should show domain listing format
+    assert!(
+        stdout.contains("NAME")
+            || stdout.contains("No VMs found")
+            || stdout.contains("No running VMs found"),
+        "Should show domain listing format or empty message"
+    );
 
     println!("libvirt list functionality tested");
     Ok(())
@@ -62,28 +50,16 @@ fn test_libvirt_list_json_output() -> Result<()> {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
-    let output = cmd!(sh, "{bck} libvirt list --format json")
-        .ignore_status()
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = cmd!(sh, "{bck} libvirt list --format json").read()?;
 
-    if output.status.success() {
-        // If successful, should be valid JSON
-        let json_result: std::result::Result<serde_json::Value, _> = serde_json::from_str(&stdout);
-        assert!(
-            json_result.is_ok(),
-            "libvirt list --format json should produce valid JSON: {}",
-            stdout
-        );
-        println!("libvirt list --format json produced valid JSON");
-    } else {
-        // May fail in CI without libvirt, but should mention error handling
-        println!(
-            "libvirt list --format json failed (expected in CI): {}",
-            stderr
-        );
-    }
+    // Should be valid JSON
+    let json_result: std::result::Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(
+        json_result.is_ok(),
+        "libvirt list --format json should produce valid JSON: {}",
+        stdout
+    );
+    println!("libvirt list --format json produced valid JSON");
 
     println!("libvirt list JSON output tested");
     Ok(())
@@ -103,26 +79,12 @@ fn test_libvirt_run_resource_options() -> Result<()> {
     ];
 
     for resources in resource_tests {
-        let output = cmd!(sh, "{bck} libvirt run {resources...} --help")
-            .ignore_status()
-            .output()?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = cmd!(sh, "{bck} libvirt run {resources...} --help").read()?;
 
-        // Should show help and not fail on resource parsing
-        if !output.status.success() {
-            assert!(
-                !stderr.contains("invalid") && !stderr.contains("parse"),
-                "Resource options should be parsed correctly: {:?}, stderr: {}",
-                resources,
-                stderr
-            );
-        } else {
-            assert!(
-                stdout.contains("Usage") || stdout.contains("USAGE"),
-                "Should show help output when using --help"
-            );
-        }
+        assert!(
+            stdout.contains("Usage") || stdout.contains("USAGE"),
+            "Should show help output when using --help"
+        );
     }
 
     println!("libvirt run resource options validated");
@@ -142,26 +104,12 @@ fn test_libvirt_run_networking() -> Result<()> {
     ];
 
     for network in network_configs {
-        let output = cmd!(sh, "{bck} libvirt run {network...} --help")
-            .ignore_status()
-            .output()?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = cmd!(sh, "{bck} libvirt run {network...} --help").read()?;
 
-        if !output.status.success() {
-            // Should not fail on network option parsing
-            assert!(
-                !stderr.contains("invalid") && !stderr.contains("parse"),
-                "Network options should be parsed correctly: {:?}, stderr: {}",
-                network,
-                stderr
-            );
-        } else {
-            assert!(
-                stdout.contains("Usage") || stdout.contains("USAGE"),
-                "Should show help output when using --help"
-            );
-        }
+        assert!(
+            stdout.contains("Usage") || stdout.contains("USAGE"),
+            "Should show help output when using --help"
+        );
     }
 
     println!("libvirt run networking options validated");
@@ -214,25 +162,18 @@ fn test_libvirt_comprehensive_workflow() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create domain with multiple features: instancetype, labels, SSH
     println!("Creating libvirt domain with instancetype and labels...");
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --label test-workflow --itype u1.small --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
-
-    println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!("Failed to create domain: {}", create_stderr);
-    }
+    .run()?;
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -333,7 +274,7 @@ fn test_libvirt_comprehensive_workflow() -> Result<()> {
 
     // Test 6: Test `rm -f` stops running VMs by default
     println!("Test 6: Testing `rm -f` stops running VMs without --stop flag...");
-    let rm_test_domain = create_test_vm_and_assert("test-rm", &test_image, &domain_name)?;
+    let rm_test_domain = create_test_vm_and_assert("test-rm", &test_image)?;
 
     // Verify it's running
     let rm_info = cmd!(sh, "virsh dominfo {rm_test_domain}").read()?;
@@ -361,7 +302,12 @@ fn test_libvirt_comprehensive_workflow() -> Result<()> {
 
     // Test 7: Test `run --replace` replaces existing VM
     println!("Test 7: Testing `run --replace` replaces existing VM...");
-    let replace_test_domain = create_test_vm_and_assert("test-replace", &test_image, &domain_name)?;
+    let replace_test_domain = create_test_vm_and_assert("test-replace", &test_image)?;
+
+    // Set up cleanup guard for replace_test_domain
+    defer! {
+        cleanup_domain(&replace_test_domain);
+    }
 
     // Verify initial VM exists
     let initial_domain_list = cmd!(sh, "virsh list --all --name").read()?;
@@ -376,22 +322,11 @@ fn test_libvirt_comprehensive_workflow() -> Result<()> {
         "Running `bcvk libvirt run --replace --name {}`...",
         replace_test_domain
     );
-    let replace_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --replace --name {replace_test_domain} --label {label} --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    if !replace_output.status.success() {
-        let replace_stderr = String::from_utf8_lossy(&replace_output.stderr);
-        cleanup_domain(&replace_test_domain);
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to replace VM with --replace flag: {}",
-            replace_stderr
-        );
-    }
+    .run()?;
     println!("✓ Successfully replaced VM with --replace flag");
 
     // Verify VM still exists with same name
@@ -409,13 +344,6 @@ fn test_libvirt_comprehensive_workflow() -> Result<()> {
         "Replaced VM should be running"
     );
     println!("✓ Replaced VM is running (fresh instance)");
-
-    // Cleanup replace test VM
-    cleanup_domain(&replace_test_domain);
-    println!("✓ Cleaned up replace test VM");
-
-    // Cleanup original domain
-    cleanup_domain(&domain_name);
 
     println!("✓ Comprehensive workflow test passed");
     Ok(())
@@ -461,31 +389,19 @@ fn cleanup_domain(domain_name: &str) {
 /// Helper function to create a test VM and assert success
 ///
 /// Creates a VM using cmd! with the given prefix and test image.
-/// Cleans up the original domain on error and returns the created domain name.
-fn create_test_vm_and_assert(
-    domain_prefix: &str,
-    test_image: &str,
-    original_domain: &str,
-) -> Result<String> {
+/// Returns the created domain name on success.
+fn create_test_vm_and_assert(domain_prefix: &str, test_image: &str) -> Result<String> {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = LIBVIRT_INTEGRATION_TEST_LABEL;
     let domain_name = format!("{}-{}", domain_prefix, random_suffix());
 
     println!("Creating test VM: {}", domain_name);
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    if !create_output.status.success() {
-        let stderr = String::from_utf8_lossy(&create_output.stderr);
-        cleanup_domain(&domain_name);
-        cleanup_domain(original_domain);
-        panic!("Failed to create test VM '{}': {}", domain_name, stderr);
-    }
+    .run()?;
 
     println!("✓ Test VM created: {}", domain_name);
     Ok(domain_name)
@@ -615,28 +531,18 @@ fn test_libvirt_run_bind_storage_ro() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
-    // Create domain with --bind-storage-ro flag
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
+    // Create domain with --bind-storage-ro flag and wait for SSH
     println!("Creating libvirt domain with --bind-storage-ro...");
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --bind-storage-ro --filesystem ext4 --ssh-wait {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
-
-    println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain with --bind-storage-ro: {}",
-            create_stderr
-        );
-    }
+    .run()?;
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -679,12 +585,8 @@ fn test_libvirt_run_bind_storage_ro() -> Result<()> {
     println!("✓ Container storage mount is configured as read-only");
     println!("✓ hoststorage tag is present in filesystem configuration");
 
-    // SSH is already available due to --ssh-wait flag
+    // SSH is already available due to --ssh-wait flag, VM is ready
     println!("✓ SSH is ready (via --ssh-wait)");
-
-    // Wait for automatic mount to complete
-    println!("Waiting for VM to boot and automatic mount to complete...");
-    std::thread::sleep(std::time::Duration::from_secs(10));
 
     // Test SSH connection and verify container storage is automatically mounted
     println!(
@@ -710,10 +612,6 @@ fn test_libvirt_run_bind_storage_ro() -> Result<()> {
         "Mount should be read-only, but write operation succeeded"
     );
     println!("✓ Mount is correctly configured as read-only.");
-
-    // Cleanup domain before completing test
-    cleanup_domain(&domain_name);
-
     println!("✓ --bind-storage-ro end-to-end test passed");
     Ok(())
 }
@@ -737,28 +635,18 @@ fn test_libvirt_run_no_storage_opts_without_bind_storage() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create domain WITHOUT --bind-storage-ro flag
     println!("Creating libvirt domain without --bind-storage-ro...");
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
-
-    println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain without --bind-storage-ro: {}",
-            create_stderr
-        );
-    }
+    .run()?;
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -798,10 +686,6 @@ fn test_libvirt_run_no_storage_opts_without_bind_storage() -> Result<()> {
         "Domain XML should NOT contain bind-storage-ro metadata when flag is not used. Found in XML."
     );
     println!("✓ Domain XML does not contain bind-storage-ro metadata");
-
-    // Cleanup domain
-    cleanup_domain(&domain_name);
-
     println!("✓ Test passed: STORAGE_OPTS credentials are correctly excluded when --bind-storage-ro is not used");
     Ok(())
 }
@@ -897,25 +781,19 @@ fn test_libvirt_run_transient_vm() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // For transient VMs, the domain is automatically removed when stopped,
+    // so we use a defer guard only for cleanup on early error
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create transient domain
     println!("Creating transient libvirt domain...");
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --transient --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
-
-    println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!("Failed to create transient domain: {}", create_stderr);
-    }
+    .run()?;
 
     println!("Successfully created transient domain: {}", domain_name);
 
@@ -1024,20 +902,18 @@ fn test_libvirt_run_transient_replace() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create initial transient domain
     println!("Creating initial transient domain...");
-    let create_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --transient --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    if !create_output.status.success() {
-        let stderr = String::from_utf8_lossy(&create_output.stderr);
-        cleanup_domain(&domain_name);
-        panic!("Failed to create initial transient domain: {}", stderr);
-    }
+    .run()?;
     println!("✓ Initial transient domain created: {}", domain_name);
 
     let sh = shell()?;
@@ -1053,23 +929,11 @@ fn test_libvirt_run_transient_replace() -> Result<()> {
 
     // Now replace the transient domain with another transient domain
     println!("Replacing transient domain with --transient --replace...");
-    let replace_output = cmd!(
+    cmd!(
         sh,
         "{bck} libvirt run --name {domain_name} --label {label} --transient --replace --filesystem ext4 {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let replace_stdout = String::from_utf8_lossy(&replace_output.stdout);
-    let replace_stderr = String::from_utf8_lossy(&replace_output.stderr);
-
-    println!("Replace stdout: {}", replace_stdout);
-    println!("Replace stderr: {}", replace_stderr);
-
-    if !replace_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!("Failed to replace transient domain: {}", replace_stderr);
-    }
+    .run()?;
     println!("✓ Successfully replaced transient domain");
 
     // Verify the new domain exists and is transient
@@ -1088,9 +952,6 @@ fn test_libvirt_run_transient_replace() -> Result<()> {
         dominfo
     );
     println!("✓ Replaced transient domain is running");
-
-    // Cleanup
-    cleanup_domain(&domain_name);
     println!("✓ Transient --replace test passed");
     Ok(())
 }
@@ -1135,31 +996,22 @@ fn test_libvirt_run_bind_mounts() -> Result<()> {
     // Cleanup any existing domain with this name
     cleanup_domain(&domain_name);
 
+    // Set up cleanup guard that will run on scope exit
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
     // Create domain with bind mounts and test karg
     println!("Creating libvirt domain with bind mounts and karg...");
     let rw_bind = format!("{}:/var/mnt/test-rw", rw_dir_path);
     let ro_bind = format!("{}:/var/mnt/test-ro", ro_dir_path);
 
-    let create_output = cmd!(
+    // Use --ssh-wait to properly wait for VM to be ready instead of arbitrary sleep
+    cmd!(
         sh,
-        "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 --karg bcvk.test-install-karg=1 --bind {rw_bind} --bind-ro {ro_bind} {test_image}"
+        "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 --ssh-wait --karg bcvk.test-install-karg=1 --bind {rw_bind} --bind-ro {ro_bind} {test_image}"
     )
-    .ignore_status()
-    .output()?;
-
-    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
-    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
-
-    println!("Create stdout: {}", create_stdout);
-    println!("Create stderr: {}", create_stderr);
-
-    if !create_output.status.success() {
-        cleanup_domain(&domain_name);
-        panic!(
-            "Failed to create domain with bind mounts: {}",
-            create_stderr
-        );
-    }
+    .run()?;
 
     println!("Successfully created domain: {}", domain_name);
 
@@ -1182,33 +1034,7 @@ fn test_libvirt_run_bind_mounts() -> Result<()> {
 
     println!("✓ Domain XML contains virtiofs and SMBIOS credentials");
 
-    // Wait for VM to boot and mounts to be ready
-    println!("Waiting for VM to boot and mounts to be ready...");
-    std::thread::sleep(std::time::Duration::from_secs(15));
-
-    // Debug: Check systemd credentials
-    println!("Debugging: Checking systemd credentials...");
-    let _ = cmd!(
-        sh,
-        "{bck} libvirt ssh {domain_name} -- ls -la /run/credentials"
-    )
-    .ignore_status()
-    .run();
-
-    // Debug: Check mount units
-    println!("Debugging: Checking mount units...");
-    let _ = cmd!(
-        sh,
-        "{bck} libvirt ssh {domain_name} -- systemctl list-units *.mount"
-    )
-    .ignore_status()
-    .run();
-
-    // Debug: Check mount status
-    println!("Debugging: Checking if mounts exist...");
-    let _ = cmd!(sh, "{bck} libvirt ssh {domain_name} -- mount")
-        .ignore_status()
-        .run();
+    // VM is ready (--ssh-wait ensures this), now test the mounts
 
     // Test read-write bind mount - verify file exists and is readable
     println!("Testing read-write bind mount...");
@@ -1278,10 +1104,6 @@ fn test_libvirt_run_bind_mounts() -> Result<()> {
         cmdline_stdout
     );
     println!("✓ Kernel argument validated");
-
-    // Cleanup domain
-    cleanup_domain(&domain_name);
-
     println!("✓ Bind mounts and karg test passed");
     Ok(())
 }
