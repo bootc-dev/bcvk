@@ -14,6 +14,8 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
+use std::process::Output;
+
 use camino::Utf8PathBuf;
 use color_eyre::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
@@ -21,7 +23,7 @@ use xshell::cmd;
 
 use tempfile::TempDir;
 
-use crate::{get_bck_command, get_test_image, shell, CapturedOutput, INTEGRATION_TEST_LABEL};
+use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
 
 /// Validate that a disk image was created successfully with proper bootc installation
 ///
@@ -32,11 +34,7 @@ use crate::{get_bck_command, get_test_image, shell, CapturedOutput, INTEGRATION_
 ///
 /// Note: sfdisk can only read partition tables from raw disk images, not qcow2.
 /// For qcow2 images, partition validation is skipped.
-fn validate_disk_image(
-    disk_path: &Utf8PathBuf,
-    output: &CapturedOutput,
-    context: &str,
-) -> Result<()> {
+fn validate_disk_image(disk_path: &Utf8PathBuf, output: &Output, context: &str) -> Result<()> {
     let metadata = std::fs::metadata(disk_path).expect("Failed to get disk metadata");
     assert!(metadata.len() > 0, "{}: Disk image is empty", context);
 
@@ -65,11 +63,13 @@ fn validate_disk_image(
         );
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stdout.contains("Installation complete") || output.stderr.contains("Installation complete"),
+        stdout.contains("Installation complete") || stderr.contains("Installation complete"),
         "{}: No 'Installation complete' message found in output. This indicates bootc install did not complete successfully. stdout: {}, stderr: {}",
         context,
-        output.stdout, output.stderr
+        stdout, stderr
     );
 
     Ok(())
@@ -86,23 +86,7 @@ fn test_to_disk() -> Result<()> {
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
         .expect("temp path is not UTF-8");
 
-    let raw_output = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}")
-        .ignore_status()
-        .output()?;
-    let output = CapturedOutput::new(std::process::Output {
-        status: raw_output.status,
-        stdout: raw_output.stdout,
-        stderr: raw_output.stderr,
-    });
-
-    assert!(
-        output.success(),
-        "to-disk failed with exit code: {:?}. stdout: {}, stderr: {}",
-        output.exit_code(),
-        output.stdout,
-        output.stderr
-    );
-
+    let output = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}").output()?;
     validate_disk_image(&disk_path, &output, "test_to_disk")?;
     Ok(())
 }
@@ -119,25 +103,11 @@ fn test_to_disk_qcow2() -> Result<()> {
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.qcow2"))
         .expect("temp path is not UTF-8");
 
-    let raw_output = cmd!(
+    let output = cmd!(
         sh,
         "{bck} to-disk --format=qcow2 --label {label} {image} {disk_path}"
     )
-    .ignore_status()
     .output()?;
-    let output = CapturedOutput::new(std::process::Output {
-        status: raw_output.status,
-        stdout: raw_output.stdout,
-        stderr: raw_output.stderr,
-    });
-
-    assert!(
-        output.success(),
-        "to-disk with qcow2 failed with exit code: {:?}. stdout: {}, stderr: {}",
-        output.exit_code(),
-        output.stdout,
-        output.stderr
-    );
 
     // Verify the file is actually qcow2 format using qemu-img info
     let qemu_img_stdout = cmd!(sh, "qemu-img info {disk_path}").read()?;
@@ -165,55 +135,28 @@ fn test_to_disk_caching() -> Result<()> {
         .expect("temp path is not UTF-8");
 
     // First run: Create the disk image
-    let raw_output1 = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}")
-        .ignore_status()
-        .output()?;
-    let output1 = CapturedOutput::new(std::process::Output {
-        status: raw_output1.status,
-        stdout: raw_output1.stdout,
-        stderr: raw_output1.stderr,
-    });
-
-    assert!(
-        output1.success(),
-        "First to-disk run failed with exit code: {:?}. stdout: {}, stderr: {}",
-        output1.exit_code(),
-        output1.stdout,
-        output1.stderr
-    );
+    let output1 = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}").output()?;
+    let stdout1 = String::from_utf8_lossy(&output1.stdout);
+    let stderr1 = String::from_utf8_lossy(&output1.stderr);
 
     let metadata1 =
         std::fs::metadata(&disk_path).expect("Failed to get disk metadata after first run");
     assert!(metadata1.len() > 0, "Disk image is empty after first run");
 
     assert!(
-        output1.stdout.contains("Installation complete")
-            || output1.stderr.contains("Installation complete"),
+        stdout1.contains("Installation complete") || stderr1.contains("Installation complete"),
         "No 'Installation complete' message found in first run output"
     );
 
     // Second run: Should reuse the cached disk
-    let raw_output2 = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}")
-        .ignore_status()
-        .output()?;
-    let output2 = CapturedOutput::new(std::process::Output {
-        status: raw_output2.status,
-        stdout: raw_output2.stdout,
-        stderr: raw_output2.stderr,
-    });
+    let output2 = cmd!(sh, "{bck} to-disk --label {label} {image} {disk_path}").output()?;
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    let stderr2 = String::from_utf8_lossy(&output2.stderr);
 
     assert!(
-        output2.success(),
-        "Second to-disk run failed with exit code: {:?}. stdout: {}, stderr: {}",
-        output2.exit_code(),
-        output2.stdout,
-        output2.stderr
-    );
-
-    assert!(
-        output2.stdout.contains("Reusing existing cached disk image"),
+        stdout2.contains("Reusing existing cached disk image"),
         "Second run should have reused cached disk, but cache reuse message not found. stdout: {}, stderr: {}",
-        output2.stdout, output2.stderr
+        stdout2, stderr2
     );
 
     let metadata2 =
@@ -225,7 +168,7 @@ fn test_to_disk_caching() -> Result<()> {
     );
 
     assert!(
-        !output2.stdout.contains("Installation complete") && !output2.stderr.contains("Installation complete"),
+        !stdout2.contains("Installation complete") && !stderr2.contains("Installation complete"),
         "Second run should not have performed installation, but found 'Installation complete' message"
     );
     Ok(())
@@ -251,22 +194,7 @@ fn test_to_disk_different_imgref_same_digest() -> Result<()> {
     let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
         .expect("temp path is not UTF-8");
 
-    let raw_output1 = cmd!(sh, "{bck} to-disk --label {label} {test_image} {disk_path}")
-        .ignore_status()
-        .output()?;
-    let output1 = CapturedOutput::new(std::process::Output {
-        status: raw_output1.status,
-        stdout: raw_output1.stdout,
-        stderr: raw_output1.stderr,
-    });
-
-    assert!(
-        output1.success(),
-        "First to-disk run failed with exit code: {:?}. stdout: {}, stderr: {}",
-        output1.exit_code(),
-        output1.stdout,
-        output1.stderr
-    );
+    cmd!(sh, "{bck} to-disk --label {label} {test_image} {disk_path}").run()?;
 
     let metadata1 =
         std::fs::metadata(&disk_path).expect("Failed to get disk metadata after first run");
@@ -274,32 +202,20 @@ fn test_to_disk_different_imgref_same_digest() -> Result<()> {
 
     // Use --dry-run with the aliased image reference (same digest, different imgref)
     // to verify it would regenerate instead of reusing the cache
-    let raw_output2 = cmd!(
+    let output2 = cmd!(
         sh,
         "{bck} to-disk --dry-run --label {label} {second_tag} {disk_path}"
     )
-    .ignore_status()
     .output()?;
-    let output2 = CapturedOutput::new(std::process::Output {
-        status: raw_output2.status,
-        stdout: raw_output2.stdout,
-        stderr: raw_output2.stderr,
-    });
-
-    assert!(
-        output2.success(),
-        "Dry-run with different imgref failed with exit code: {:?}. stdout: {}, stderr: {}",
-        output2.exit_code(),
-        output2.stdout,
-        output2.stderr
-    );
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    let stderr2 = String::from_utf8_lossy(&output2.stderr);
 
     // The dry-run should report it would regenerate because the source imgref is different
     assert!(
-        output2.stdout.contains("would-regenerate"),
+        stdout2.contains("would-regenerate"),
         "Dry-run should report 'would-regenerate' for different imgref. stdout: {}, stderr: {}",
-        output2.stdout,
-        output2.stderr
+        stdout2,
+        stderr2
     );
 
     // Clean up: remove the aliased tag
@@ -326,26 +242,11 @@ fn test_to_disk_for_image(image: &str) -> Result<()> {
         .expect("temp path is not UTF-8");
 
     // Not all images have a default filesystem, so explicitly specify ext4
-    let raw_output = cmd!(
+    let output = cmd!(
         sh,
         "{bck} to-disk --label {label} --filesystem=ext4 {image} {disk_path}"
     )
-    .ignore_status()
     .output()?;
-    let output = CapturedOutput::new(std::process::Output {
-        status: raw_output.status,
-        stdout: raw_output.stdout,
-        stderr: raw_output.stderr,
-    });
-
-    assert!(
-        output.success(),
-        "to-disk with image {} failed with exit code: {:?}. stdout: {}, stderr: {}",
-        image,
-        output.exit_code(),
-        output.stdout,
-        output.stderr
-    );
 
     validate_disk_image(
         &disk_path,

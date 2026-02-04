@@ -1,7 +1,5 @@
 //! Integration tests for bcvk
 
-use std::process::Output;
-
 use camino::Utf8Path;
 
 use color_eyre::eyre::{eyre, Context};
@@ -81,36 +79,6 @@ pub(crate) fn get_all_test_images() -> Vec<String> {
         }
     } else {
         vec![get_test_image()]
-    }
-}
-
-/// Captured output from a command with decoded stdout/stderr strings
-pub(crate) struct CapturedOutput {
-    pub output: Output,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-impl CapturedOutput {
-    /// Create from a raw Output
-    pub fn new(output: Output) -> Self {
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        Self {
-            output,
-            stdout,
-            stderr,
-        }
-    }
-
-    /// Get the exit code
-    pub fn exit_code(&self) -> Option<i32> {
-        self.output.status.code()
-    }
-
-    /// Check if the command succeeded
-    pub fn success(&self) -> bool {
-        self.output.status.success()
     }
 }
 
