@@ -6,6 +6,7 @@
 
 use crate::cache_metadata::DiskImageMetadata;
 use crate::install_options::InstallOptions;
+use crate::utils::DiskSize;
 use camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
@@ -109,8 +110,9 @@ fn create_base_disk(
         additional: ToDiskAdditionalOpts {
             disk_size: install_options
                 .root_size
-                .clone()
-                .or(Some(super::LIBVIRT_DEFAULT_DISK_SIZE.to_string())),
+                .as_ref()
+                .and_then(|s| s.parse::<DiskSize>().ok())
+                .or_else(|| super::LIBVIRT_DEFAULT_DISK_SIZE.parse::<DiskSize>().ok()),
             format: Format::Qcow2, // Use qcow2 for CoW cloning
             common: CommonVmOpts {
                 memory: crate::common_opts::MemoryOpts {
