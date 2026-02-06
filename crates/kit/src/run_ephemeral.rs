@@ -385,12 +385,39 @@ pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
 }
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
+/// This function uses exec() to replace the current process with podman.
+/// Use `run_sync()` if you need to wait for completion and continue execution.
 pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
     // Keep _temp_dir alive until exec replaces our process
     // At this point our process is replaced by `podman`, we are just a wrapper for creating
     // a container image and nothing else lives past that event.
     return Err(cmd.exec()).context("execve");
+}
+
+/// Launch privileged container with QEMU+KVM for ephemeral VM as a subprocess.
+/// Waits for the container to complete and returns success/failure.
+/// Use this when you need to run an ephemeral VM and continue execution afterwards.
+pub fn run_sync(opts: RunEphemeralOpts) -> Result<()> {
+    let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
+    // Keep _temp_dir alive until the child process completes
+
+    debug!("Running podman command (sync): {:?}", cmd);
+
+    let status = cmd
+        .status()
+        .context("Failed to execute podman command")?;
+
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        return Err(eyre!(
+            "Ephemeral VM container exited with non-zero status: {}",
+            code
+        ));
+    }
+
+    debug!("Ephemeral VM container completed successfully");
+    Ok(())
 }
 
 fn prepare_run_command_with_temp(

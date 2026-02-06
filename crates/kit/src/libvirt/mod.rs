@@ -34,6 +34,7 @@ pub mod print_firmware;
 pub mod rm;
 pub mod rm_all;
 pub mod run;
+pub mod run_anaconda;
 pub mod secureboot;
 pub mod ssh;
 pub mod start;
@@ -184,6 +185,10 @@ mod tests {
 pub enum LibvirtSubcommands {
     /// Run a bootable container as a persistent VM
     Run(run::LibvirtRunOpts),
+
+    /// Run a bootable container as a persistent VM, installed via anaconda
+    #[clap(name = "run-anaconda")]
+    RunAnaconda(run_anaconda::LibvirtRunAnacondaOpts),
 
     /// SSH to libvirt domain with embedded SSH key
     Ssh(ssh::LibvirtSshOpts),
