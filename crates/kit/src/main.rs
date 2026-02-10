@@ -4,6 +4,7 @@ use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
 use color_eyre::{eyre::Context as _, Report, Result};
 
+mod anaconda;
 mod arch;
 mod boot_progress;
 mod cache_metadata;
@@ -115,6 +116,10 @@ enum Commands {
     /// Internal diagnostic and tooling commands for development
     #[clap(hide = true)]
     Internals(InternalsOpts),
+
+    /// Install bootc containers using anaconda
+    #[clap(subcommand, hide = true)]
+    Anaconda(anaconda::AnacondaSubcommands),
 }
 
 /// Install and configure the tracing/logging system.
@@ -169,6 +174,9 @@ fn main() -> Result<(), Report> {
             let options = libvirt::LibvirtOptions { connect };
             match command {
                 libvirt::LibvirtSubcommands::Run(opts) => libvirt::run::run(&options, opts)?,
+                libvirt::LibvirtSubcommands::RunAnaconda(opts) => {
+                    libvirt::run_anaconda::run(&options, opts)?
+                }
                 libvirt::LibvirtSubcommands::Ssh(opts) => libvirt::ssh::run(&options, opts)?,
                 libvirt::LibvirtSubcommands::List(opts) => libvirt::list::run(&options, opts)?,
                 libvirt::LibvirtSubcommands::ListVolumes(opts) => {
@@ -227,6 +235,14 @@ fn main() -> Result<(), Report> {
                 println!("{}", json);
             }
         },
+        Commands::Anaconda(cmd) => {
+            let options = anaconda::AnacondaOptions::default();
+            match cmd {
+                anaconda::AnacondaSubcommands::Install(opts) => {
+                    anaconda::install::install(&options, opts)?
+                }
+            }
+        }
     }
     tracing::debug!("exiting");
     // Ensure we don't block on any spawned tasks
