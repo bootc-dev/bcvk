@@ -1,0 +1,19 @@
+# Anaconda installer packages
+anaconda-tui
+python3-kickstart
+pykickstart
+
+# Disk tools
+parted
+gdisk
+lvm2
+cryptsetup
+
+# Filesystem tools
+e2fsprogs
+xfsprogs
+btrfs-progs
+dosfstools
+
+# Container tools (bootc is in base image)
+skopeo

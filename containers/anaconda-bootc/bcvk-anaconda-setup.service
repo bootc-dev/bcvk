@@ -1,0 +1,18 @@
+[Unit]
+Description=bcvk container storage setup for anaconda
+# Run before anaconda starts, after basic system is up and target disk is available
+Before=anaconda-direct.service anaconda.service
+After=basic.target dev-disk-by\x2did-virtio\x2doutput.device
+Requires=dev-disk-by\x2did-virtio\x2doutput.device
+# Only run in bcvk anaconda environment (bcvk passes this kernel arg)
+ConditionKernelCommandLine=bcvk.anaconda
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bcvk-anaconda-setup.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=anaconda.target

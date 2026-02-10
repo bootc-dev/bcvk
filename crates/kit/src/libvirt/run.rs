@@ -21,7 +21,20 @@ use crate::utils::parse_memory_to_mb;
 use crate::xml_utils;
 
 /// SSH wait timeout in seconds
-const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
+pub(super) const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
+
+/// Validate that labels don't contain commas (shared helper)
+pub(super) fn validate_labels(labels: &[String]) -> Result<()> {
+    for label in labels {
+        if label.contains(',') {
+            return Err(eyre!(
+                "Label '{}' contains comma which is not allowed",
+                label
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Transport type for updating from host container storage
 const UPDATE_FROM_HOST_TRANSPORT: &str = "containers-storage";
@@ -309,15 +322,7 @@ pub struct LibvirtRunOpts {
 impl LibvirtRunOpts {
     /// Validate that labels don't contain commas
     fn validate_labels(&self) -> Result<()> {
-        for label in &self.label {
-            if label.contains(',') {
-                return Err(eyre::eyre!(
-                    "Label '{}' contains comma which is not allowed",
-                    label
-                ));
-            }
-        }
-        Ok(())
+        validate_labels(&self.label)
     }
 
     /// Get resolved memory in MB, using instancetype if specified
@@ -342,7 +347,7 @@ impl LibvirtRunOpts {
 /// Wait for SSH to become available on a libvirt domain
 ///
 /// Polls SSH connectivity by attempting simple commands until successful or timeout.
-fn wait_for_ssh_ready(
+pub(super) fn wait_for_ssh_ready(
     global_opts: &crate::libvirt::LibvirtOptions,
     domain_name: &str,
     timeout_secs: u64,
@@ -704,7 +709,7 @@ pub fn get_libvirt_storage_pool_path(connect_uri: Option<&str>) -> Result<Utf8Pa
 }
 
 /// Generate a unique VM name from an image name
-fn generate_unique_vm_name(image: &str, existing_domains: &[String]) -> String {
+pub(super) fn generate_unique_vm_name(image: &str, existing_domains: &[String]) -> String {
     // Extract image name from full image path
     let base_name = if let Some(last_slash) = image.rfind('/') {
         &image[last_slash + 1..]
@@ -769,7 +774,7 @@ pub fn list_storage_pool_volumes(connect_uri: Option<&str>) -> Result<Vec<Utf8Pa
 }
 
 /// Find an available SSH port for port forwarding using random allocation
-fn find_available_ssh_port() -> u16 {
+pub(super) fn find_available_ssh_port() -> u16 {
     use rand::Rng;
 
     // Try random ports in the range 2222-3000 to avoid conflicts in concurrent scenarios
@@ -839,7 +844,7 @@ fn parse_volume_mount(volume_str: &str) -> Result<(String, String)> {
 /// and creates systemd mount unit SMBIOS credentials for automatic mounting.
 ///
 /// Takes ownership of the domain builder and returns it.
-fn process_bind_mounts(
+pub(super) fn process_bind_mounts(
     bind_mounts: &[BindMount],
     tag_prefix: &str,
     readonly: bool,
@@ -1019,7 +1024,7 @@ mod tests {
 }
 
 /// Create a libvirt domain directly from a disk image file
-fn create_libvirt_domain_from_disk(
+pub(super) fn create_libvirt_domain_from_disk(
     domain_name: &str,
     disk_path: &Utf8Path,
     image_digest: &str,
