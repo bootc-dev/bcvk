@@ -404,9 +404,7 @@ pub fn run_sync(opts: RunEphemeralOpts) -> Result<()> {
 
     debug!("Running podman command (sync): {:?}", cmd);
 
-    let status = cmd
-        .status()
-        .context("Failed to execute podman command")?;
+    let status = cmd.status().context("Failed to execute podman command")?;
 
     if !status.success() {
         let code = status.code().unwrap_or(-1);
