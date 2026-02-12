@@ -44,6 +44,11 @@ pub struct InstallOptions {
     /// Which bootloader to use for composefs-native backend
     #[clap(long, requires = "composefs_backend")]
     pub bootloader: Option<String>,
+
+    /// Allow installation without fs-verity support for composefs-native
+    /// backend
+    #[clap(long, requires = "composefs_backend")]
+    pub allow_missing_fsverity: bool,
 }
 
 impl InstallOptions {
@@ -77,6 +82,10 @@ impl InstallOptions {
         if let Some(b) = &self.bootloader {
             args.push("--bootloader".into());
             args.push(b.clone());
+        }
+
+        if self.allow_missing_fsverity {
+            args.push("--allow-missing-fsverity".into());
         }
 
         args
