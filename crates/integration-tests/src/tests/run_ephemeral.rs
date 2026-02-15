@@ -171,24 +171,24 @@ fn test_run_ephemeral_with_instancetype() -> Result<()> {
     let bck = get_bck_command()?;
     let image = get_test_image();
     let label = INTEGRATION_TEST_LABEL;
-    // Test u1.nano: 1 vCPU, 512 MiB memory
+    // Test u1.micro: 1 vCPU, 1 GiB memory (changed from u1.nano due to CI hangs with 512MB)
     // Calculate physical memory from /sys/firmware/memmap (System RAM regions)
     let script = "/bin/sh -c 'echo CPUs:$(grep -c ^processor /proc/cpuinfo); total=0; for dir in /sys/firmware/memmap/*; do type=$(cat \"$dir/type\" 2>/dev/null); if [ \"$type\" = \"System RAM\" ]; then start=$(cat \"$dir/start\"); end=$(cat \"$dir/end\"); start_dec=$((start)); end_dec=$((end)); size=$((end_dec - start_dec + 1)); total=$((total + size)); fi; done; total_kb=$((total / 1024)); echo PhysicalMemKB:$total_kb'";
 
     let stdout = cmd!(
         sh,
-        "{bck} ephemeral run --rm --label {label} --itype u1.nano --execute {script} {image}"
+        "{bck} ephemeral run --rm --label {label} --itype u1.micro --execute {script} {image}"
     )
     .read()?;
 
     // Verify vCPUs (should be 1)
     assert!(
         stdout.contains("CPUs:1"),
-        "Expected 1 vCPU for u1.nano, output: {}",
+        "Expected 1 vCPU for u1.micro, output: {}",
         stdout
     );
 
-    // Verify physical memory (should be exactly 512 MiB = 524288 kB)
+    // Verify physical memory (should be exactly 1 GiB = 1048576 kB)
     let mem_line = stdout
         .lines()
         .find(|line| line.contains("PhysicalMemKB:"))
@@ -202,10 +202,10 @@ fn test_run_ephemeral_with_instancetype() -> Result<()> {
         .parse()
         .expect("Could not parse PhysicalMemKB as number");
 
-    // Physical memory should be close to 512 MiB = 524288 kB
+    // Physical memory should be close to 1 GiB = 1048576 kB
     // QEMU reserves small memory regions (BIOS, VGA, ACPI, etc.) so actual may be slightly less
     // Allow 1% tolerance to account for hypervisor overhead
-    let expected_kb = 512 * 1024;
+    let expected_kb = 1024 * 1024;
     let tolerance_kb = expected_kb / 100; // 1% tolerance
     let diff = if mem_kb > expected_kb {
         mem_kb - expected_kb
@@ -215,7 +215,7 @@ fn test_run_ephemeral_with_instancetype() -> Result<()> {
 
     assert!(
         diff <= tolerance_kb,
-        "Expected physical memory ~{} kB for u1.nano, got {} kB (diff: {} kB, max allowed: {} kB [1%])",
+        "Expected physical memory ~{} kB for u1.micro, got {} kB (diff: {} kB, max allowed: {} kB [1%])",
         expected_kb, mem_kb, diff, tolerance_kb
     );
 
