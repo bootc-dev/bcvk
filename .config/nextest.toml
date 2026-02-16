@@ -39,3 +39,9 @@ store-failure-output = true
 [[profile.integration.overrides]]
 filter = 'test(~^libvirt_run) | test(~^to_disk)'
 threads-required = 4
+
+# Timeout for test_run_ephemeral_with_instancetype which hangs in CI due to
+# GitHub Actions environment changes (passes locally, last passed in CI on Feb 5)
+[[profile.integration.overrides]]
+filter = 'test(=test_run_ephemeral_with_instancetype)'
+slow-timeout = { period = "60s", terminate-after = 1 }
