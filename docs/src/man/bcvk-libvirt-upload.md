@@ -57,6 +57,10 @@ Upload bootc disk images to libvirt with metadata annotations
 
     Default to composefs-native storage
 
+**--bootloader**=*BOOTLOADER*
+
+    Which bootloader to use for composefs-native backend
+
 **--memory**=*MEMORY*
 
     Memory size (e.g. 4G, 2048M, or plain number for MB)

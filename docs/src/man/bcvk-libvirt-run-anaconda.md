@@ -1,14 +1,23 @@
 # NAME
 
-bcvk-libvirt-run - Run a bootable container as a persistent VM
+bcvk-libvirt-run-anaconda - Run a bootable container as a persistent VM, installed via anaconda
 
 # SYNOPSIS
 
-**bcvk libvirt run** [*OPTIONS*]
+**bcvk libvirt run-anaconda** [*OPTIONS*] **--kickstart** *KICKSTART* *IMAGE*
 
 # DESCRIPTION
 
-Run a bootable container as a persistent VM
+Run a bootable container as a persistent VM using anaconda for installation.
+This command is similar to `bcvk libvirt run`, but uses anaconda with kickstart
+files instead of `bootc install to-disk` for the installation phase.
+
+This allows for more flexible partitioning schemes and system configuration
+through kickstart files, while still providing the same VM lifecycle management
+(SSH access, networking, bind mounts, etc.) as `bcvk libvirt run`.
+
+The `ostreecontainer` directive is injected automatically into the kickstart
+file, so you only need to provide the partitioning and system configuration.
 
 # OPTIONS
 
@@ -19,6 +28,10 @@ Run a bootable container as a persistent VM
 
     This argument is required.
 
+**-k**, **--kickstart**=*KICKSTART*
+
+    Kickstart file with partitioning and system configuration
+
 **--name**=*NAME*
 
     Name for the VM (auto-generated if not specified)
@@ -26,6 +39,20 @@ Run a bootable container as a persistent VM
 **-R**, **--replace**
 
     Replace existing VM with same name (stop and remove if exists)
+
+**--target-imgref**=*TARGET_IMGREF*
+
+    Target image reference for the installed system
+
+**--no-repoint**
+
+    Skip injecting the %post script that repoints to target-imgref
+
+**--anaconda-image**=*ANACONDA_IMAGE*
+
+    Anaconda container image to use as the installer
+
+    Default: localhost/anaconda-bootc:latest
 
 **--itype**=*ITYPE*
 
@@ -115,10 +142,6 @@ Run a bootable container as a persistent VM
 
     Mount host container storage (RO) at /run/host-container-storage
 
-**--update-from-host**
-
-    Implies --bind-storage-ro, but also configure to update from the host container storage by default
-
 **--firmware**=*FIRMWARE*
 
     Firmware type for the VM (defaults to uefi-secure)
@@ -148,46 +171,68 @@ Run a bootable container as a persistent VM
 
 <!-- END GENERATED OPTIONS -->
 
+# KICKSTART FILE
+
+The kickstart file should contain partitioning and system configuration.
+You do NOT need to include the `ostreecontainer` directive - bcvk injects
+this automatically with the correct transport.
+
+Example minimal kickstart:
+
+```
+text
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+network --bootproto=dhcp --activate
+
+zerombr
+clearpart --all --initlabel
+reqpart --add-boot
+autopart --type=plain --fstype=xfs
+bootloader --location=mbr
+rootpw --lock
+
+poweroff
+```
+
 # EXAMPLES
 
-Create and start a persistent VM:
+Create a VM using anaconda with a kickstart file:
 
-    bcvk libvirt run --name my-server quay.io/fedora/fedora-bootc:42
+    bcvk libvirt run-anaconda --name my-server \
+        --kickstart my-config.ks \
+        quay.io/fedora/fedora-bootc:42
 
-Create a VM with custom resources:
+Create a VM with custom resources and SSH access:
 
-    bcvk libvirt run --name webserver --memory 8192 --cpus 8 --disk-size 50G quay.io/centos-bootc/centos-bootc:stream10
+    bcvk libvirt run-anaconda --name webserver \
+        --kickstart server.ks \
+        --memory 8192 --cpus 8 --disk-size 50G \
+        --ssh \
+        quay.io/centos-bootc/centos-bootc:stream10
 
-Create a VM with port forwarding:
+Create a VM with a custom target image reference:
 
-    bcvk libvirt run --name webserver --port 8080:80 quay.io/centos-bootc/centos-bootc:stream10
+    bcvk libvirt run-anaconda --name prod-server \
+        --kickstart prod.ks \
+        --target-imgref registry.example.com/myapp:prod \
+        quay.io/fedora/fedora-bootc:42
 
-Create a VM with volume mount:
+Test anaconda installation workflow:
 
-    bcvk libvirt run --name devvm --volume /home/user/code:/workspace quay.io/fedora/fedora-bootc:42
-
-Create a VM and automatically SSH into it:
-
-    bcvk libvirt run --name testvm --ssh quay.io/fedora/fedora-bootc:42
-
-Create a VM with access to host container storage for bootc upgrade:
-
-    bcvk libvirt run --name upgrade-test --bind-storage-ro quay.io/fedora/fedora-bootc:42
-
-Server management workflow:
-
-    # Create a persistent server VM
-    bcvk libvirt run --name production-server --memory 8192 --cpus 4 --disk-size 100G my-server-image
+    # Build the anaconda-bootc container first
+    podman build -t localhost/anaconda-bootc:latest containers/anaconda-bootc/
     
-    # Check status
-    bcvk libvirt list
-    
-    # Access for maintenance
-    bcvk libvirt ssh production-server
+    # Create a VM with anaconda installation
+    bcvk libvirt run-anaconda --name test-vm \
+        --kickstart test.ks \
+        --ssh-wait \
+        quay.io/fedora/fedora-bootc:42
 
 # SEE ALSO
 
-**bcvk**(8)
+**bcvk-libvirt-run**(8), **bcvk-anaconda-install**(8), **bcvk**(8)
 
 # VERSION
 

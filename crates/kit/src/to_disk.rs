@@ -79,6 +79,7 @@ use crate::cache_metadata::DiskImageMetadata;
 use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{run_detached, CommonVmOpts, RunEphemeralOpts};
 use crate::run_ephemeral_ssh::wait_for_ssh_ready;
+use crate::utils::DiskSize;
 use crate::{images, ssh, utils};
 use camino::Utf8PathBuf;
 use clap::{Parser, ValueEnum};
@@ -119,7 +120,7 @@ impl std::fmt::Display for Format {
 pub struct ToDiskAdditionalOpts {
     /// Disk size to create (e.g. 10G, 5120M, or plain number for bytes)
     #[clap(long)]
-    pub disk_size: Option<String>,
+    pub disk_size: Option<DiskSize>,
 
     /// Output disk image format
     #[clap(long, default_value_t = Format::Raw)]
@@ -337,13 +338,11 @@ EOF
 
     /// Calculate the optimal target disk size based on the source image or explicit size
     ///
-    /// Returns explicit disk_size if provided (parsed from human-readable format),
-    /// otherwise 2x the image size with a 4GB minimum.
+    /// Returns explicit disk_size if provided, otherwise 2x the image size with a 4GB minimum.
     fn calculate_disk_size(&self) -> Result<u64> {
-        if let Some(ref size_str) = self.additional.disk_size {
-            let parsed = utils::parse_size(size_str)?;
-            debug!("Using explicit disk size: {} -> {} bytes", size_str, parsed);
-            return Ok(parsed);
+        if let Some(size) = self.additional.disk_size {
+            debug!("Using explicit disk size: {} bytes", size.as_bytes());
+            return Ok(size.as_bytes());
         }
 
         // Get the image size and multiply by 2 for installation space
@@ -639,7 +638,7 @@ mod tests {
                 ..Default::default()
             },
             additional: ToDiskAdditionalOpts {
-                disk_size: Some("10G".to_string()),
+                disk_size: Some("10G".parse().unwrap()),
                 ..Default::default()
             },
         };
@@ -657,7 +656,7 @@ mod tests {
                 ..Default::default()
             },
             additional: ToDiskAdditionalOpts {
-                disk_size: Some("5120M".to_string()),
+                disk_size: Some("5120M".parse().unwrap()),
                 ..Default::default()
             },
         };

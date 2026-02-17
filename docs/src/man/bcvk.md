@@ -69,6 +69,10 @@ bcvk-to-disk(8)
 
 :   Install bootc images to persistent disk images
 
+bcvk-anaconda(8)
+
+:   Install bootc images using anaconda and kickstart files
+
 bcvk-libvirt(8)
 
 :   Manage stateful VMs via libvirt (persistent disk images)

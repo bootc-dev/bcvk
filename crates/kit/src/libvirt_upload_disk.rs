@@ -4,10 +4,11 @@
 //! to libvirt storage pools, maintaining container image metadata as libvirt annotations.
 
 use crate::common_opts::MemoryOpts;
+use crate::images;
 use crate::install_options::InstallOptions;
 use crate::to_disk::{run as to_disk, ToDiskAdditionalOpts, ToDiskOpts};
+use crate::utils::DiskSize;
 use crate::xml_utils::{self, XmlWriter};
-use crate::{images, utils};
 use camino::Utf8Path;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
@@ -31,7 +32,7 @@ pub struct LibvirtUploadDiskOpts {
 
     /// Size of the disk image (e.g., '20G', '10240M'). If not specified, uses the actual size of the created disk.
     #[clap(long)]
-    pub disk_size: Option<String>,
+    pub disk_size: Option<DiskSize>,
 
     /// Installation options (filesystem, root-size, storage-path)
     #[clap(flatten)]
@@ -258,9 +259,9 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
     );
 
     // Phase 1: Calculate disk size to use
-    let disk_size = if let Some(ref size_str) = opts.disk_size {
+    let disk_size = if let Some(size) = opts.disk_size {
         // Use explicit size if provided
-        utils::parse_size(size_str)?
+        size.as_bytes()
     } else {
         // Use same logic as to_disk: 2x source image size with 4GB minimum
         let image_size = images::get_image_size(&opts.source_image)?;
@@ -282,7 +283,7 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
         target_disk: temp_disk.clone(),
         install: opts.install.clone(),
         additional: ToDiskAdditionalOpts {
-            disk_size: Some(disk_size.to_string()),
+            disk_size: Some(DiskSize::from_bytes(disk_size)),
             common: crate::run_ephemeral::CommonVmOpts {
                 memory: opts.memory.clone(),
                 vcpus: opts.vcpus,

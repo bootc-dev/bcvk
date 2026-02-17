@@ -59,6 +59,10 @@ The installation process:
 
     Default to composefs-native storage
 
+**--bootloader**=*BOOTLOADER*
+
+    Which bootloader to use for composefs-native backend
+
 **--disk-size**=*DISK_SIZE*
 
     Disk size to create (e.g. 10G, 5120M, or plain number for bytes)

@@ -167,6 +167,59 @@ pub(crate) fn validate_container_storage_path(path: &Utf8Path) -> Result<()> {
     Ok(())
 }
 
+/// A disk/file size in bytes, parsed from human-readable strings like "10G", "5120M", "1T"
+///
+/// Implements `FromStr` for direct use with clap's `value_parser`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use bcvk::utils::DiskSize;
+///
+/// let size: DiskSize = "10G".parse().unwrap();
+/// assert_eq!(size.as_bytes(), 10 * 1024 * 1024 * 1024);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskSize(u64);
+
+impl DiskSize {
+    /// Create a new DiskSize from bytes
+    pub fn from_bytes(bytes: u64) -> Self {
+        Self(bytes)
+    }
+
+    /// Get the size in bytes
+    pub fn as_bytes(&self) -> u64 {
+        self.0
+    }
+}
+
+impl std::str::FromStr for DiskSize {
+    type Err = color_eyre::eyre::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        parse_size(s).map(DiskSize)
+    }
+}
+
+impl std::fmt::Display for DiskSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Display in human-readable form
+        let bytes = self.0;
+        if bytes >= 1024 * 1024 * 1024 * 1024 && bytes % (1024 * 1024 * 1024 * 1024) == 0 {
+            write!(f, "{}T", bytes / (1024 * 1024 * 1024 * 1024))
+        } else if bytes >= 1024 * 1024 * 1024 && bytes % (1024 * 1024 * 1024) == 0 {
+            write!(f, "{}G", bytes / (1024 * 1024 * 1024))
+        } else if bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0 {
+            write!(f, "{}M", bytes / (1024 * 1024))
+        } else if bytes >= 1024 && bytes % 1024 == 0 {
+            write!(f, "{}K", bytes / 1024)
+        } else {
+            write!(f, "{}", bytes)
+        }
+    }
+}
+
 /// Parse size string (e.g., "10G", "5120M", "1T") to bytes
 pub(crate) fn parse_size(size_str: &str) -> Result<u64> {
     let size_str = size_str.trim().to_uppercase();
