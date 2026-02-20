@@ -14,6 +14,15 @@ Source1:        %{url}/releases/download/v%{version}/bcvk-%{version}-vendor.tar.
 # https://fedoraproject.org/wiki/Changes/EncourageI686LeafRemoval
 ExcludeArch:    %{ix86}
 
+Requires: binutils
+Requires: openssh-clients
+Requires: podman
+Requires: qemu-img
+Requires: qemu-kvm
+Requires: virtiofsd
+# libvirt-client is optional but recommended for 'bcvk libvirt' commands
+Recommends: libvirt-client
+
 BuildRequires: make
 BuildRequires: openssl-devel
 BuildRequires: go-md2man
