@@ -1,5 +1,13 @@
 # Installation
 
+## From Packages
+
+bcvk is available in Fedora 42+ and EPEL 9/10:
+
+```bash
+sudo dnf install bcvk
+```
+
 ## Prerequisites
 
 Required:
