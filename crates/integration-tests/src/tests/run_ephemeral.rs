@@ -177,7 +177,7 @@ fn test_run_ephemeral_with_instancetype() -> Result<()> {
 
     let stdout = cmd!(
         sh,
-        "{bck} ephemeral run --rm --label {label} --itype u1.micro --execute {script} {image}"
+        "{bck} ephemeral run --rm --label {label} --env RUST_LOG=trace --itype u1.micro --execute {script} {image}"
     )
     .read()?;
 
