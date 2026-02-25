@@ -5,6 +5,9 @@
 - [Installation](./installation.md)
 - [Quick Start](./quick-start.md)
 - [Workflow Comparison](./workflow-comparison.md)
+  - [vs bootc](./vs-bootc.md)
+  - [vs podman-bootc](./vs-podman-bootc.md)
+  - [Apple container integration](./vs-apple-container.md)
 
 # Reference
 
