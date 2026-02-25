@@ -3,6 +3,9 @@
 //! The Linux kernel supports concatenating multiple CPIO archives,
 //! so we can simply append our files to an existing initramfs.
 
+// On non-Linux, this module is unused as it's for initramfs manipulation
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use std::io::{self, Write};
 
 use cpio::newc::Builder as NewcBuilder;

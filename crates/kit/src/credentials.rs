@@ -4,6 +4,9 @@
 //! using SMBIOS firmware variables (preferred) or kernel command-line arguments.
 //! Supports SSH keys, mount units, environment configuration, and AF_VSOCK setup.
 
+// On non-Linux, this module is unused as it's for VM credential injection
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use color_eyre::Result;
 
 /// Convert a guest mount path to a systemd unit name
