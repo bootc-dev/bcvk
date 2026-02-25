@@ -10,6 +10,9 @@
 //!
 //! Source: https://github.com/kubevirt/common-instancetypes
 
+// On non-Linux, this module is unused as it's for VM instance types
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 /// Instance type variants with associated vCPU and memory specifications
 ///
 /// Source: https://github.com/kubevirt/common-instancetypes/blob/main/instancetypes/u/1/sizes.yaml

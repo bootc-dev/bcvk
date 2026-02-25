@@ -1,5 +1,8 @@
 //! Helper functions for interacting with qemu-img
 
+// On non-Linux, this module is unused as it's for qemu-img operations
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use camino::Utf8Path;
 use color_eyre::{eyre::Context, Result};
 use serde::Deserialize;

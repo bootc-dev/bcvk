@@ -3,6 +3,9 @@
 //! This module provides helper functions for generating and parsing XML using the quick-xml crate,
 //! replacing string-based XML manipulation with proper XML handling.
 
+// On non-Linux, much of this module is unused as it's primarily for libvirt XML
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use color_eyre::{eyre::eyre, Result};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::reader::Reader;
