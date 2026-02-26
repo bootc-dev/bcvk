@@ -20,6 +20,7 @@ mod tests {
     pub mod libvirt_upload_disk;
     pub mod libvirt_verb;
     pub mod mount_feature;
+    pub mod osbuild_disk;
     pub mod run_ephemeral;
     pub mod run_ephemeral_ssh;
     pub mod to_disk;
