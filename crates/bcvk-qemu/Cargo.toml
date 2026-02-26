@@ -1,0 +1,22 @@
+[package]
+name = "bcvk-qemu"
+version = "0.1.0"
+edition = "2021"
+description = "QEMU VM management with virtiofs support"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+camino = "1.1"
+cap-std-ext = { git = "https://github.com/coreos/cap-std-ext", rev = "cfdb25d51ffc697e70aa0d8d3cefe9ec2133bd0a" }
+color-eyre = { workspace = true }
+data-encoding = "2.9"
+libc = "0.2"
+nix = { version = "0.29", features = ["socket"] }
+rustix = { version = "1", features = ["pipe", "process"] }
+tokio = { version = "1", features = ["fs", "process", "time", "macros"] }
+tracing = { workspace = true }
+vsock = "=0.5.1"
+
+[lints]
+workspace = true

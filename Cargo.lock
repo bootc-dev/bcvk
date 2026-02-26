@@ -153,6 +153,7 @@ name = "bcvk"
 version = "0.11.0"
 dependencies = [
  "base64",
+ "bcvk-qemu",
  "bootc-mount",
  "bootc-utils",
  "camino",
@@ -198,6 +199,22 @@ dependencies = [
  "which",
  "xshell",
  "yaml-rust2",
+]
+
+[[package]]
+name = "bcvk-qemu"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "cap-std-ext",
+ "color-eyre",
+ "data-encoding",
+ "libc",
+ "nix",
+ "rustix",
+ "tokio",
+ "tracing",
+ "vsock",
 ]
 
 [[package]]
