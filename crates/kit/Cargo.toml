@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+bcvk-qemu = { path = "../bcvk-qemu" }
 base64 = "0.22"
 # For some recent APIs, TODO switch back to published version
 cap-std-ext = { git = "https://github.com/coreos/cap-std-ext", rev = "cfdb25d51ffc697e70aa0d8d3cefe9ec2133bd0a" }

@@ -111,7 +111,7 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
-use crate::qemu;
+use crate::qemu::{self, QemuConfigExt};
 use crate::{
     boot_progress,
     common_opts::MemoryOpts,
@@ -1360,7 +1360,7 @@ Options=
                 virtio_blk_devices.push(crate::qemu::VirtioBlkDevice {
                     disk_file,
                     serial,
-                    format,
+                    format: format.into(),
                 });
             }
         }
