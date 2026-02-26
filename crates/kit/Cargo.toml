@@ -6,8 +6,6 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
-# For some recent APIs, TODO switch back to published version
-cap-std-ext = { git = "https://github.com/coreos/cap-std-ext", rev = "cfdb25d51ffc697e70aa0d8d3cefe9ec2133bd0a" }
 chrono = { version = "0.4", features = ["serde"] }
 const_format = { workspace = true }
 color-eyre = { workspace = true }
@@ -16,12 +14,9 @@ clap_mangen = { version = "0.2.20", optional = true }
 data-encoding = { version = "2.9" }
 dirs = "5.0"
 fn-error-context = { version = "0.2" }
-bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
-bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
 indicatif = "0.17"
 notify = "6.1"
 thiserror = "1.0"
-rustix = { "version" = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
 serde_yaml = "0.9"
@@ -40,9 +35,6 @@ cfg-if = { workspace = true }
 indoc = "2.0.6"
 regex = "1.10"
 itertools = "0.14.0"
-vsock = "0.5"
-nix = { version = "0.29", features = ["socket"] }
-libc = "0.2"
 camino = "1.1.12"
 comfy-table = "7.1"
 strum = { version = "0.26", features = ["derive"] }
@@ -51,6 +43,16 @@ oci-spec = "0.8.2"
 sha2 = "0.10"
 which = "7.0"
 cpio = "0.4"
+
+# Linux-only dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+cap-std-ext = "5"
+bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
+vsock = "0.5"
+nix = { version = "0.29", features = ["socket"] }
+libc = "0.2"
 
 [dev-dependencies]
 similar-asserts = "1.5"

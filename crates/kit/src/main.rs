@@ -1,40 +1,66 @@
 //! Bootc Virtualization Kit (bcvk) - A toolkit for bootc containers and local virtualization
 
-use cap_std_ext::cap_std::fs::Dir;
 use clap::{Parser, Subcommand};
-use color_eyre::{eyre::Context as _, Report, Result};
+#[cfg(target_os = "linux")]
+use color_eyre::eyre::Context as _;
+use color_eyre::{Report, Result};
 
-mod arch;
-mod boot_progress;
-mod cache_metadata;
 mod cli_json;
 mod common_opts;
-mod container_entrypoint;
 mod cpio;
 mod credentials;
-mod domain_list;
-mod ephemeral;
-mod images;
 mod install_options;
 mod instancetypes;
-mod kernel;
-mod libvirt;
-mod libvirt_upload_disk;
-#[allow(dead_code)]
-mod podman;
-mod qemu;
 mod qemu_img;
-mod run_ephemeral;
-mod run_ephemeral_ssh;
-mod ssh;
-mod status_monitor;
-mod supervisor_status;
-pub(crate) mod systemd;
-mod to_disk;
-mod utils;
 mod xml_utils;
 
+#[cfg(target_os = "linux")]
+mod arch;
+
+#[cfg(target_os = "linux")]
+mod images;
+
+// Linux-only modules
+#[cfg(target_os = "linux")]
+mod boot_progress;
+#[cfg(target_os = "linux")]
+mod cache_metadata;
+#[cfg(target_os = "linux")]
+mod container_entrypoint;
+#[cfg(target_os = "linux")]
+mod domain_list;
+#[cfg(target_os = "linux")]
+mod ephemeral;
+#[cfg(target_os = "linux")]
+mod kernel;
+#[cfg(target_os = "linux")]
+mod libvirt;
+#[cfg(target_os = "linux")]
+mod libvirt_upload_disk;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod podman;
+#[cfg(target_os = "linux")]
+mod qemu;
+#[cfg(target_os = "linux")]
+mod run_ephemeral;
+#[cfg(target_os = "linux")]
+mod run_ephemeral_ssh;
+#[cfg(target_os = "linux")]
+mod ssh;
+#[cfg(target_os = "linux")]
+mod status_monitor;
+#[cfg(target_os = "linux")]
+mod supervisor_status;
+#[cfg(target_os = "linux")]
+pub(crate) mod systemd;
+#[cfg(target_os = "linux")]
+mod to_disk;
+#[cfg(target_os = "linux")]
+mod utils;
+
 /// Default state directory for bcvk container data
+#[cfg(target_os = "linux")]
 pub const CONTAINER_STATEDIR: &str = "/var/lib/bcvk";
 
 /// A comprehensive toolkit for bootc containers and local virtualization.
@@ -50,12 +76,14 @@ struct Cli {
     command: Commands,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Parser)]
 struct DebugInternalsOpts {
     #[command(subcommand)]
     command: DebugInternalsCmds,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Subcommand)]
 enum DebugInternalsCmds {
     OpenTree { path: std::path::PathBuf },
@@ -75,21 +103,54 @@ enum InternalsCmds {
     DumpCliJson,
 }
 
+/// Stub subcommands for macOS (shows error message when run)
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Subcommand)]
+pub enum StubEphemeralCommands {
+    /// Run bootc containers as ephemeral VMs
+    #[clap(name = "run")]
+    Run,
+    /// Run ephemeral VM and SSH into it
+    #[clap(name = "run-ssh")]
+    RunSsh,
+    /// Connect to running VMs via SSH
+    #[clap(name = "ssh")]
+    Ssh,
+    /// List ephemeral VM containers
+    #[clap(name = "ps")]
+    Ps,
+    /// Remove all ephemeral VM containers
+    #[clap(name = "rm-all")]
+    RmAll,
+}
+
 /// Available bcvk commands for container and VM management.
 #[derive(Subcommand)]
 enum Commands {
+    // Linux-only commands with full functionality
+    #[cfg(target_os = "linux")]
     /// Manage and inspect bootc container images
     #[clap(subcommand)]
     Images(images::ImagesOpts),
 
+    #[cfg(target_os = "linux")]
     /// Manage ephemeral VMs for bootc containers
     #[clap(subcommand)]
     Ephemeral(ephemeral::EphemeralCommands),
 
+    // macOS stub: ephemeral command exists but errors out
+    #[cfg(not(target_os = "linux"))]
+    /// Manage ephemeral VMs for bootc containers (not available on this platform)
+    #[clap(subcommand)]
+    Ephemeral(StubEphemeralCommands),
+
+    #[cfg(target_os = "linux")]
     /// Install bootc images to persistent disk images
     #[clap(name = "to-disk")]
     ToDisk(to_disk::ToDiskOpts),
 
+    // Note: libvirt is intentionally NOT available on macOS
+    #[cfg(target_os = "linux")]
     /// Manage libvirt integration for bootc containers
     Libvirt {
         /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
@@ -100,14 +161,17 @@ enum Commands {
         command: libvirt::LibvirtSubcommands,
     },
 
+    #[cfg(target_os = "linux")]
     /// Upload bootc disk images to libvirt (deprecated)
     #[clap(name = "libvirt-upload-disk", hide = true)]
     LibvirtUploadDisk(libvirt_upload_disk::LibvirtUploadDiskOpts),
 
+    #[cfg(target_os = "linux")]
     /// Internal container entrypoint command (hidden from help)
     #[clap(hide = true)]
     ContainerEntrypoint(container_entrypoint::ContainerEntrypointOpts),
 
+    #[cfg(target_os = "linux")]
     /// Internal debugging and diagnostic tools (hidden from help)
     #[clap(hide = true)]
     DebugInternals(DebugInternalsOpts),
@@ -149,22 +213,43 @@ fn install_tracing() {
 /// Initializes logging, error handling, and command dispatch for all
 /// bcvk operations including VM management, SSH access, and
 /// container image handling.
+// On non-Linux, all commands return errors so post-match code is unreachable
+#[cfg_attr(not(target_os = "linux"), allow(unreachable_code))]
 fn main() -> Result<(), Report> {
     install_tracing();
     color_eyre::install()?;
 
     let cli = Cli::parse();
+
+    #[cfg(target_os = "linux")]
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("Init tokio runtime")?;
 
     match cli.command {
+        #[cfg(target_os = "linux")]
         Commands::Images(opts) => opts.run()?,
+
+        #[cfg(target_os = "linux")]
         Commands::Ephemeral(cmd) => cmd.run()?,
+
+        // macOS stub: ephemeral command exists but errors out
+        #[cfg(not(target_os = "linux"))]
+        Commands::Ephemeral(_) => {
+            return Err(color_eyre::eyre::eyre!(
+                "The 'ephemeral' command is not available on macOS.\n\
+                 bcvk requires Linux with KVM/QEMU for VM operations.\n\
+                 See https://github.com/bootc-dev/bcvk/issues/21 for more information."
+            ));
+        }
+
+        #[cfg(target_os = "linux")]
         Commands::ToDisk(opts) => {
             to_disk::run(opts)?;
         }
+
+        #[cfg(target_os = "linux")]
         Commands::Libvirt { connect, command } => {
             let options = libvirt::LibvirtOptions { connect };
             match command {
@@ -193,12 +278,16 @@ fn main() -> Result<(), Report> {
                 }
             }
         }
+
+        #[cfg(target_os = "linux")]
         Commands::LibvirtUploadDisk(opts) => {
             eprintln!(
                 "Warning: 'libvirt-upload-disk' is deprecated. Use 'libvirt upload' instead."
             );
             libvirt_upload_disk::run(opts)?;
         }
+
+        #[cfg(target_os = "linux")]
         Commands::ContainerEntrypoint(opts) => {
             // Create a tokio runtime for async container entrypoint operations
             rt.block_on(async move {
@@ -208,8 +297,11 @@ fn main() -> Result<(), Report> {
             })?;
             tracing::trace!("Exiting runtime");
         }
+
+        #[cfg(target_os = "linux")]
         Commands::DebugInternals(opts) => match opts.command {
             DebugInternalsCmds::OpenTree { path } => {
+                use cap_std_ext::cap_std::fs::Dir;
                 let fd = rustix::mount::open_tree(
                     rustix::fs::CWD,
                     path,
@@ -220,16 +312,32 @@ fn main() -> Result<(), Report> {
                 tracing::debug!("{:?}", fd.entries()?.into_iter().collect::<Vec<_>>());
             }
         },
-        Commands::Internals(opts) => match opts.command {
+
+        Commands::Internals(opts) => {
             #[cfg(feature = "docgen")]
-            InternalsCmds::DumpCliJson => {
-                let json = cli_json::dump_cli_json()?;
-                println!("{}", json);
+            match opts.command {
+                InternalsCmds::DumpCliJson => {
+                    let json = cli_json::dump_cli_json()?;
+                    println!("{}", json);
+                }
             }
-        },
+
+            // Without docgen feature, Internals has no subcommands
+            #[cfg(not(feature = "docgen"))]
+            {
+                let _ = opts;
+                return Err(color_eyre::eyre::eyre!(
+                    "No internal commands available without docgen feature"
+                ));
+            }
+        }
     }
+
     tracing::debug!("exiting");
+
     // Ensure we don't block on any spawned tasks
+    #[cfg(target_os = "linux")]
     rt.shutdown_background();
+
     std::process::exit(0)
 }

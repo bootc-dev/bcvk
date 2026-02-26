@@ -4,6 +4,9 @@
 //! operations, ensuring consistency across to-disk, libvirt-upload-disk,
 //! and other installation-related commands.
 
+// On non-Linux, this module is unused as it's for installation operations
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use camino::Utf8PathBuf;
 use clap::Parser;
 
