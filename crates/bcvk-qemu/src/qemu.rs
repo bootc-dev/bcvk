@@ -118,7 +118,7 @@ pub struct ResourceLimits {
     pub nice_level: Option<i8>,
 }
 
-/// VM boot configuration: direct kernel boot.
+/// VM boot configuration.
 #[derive(Debug)]
 pub enum BootMode {
     /// Direct kernel boot (fast, testing-focused).
@@ -138,6 +138,15 @@ pub enum BootMode {
         kernel_cmdline: Vec<String>,
         /// VirtIO-FS socket for root filesystem.
         virtiofs_socket: Utf8PathBuf,
+    },
+    /// Boot from an ISO image (e.g. for Anaconda installer testing).
+    ///
+    /// The ISO is attached as a CDROM device. Unlike DirectBoot, there is no
+    /// root virtiofs socket — the installer boots from the ISO and installs
+    /// to a disk device added via [`QemuConfig::add_virtio_blk_device`].
+    IsoBoot {
+        /// Path to the ISO image file.
+        iso_path: String,
     },
 }
 
@@ -171,6 +180,11 @@ pub struct QemuConfig {
     pub enable_console: bool,
     /// SMBIOS credentials for systemd.
     smbios_credentials: Vec<String>,
+    /// Path to write serial console output (if set, `-serial file:<path>`
+    /// is used instead of `-serial none`).
+    pub serial_log: Option<String>,
+    /// Prevent automatic reboot (useful for debugging or post-install inspection).
+    pub no_reboot: bool,
 
     /// Write systemd notifications to this file.
     pub systemd_notify: Option<File>,
@@ -196,6 +210,16 @@ impl QemuConfig {
                 kernel_cmdline: vec![],
                 virtiofs_socket,
             }),
+            ..Default::default()
+        }
+    }
+
+    /// Create a new config for ISO boot (e.g. Anaconda installer).
+    pub fn new_iso_boot(memory_mb: u32, vcpus: u32, iso_path: String) -> Self {
+        Self {
+            memory_mb,
+            vcpus,
+            boot_mode: Some(BootMode::IsoBoot { iso_path }),
             ..Default::default()
         }
     }
@@ -247,6 +271,39 @@ impl QemuConfig {
         }
         if self.vcpus > 256 {
             return Err(eyre!("vCPU count too high: {} (maximum 256)", self.vcpus));
+        }
+
+        // Validate boot mode specifics
+        match &self.boot_mode {
+            Some(BootMode::IsoBoot { iso_path }) => {
+                if iso_path.is_empty() {
+                    return Err(eyre!("ISO path cannot be empty"));
+                }
+                if !std::path::Path::new(iso_path).exists() {
+                    return Err(eyre!("ISO image not found: {}", iso_path));
+                }
+                // main_virtiofs_config is for the root filesystem in DirectBoot;
+                // it has no meaning for ISO boot.
+                if self.main_virtiofs_config.is_some() {
+                    return Err(eyre!(
+                        "main_virtiofs_config is not supported with ISO boot \
+                         (the root filesystem comes from the ISO)"
+                    ));
+                }
+            }
+            Some(BootMode::DirectBoot {
+                kernel_path,
+                initramfs_path,
+                ..
+            }) => {
+                if kernel_path.is_empty() {
+                    return Err(eyre!("Kernel path cannot be empty"));
+                }
+                if initramfs_path.is_empty() {
+                    return Err(eyre!("Initramfs path cannot be empty"));
+                }
+            }
+            None => {}
         }
 
         // Validate virtiofs mounts
@@ -430,6 +487,7 @@ fn spawn(
                 .map_err(Into::into)
         });
     }
+
     cmd.args([
         "-m",
         &memory_arg,
@@ -445,6 +503,10 @@ fn spawn(
         "-numa",
         "node,memdev=mem",
     ]);
+
+    if config.no_reboot {
+        cmd.arg("-no-reboot");
+    }
 
     for (idx, fd) in config.fdset.iter().enumerate() {
         let fd_id = 100 + idx as u32; // Start at 100 to avoid conflicts
@@ -497,6 +559,9 @@ fn spawn(
             // Add kernel command line
             let append_str = kernel_cmdline.join(" ");
             cmd.args(["-append", &append_str]);
+        }
+        Some(BootMode::IsoBoot { iso_path }) => {
+            cmd.args(["-cdrom", iso_path]);
         }
         None => {}
     }
@@ -562,8 +627,13 @@ fn spawn(
         }
     }
 
-    // No GUI, and no emulated serial ports by default.
-    cmd.args(["-serial", "none", "-nographic", "-display", "none"]);
+    // No GUI; serial console either to a log file or disabled.
+    if let Some(ref serial_path) = config.serial_log {
+        cmd.args(["-serial", &format!("file:{}", serial_path)]);
+    } else {
+        cmd.args(["-serial", "none"]);
+    }
+    cmd.args(["-nographic", "-display", "none"]);
 
     match &config.display_mode {
         DisplayMode::None => {
@@ -866,6 +936,17 @@ mod tests {
             config.virtio_serial_devices[0].output_file,
             "/tmp/output.txt"
         );
+    }
+
+    #[test]
+    fn test_iso_boot_config() {
+        let config = QemuConfig::new_iso_boot(2048, 2, "/test/image.iso".to_string());
+        assert_eq!(config.memory_mb, 2048);
+        assert_eq!(config.vcpus, 2);
+        assert!(matches!(
+            &config.boot_mode,
+            Some(BootMode::IsoBoot { iso_path }) if iso_path == "/test/image.iso"
+        ));
     }
 
     #[test]

@@ -5,8 +5,8 @@
 //!
 //! # Features
 //!
-//! - **QEMU VM Management**: Launch VMs with direct kernel boot, virtio devices,
-//!   and automatic resource cleanup
+//! - **QEMU VM Management**: Launch VMs via direct kernel boot or ISO boot,
+//!   with virtio devices and automatic resource cleanup
 //! - **VirtioFS Mounts**: Spawn and manage virtiofsd processes for sharing host
 //!   directories with the guest
 //! - **SMBIOS Credentials**: Inject systemd credentials via QEMU SMBIOS interface
