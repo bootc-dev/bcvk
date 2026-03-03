@@ -118,6 +118,38 @@ pub struct ResourceLimits {
     pub nice_level: Option<i8>,
 }
 
+/// QEMU machine type selection.
+#[derive(Debug, Clone, Default)]
+pub enum MachineType {
+    /// Auto-detect based on host architecture (recommended).
+    #[default]
+    Auto,
+    /// Use a specific machine type string (e.g., "q35", "pc-q35-9.2").
+    Explicit(String),
+}
+
+impl MachineType {
+    /// Resolve to a QEMU `-machine` argument for the current host.
+    ///
+    /// Returns `None` for unknown architectures, letting QEMU use its default.
+    pub fn resolve(&self) -> Option<&str> {
+        // xref: https://github.com/coreos/coreos-assembler/blob/main/mantle/platform/qemu.go
+        match self {
+            Self::Auto => match std::env::consts::ARCH {
+                "x86_64" => Some("q35"),
+                // gic-version=max selects the best available GIC for the host
+                "aarch64" => Some("virt,gic-version=max"),
+                "s390x" => Some("s390-ccw-virtio"),
+                // kvm-type=HV ensures bare metal KVM, not user mode
+                // ic-mode=xics for interrupt controller
+                "powerpc64" => Some("pseries,kvm-type=HV,ic-mode=xics"),
+                _ => None,
+            },
+            Self::Explicit(name) => Some(name.as_str()),
+        }
+    }
+}
+
 /// VM boot configuration.
 #[derive(Debug)]
 pub enum BootMode {
@@ -157,6 +189,8 @@ pub struct QemuConfig {
     pub memory_mb: u32,
     /// Number of vCPUs (1-256).
     pub vcpus: u32,
+    /// Machine type (default: auto-detect based on host architecture).
+    pub machine_type: MachineType,
     boot_mode: Option<BootMode>,
     /// Main VirtioFS configuration for root filesystem (handled separately from additional mounts).
     pub main_virtiofs_config: Option<VirtiofsConfig>,
@@ -486,6 +520,11 @@ fn spawn(
             rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
                 .map_err(Into::into)
         });
+    }
+
+    // Set machine type (auto-detected or explicit)
+    if let Some(machine) = config.machine_type.resolve() {
+        cmd.args(["-machine", machine]);
     }
 
     cmd.args([
