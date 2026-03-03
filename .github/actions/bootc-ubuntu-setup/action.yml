@@ -71,6 +71,7 @@ runs:
       shell: bash
       run: |
         set -xeuo pipefail
+        # renovate: datasource=github-releases depName=bootc-dev/bcvk
         export BCVK_VERSION=0.10.0
         # see https://github.com/bootc-dev/bcvk/issues/176
         /bin/time -f '%E %C' sudo apt install -y libkrb5-dev pkg-config libvirt-dev genisoimage qemu-utils qemu-kvm virtiofsd libvirt-daemon-system python3-virt-firmware
