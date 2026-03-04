@@ -80,7 +80,7 @@ pub fn generate_virtiofs_mount_unit(
 ///
 /// Creates systemd credentials for:
 /// 1. The mount unit itself (via systemd.extra-unit)
-/// 2. A dropin for local-fs.target that wants this mount unit
+/// 2. A dropin for remote-fs.target that wants this mount unit
 ///
 /// Returns a vector of SMBIOS credential strings.
 pub fn smbios_creds_for_mount_unit(
@@ -95,14 +95,14 @@ pub fn smbios_creds_for_mount_unit(
     let mount_cred =
         format!("io.systemd.credential.binary:systemd.extra-unit.{unit_name}={encoded_mount}");
 
-    // Create a dropin for local-fs.target that wants this mount
+    // Create a dropin for remote-fs.target that wants this mount
     let dropin_content = format!(
         "[Unit]\n\
          Wants={unit_name}\n"
     );
     let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
     let dropin_cred = format!(
-        "io.systemd.credential.binary:systemd.unit-dropin.local-fs.target~bcvk-mounts={encoded_dropin}"
+        "io.systemd.credential.binary:systemd.unit-dropin.remote-fs.target~bcvk-mounts={encoded_dropin}"
     );
 
     Ok(vec![mount_cred, dropin_cred])

@@ -728,7 +728,7 @@ pub(crate) fn process_disk_files(
 }
 
 /// Copy systemd units from /run/systemd-units/system/ to container image /etc/systemd/system/.
-/// Auto-enables .mount units in local-fs.target.wants/, preserves default.target.wants/ symlinks.
+/// Auto-enables .mount units in remote-fs.target.wants/, preserves default.target.wants/ symlinks.
 fn inject_systemd_units() -> Result<()> {
     use std::fs;
 
@@ -744,7 +744,7 @@ fn inject_systemd_units() -> Result<()> {
     // Create target directories
     fs::create_dir_all(target_units)?;
     fs::create_dir_all(&format!("{}/default.target.wants", target_units))?;
-    fs::create_dir_all(&format!("{}/local-fs.target.wants", target_units))?;
+    fs::create_dir_all(&format!("{}/remote-fs.target.wants", target_units))?;
 
     // Copy all .service and .mount files
     for entry in fs::read_dir(source_units)? {
@@ -759,7 +759,7 @@ fn inject_systemd_units() -> Result<()> {
 
             // Create symlinks for mount units to enable them
             if extension.as_deref() == Some("mount") {
-                let wants_dir = format!("{}/local-fs.target.wants", target_units);
+                let wants_dir = format!("{}/remote-fs.target.wants", target_units);
                 let symlink_path = format!("{}/{}", wants_dir, filename);
                 let relative_target = format!("../{}", filename);
                 std::os::unix::fs::symlink(&relative_target, &symlink_path).ok();
@@ -1062,7 +1062,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
             );
             mount_unit_smbios_creds.push(mount_cred);
 
-            // Collect unit name for the local-fs.target dropin
+            // Collect unit name for the remote-fs.target dropin
             mount_unit_names.push(unit_name.clone());
 
             debug!(
@@ -1072,17 +1072,19 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         }
     }
 
-    // If we have mount units, create a single dropin for local-fs.target
+    // If we have mount units, create a single dropin for remote-fs.target.
+    // We use remote-fs.target because virtiofs is conceptually similar to a remote
+    // filesystem - it requires virtio transport infrastructure, like NFS needs network.
     if !mount_unit_names.is_empty() {
         let wants_list = mount_unit_names.join(" ");
         let dropin_content = format!("[Unit]\nWants={}\n", wants_list);
         let encoded_dropin = data_encoding::BASE64.encode(dropin_content.as_bytes());
         let dropin_cred = format!(
-            "io.systemd.credential.binary:systemd.unit-dropin.local-fs.target~bcvk-mounts={encoded_dropin}"
+            "io.systemd.credential.binary:systemd.unit-dropin.remote-fs.target~bcvk-mounts={encoded_dropin}"
         );
         mount_unit_smbios_creds.push(dropin_cred);
         debug!(
-            "Created local-fs.target dropin for {} mount units",
+            "Created remote-fs.target dropin for {} mount units",
             mount_unit_names.len()
         );
     }
