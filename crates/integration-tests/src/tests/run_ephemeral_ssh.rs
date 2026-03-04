@@ -414,3 +414,91 @@ fn test_run_ephemeral_ssh_timeout() -> Result<()> {
     Ok(())
 }
 integration_test!(test_run_ephemeral_ssh_timeout);
+
+/// A journal entry from `journalctl -o json`.
+///
+/// We only deserialize the fields we care about; serde ignores the rest.
+#[derive(serde::Deserialize)]
+struct JournalEntry {
+    #[serde(rename = "MESSAGE", default)]
+    message: String,
+    #[serde(rename = "UNIT", default)]
+    unit: Option<String>,
+}
+
+/// Parse `journalctl -o json` output (one JSON object per line).
+fn parse_journal_entries(output: &str) -> Vec<JournalEntry> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<JournalEntry>(line).ok())
+        .collect()
+}
+
+/// Test systemd health across all configured test images
+///
+/// Queries the guest journal directly (via SSH) for well-known systemd
+/// messages that indicate problems:
+/// - "Failed with result" — a unit entered failed state
+/// - "ordering cycle" — conflicting Before=/After= dependencies
+///
+/// Uses `journalctl -o json` for structured output parsed with serde,
+/// avoiding brittle text parsing of human-readable journal formats.
+fn test_systemd_health_cross_distro(image: &str) -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+
+    // Query journal for unit failures and ordering cycles in a single SSH call.
+    // Using -o json gives us one JSON object per line, which we parse with serde.
+    // journalctl -g exits non-zero when no matches are found, so we ignore the
+    // exit status and just parse whatever stdout we get (empty = no matches = pass).
+    let check_script = "journalctl -b --no-pager -o json -g 'Failed with result|ordering cycle'";
+
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} {image} -- {check_script}"
+    )
+    .ignore_status()
+    .read()?;
+
+    let entries = parse_journal_entries(&stdout);
+
+    let failures: Vec<&JournalEntry> = entries
+        .iter()
+        .filter(|e| e.message.contains("Failed with result"))
+        .collect();
+
+    let cycles: Vec<&JournalEntry> = entries
+        .iter()
+        .filter(|e| e.message.contains("ordering cycle"))
+        .collect();
+
+    assert!(
+        failures.is_empty(),
+        "Found failed systemd unit(s) on image {}:\n{}",
+        image,
+        failures
+            .iter()
+            .map(|e| format!(
+                "  {}: {}",
+                e.unit.as_deref().unwrap_or("<unknown>"),
+                e.message
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    assert!(
+        cycles.is_empty(),
+        "Found systemd ordering cycle(s) on image {}:\n{}",
+        image,
+        cycles
+            .iter()
+            .map(|e| format!("  {}", e.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    Ok(())
+}
+parameterized_integration_test!(test_systemd_health_cross_distro);

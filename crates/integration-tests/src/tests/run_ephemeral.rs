@@ -18,6 +18,10 @@ use color_eyre::Result;
 use integration_tests::integration_test;
 use xshell::cmd;
 
+use std::fs;
+use tempfile::TempDir;
+
+use camino::Utf8Path;
 use tracing::debug;
 
 use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
@@ -458,3 +462,83 @@ fn test_run_ephemeral_mount_layout() -> Result<()> {
     Ok(())
 }
 integration_test!(test_run_ephemeral_mount_layout);
+
+/// Verify that systemd ordering cycle detection actually works by injecting
+/// a deliberate cycle: unit A Before=B, unit B Before=A.
+///
+/// We inject the units via --systemd-units with default.target.wants/
+/// (which inject_systemd_units() knows how to copy), let the system boot
+/// normally, then use --execute to check the journal for the expected
+/// "ordering cycle" diagnostic.
+fn test_run_ephemeral_detect_ordering_cycle() -> Result<()> {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+
+    let units_dir = TempDir::new()?;
+    let units_dir_path = Utf8Path::from_path(units_dir.path()).expect("temp dir is not utf8");
+    let system_dir = units_dir_path.join("system");
+    fs::create_dir(&system_dir)?;
+
+    // Create a cycle: A wants and orders before B, B wants and orders before A.
+    // Both Wants= ensure both units are in the transaction; the mutual
+    // Before= constraints form the actual ordering cycle.
+    fs::write(
+        system_dir.join("cycle-a.service"),
+        "[Unit]\n\
+         Description=Cycle test unit A\n\
+         Wants=cycle-b.service\n\
+         Before=cycle-b.service\n\
+         [Service]\n\
+         Type=oneshot\n\
+         ExecStart=/bin/true\n\
+         RemainAfterExit=yes\n",
+    )?;
+    fs::write(
+        system_dir.join("cycle-b.service"),
+        "[Unit]\n\
+         Description=Cycle test unit B\n\
+         Wants=cycle-a.service\n\
+         Before=cycle-a.service\n\
+         [Service]\n\
+         Type=oneshot\n\
+         ExecStart=/bin/true\n\
+         RemainAfterExit=yes\n",
+    )?;
+
+    // Enable via default.target.wants/ which inject_systemd_units() copies
+    let wants_dir = system_dir.join("default.target.wants");
+    fs::create_dir(&wants_dir)?;
+    std::os::unix::fs::symlink("../cycle-a.service", wants_dir.join("cycle-a.service"))?;
+
+    // Use --execute to query the journal in JSON format for ordering cycle
+    // messages after the system boots. journalctl -g exits non-zero when no
+    // matches are found, so we ignore the exit status.
+    let check_script = "journalctl -b --no-pager -o json -g 'ordering cycle'";
+
+    let stdout = cmd!(
+        sh,
+        "{bck} ephemeral run --rm --label {label} --execute {check_script} --systemd-units {units_dir_path} {image}"
+    )
+    .ignore_status()
+    .read()?;
+
+    // Parse JSON lines and look for cycle messages
+    let has_cycle = stdout.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|v| v.get("MESSAGE")?.as_str().map(String::from))
+            .is_some_and(|msg| msg.contains("ordering cycle"))
+    });
+
+    assert!(
+        has_cycle,
+        "Expected ordering cycle to be detected for deliberately cyclic units. \
+         Output: {}",
+        stdout
+    );
+
+    Ok(())
+}
+integration_test!(test_run_ephemeral_detect_ordering_cycle);
