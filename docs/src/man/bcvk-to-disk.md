@@ -59,6 +59,14 @@ The installation process:
 
     Default to composefs-native storage
 
+**--bootloader**=*BOOTLOADER*
+
+    Which bootloader to use for composefs-native backend
+
+**--allow-missing-fsverity**
+
+    Allow installation without fs-verity support for composefs-native backend
+
 **--disk-size**=*DISK_SIZE*
 
     Disk size to create (e.g. 10G, 5120M, or plain number for bytes)
@@ -89,7 +97,7 @@ The installation process:
 
 **--console**
 
-    Enable console output to terminal for debugging
+    Connect the QEMU console to the container's stdio (visible via podman logs/attach)
 
 **--debug**
 

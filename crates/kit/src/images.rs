@@ -202,7 +202,7 @@ pub fn list() -> Result<Vec<ImageListEntry>> {
 /// Inspect a container image and return metadata.
 pub fn inspect(name: &str) -> Result<ImageInspect> {
     let mut r: Vec<ImageInspect> = Command::new("podman")
-        .args(["image", "inspect", name])
+        .args(["image", "inspect", "--", name])
         .run_and_parse_json()
         .map_err(|e| eyre!("{e}"))?;
     r.pop().ok_or_else(|| eyre!("No such image"))

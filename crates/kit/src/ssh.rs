@@ -80,6 +80,10 @@ pub fn generate_ssh_keypair(output_dir: &Utf8Path, key_name: &str) -> Result<Ssh
     })
 }
 
+/// Generate the default SSH keypair in the bcvk state directory.
+///
+/// Convenience wrapper around [`generate_ssh_keypair`] using the standard
+/// bcvk key location and name.
 pub fn generate_default_keypair() -> Result<SshKeyPair> {
     generate_ssh_keypair(Utf8Path::new(CONTAINER_STATEDIR), "ssh")
 }
@@ -109,6 +113,46 @@ pub fn generate_default_keypair() -> Result<SshKeyPair> {
 /// let args = vec!["systemctl".to_string(), "status".to_string()];
 /// connect("bootc-vm-abc123", args, &SshConnectionOptions::default())?;
 /// ```
+/// Build the `podman exec ... ssh ...` command for a container.
+///
+/// Shared between [`connect`] (interactive/passthrough) and
+/// [`connect_captured`] (output capture for IPC).
+fn build_podman_ssh_command(
+    container_name: &str,
+    args: &[String],
+    options: &SshConnectionOptions,
+) -> Result<Command> {
+    let mut cmd = Command::new("podman");
+    if options.allocate_tty {
+        cmd.args(["exec", "-it", "--", container_name, "ssh"]);
+    } else {
+        cmd.args(["exec", "--", container_name, "ssh"]);
+    }
+
+    let keypath = Utf8Path::new("/run/tmproot")
+        .join(CONTAINER_STATEDIR.trim_start_matches('/'))
+        .join("ssh");
+    cmd.args(["-i", keypath.as_str()]);
+
+    options.common.apply_to_command(&mut cmd);
+    cmd.args(["-o", "BatchMode=yes"]);
+
+    if options.allocate_tty {
+        cmd.arg("-t");
+    }
+
+    cmd.arg("root@127.0.0.1");
+    cmd.args(["-p", "2222"]);
+
+    let ssh_args = build_ssh_command(args)?;
+    if !ssh_args.is_empty() {
+        debug!("Adding SSH arguments: {:?}", ssh_args);
+        cmd.args(&ssh_args);
+    }
+
+    Ok(cmd)
+}
+
 pub fn connect(
     container_name: &str,
     args: Vec<String>,
@@ -116,66 +160,59 @@ pub fn connect(
 ) -> Result<std::process::ExitStatus> {
     debug!("Connecting to VM via container: {}", container_name);
 
-    // Verify container exists and is running
     verify_container_running(container_name)?;
 
-    // Build podman exec command
-    let mut cmd = Command::new("podman");
-    if options.allocate_tty {
-        cmd.args(["exec", "-it", container_name, "ssh"]);
-    } else {
-        cmd.args(["exec", container_name, "ssh"]);
-    }
+    let mut cmd = build_podman_ssh_command(container_name, &args, options)?;
 
-    // SSH key path (hardcoded for container environment)
-    let keypath = Utf8Path::new("/run/tmproot")
-        .join(CONTAINER_STATEDIR.trim_start_matches('/'))
-        .join("ssh");
-    cmd.args(["-i", keypath.as_str()]);
-
-    // Apply common SSH options
-    options.common.apply_to_command(&mut cmd);
-
-    // No prompts from SSH
-    cmd.args(["-o", "BatchMode=yes"]);
-
-    // Even if we're providing a remote command, always allocate a tty
-    // so progress bars work because we're running synchronously.
-    if options.allocate_tty {
-        cmd.arg("-t");
-    }
-
-    // Connect to VM via QEMU port forwarding on localhost
-    cmd.arg("root@127.0.0.1");
-    cmd.args(["-p", "2222"]);
-
-    // Add any additional arguments
-    let ssh_args = build_ssh_command(&args)?;
-    if !ssh_args.is_empty() {
-        debug!("Adding SSH arguments: {:?}", ssh_args);
-        cmd.args(&ssh_args);
-    }
-
-    debug!("Executing: podman {:?}", cmd.get_args().collect::<Vec<_>>());
-    debug!(
-        "Full command line: podman {}",
-        cmd.get_args()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-
-    // Suppress output if requested (useful for connectivity testing)
     if options.suppress_output {
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
     } else {
-        // Explicitly inherit stdout/stderr to prevent them from being closed
         cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     }
 
-    // Execute the command and return status
     cmd.status()
         .map_err(|e| eyre!("Failed to execute SSH command: {}", e))
+}
+
+/// Result of running an SSH command with captured output.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct CapturedSshOutput {
+    /// Process exit code (-1 if terminated by signal)
+    pub exit_code: i32,
+    /// Captured standard output
+    pub stdout: String,
+    /// Captured standard error
+    pub stderr: String,
+}
+
+/// Execute an SSH command inside a container, capturing stdout and stderr.
+///
+/// Like [`connect`] but returns the output instead of passing it through
+/// to the terminal. Intended for programmatic/IPC use.
+#[allow(dead_code)]
+pub fn connect_captured(container_name: &str, args: Vec<String>) -> Result<CapturedSshOutput> {
+    debug!("Executing captured SSH in container: {}", container_name);
+
+    verify_container_running(container_name)?;
+
+    let options = SshConnectionOptions {
+        allocate_tty: false,
+        suppress_output: false,
+        common: CommonSshOptions::default(),
+    };
+    let mut cmd = build_podman_ssh_command(container_name, &args, &options)?;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = cmd
+        .output()
+        .map_err(|e| eyre!("Failed to execute SSH command: {}", e))?;
+
+    Ok(CapturedSshOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 /// Convenience function for connecting with error handling (non-zero exit = error)
@@ -288,7 +325,13 @@ impl SshConnectionOptions {
 /// Verify that a container exists and is running
 fn verify_container_running(container_name: &str) -> Result<()> {
     let status = Command::new("podman")
-        .args(["inspect", container_name, "--format", "{{.State.Status}}"])
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Status}}",
+            "--",
+            container_name,
+        ])
         .output()
         .map_err(|e| eyre!("Failed to check container status: {}", e))?;
 

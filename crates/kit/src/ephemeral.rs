@@ -185,34 +185,40 @@ pub(crate) struct RemoveContainerResult {
     pub error: Option<String>,
 }
 
+/// Remove a single container by ID, returning the result.
+///
+/// Runs `podman rm -f` for the given container ID. This is the building
+/// block used by both the CLI (`rm-all`) and the varlink `Rm` method.
+pub(crate) fn remove_single_container(container_id: &str) -> RemoveContainerResult {
+    let result = Command::new("podman")
+        .args(["rm", "-f", "--", container_id])
+        .output();
+    match result {
+        Ok(output) if output.status.success() => RemoveContainerResult {
+            id: container_id.to_owned(),
+            removed: true,
+            error: None,
+        },
+        Ok(output) => RemoveContainerResult {
+            id: container_id.to_owned(),
+            removed: false,
+            error: Some(String::from_utf8_lossy(&output.stderr).to_string()),
+        },
+        Err(e) => RemoveContainerResult {
+            id: container_id.to_owned(),
+            removed: false,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
 /// Remove the given ephemeral containers, returning per-container results
 pub(crate) fn remove_ephemeral_containers(
     containers: &[ContainerListEntry],
 ) -> Vec<RemoveContainerResult> {
     containers
         .iter()
-        .map(|container| {
-            let result = Command::new("podman")
-                .args(["rm", "-f", &container.id])
-                .output();
-            match result {
-                Ok(output) if output.status.success() => RemoveContainerResult {
-                    id: container.id.clone(),
-                    removed: true,
-                    error: None,
-                },
-                Ok(output) => RemoveContainerResult {
-                    id: container.id.clone(),
-                    removed: false,
-                    error: Some(String::from_utf8_lossy(&output.stderr).to_string()),
-                },
-                Err(e) => RemoveContainerResult {
-                    id: container.id.clone(),
-                    removed: false,
-                    error: Some(e.to_string()),
-                },
-            }
-        })
+        .map(|container| remove_single_container(&container.id))
         .collect()
 }
 

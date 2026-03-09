@@ -66,7 +66,7 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
 **--console**
 
-    Enable console output to terminal for debugging
+    Connect the QEMU console to the container's stdio (visible via podman logs/attach)
 
 **--debug**
 

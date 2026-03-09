@@ -5,6 +5,7 @@
 - [Installation](./installation.md)
 - [Quick Start](./quick-start.md)
 - [Workflow Comparison](./workflow-comparison.md)
+- [Varlink IPC](./varlink.md)
 
 # Reference
 

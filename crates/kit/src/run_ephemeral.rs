@@ -631,7 +631,7 @@ fn prepare_run_command_with_temp(
     }
 
     let entrypoint = opts.debug_entrypoint.as_deref().unwrap_or(ENTRYPOINT);
-    cmd.args([&opts.image, entrypoint]);
+    cmd.args(["--", &opts.image, entrypoint]);
 
     Ok((cmd, td))
 }

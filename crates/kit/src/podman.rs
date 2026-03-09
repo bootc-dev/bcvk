@@ -39,6 +39,7 @@ pub fn get_image_size(image: &str) -> Result<u64> {
         .arg("inspect")
         .arg("--format=json")
         .arg("--type=image")
+        .arg("--")
         .arg(image)
         .run_and_parse_json()
         .map_err(|e| eyre!("podman inspect failed for image {}: {}", image, e))?;

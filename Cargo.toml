@@ -18,7 +18,9 @@ xshell = "0.2.7"
 # Require an extra opt-in for unsafe
 unsafe_code = "deny"
 # Absolutely must handle errors
-unused_must_use = "forbid"
+# "deny" rather than "forbid" so that proc-macro expansions (e.g. zlink)
+# can locally #[allow(unused)] without conflicting.
+unused_must_use = "deny"
 missing_docs = "deny"
 missing_debug_implementations = "deny"
 # Feel free to comment this one out locally during development of a patch.

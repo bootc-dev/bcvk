@@ -47,7 +47,7 @@ fn cleanup_integration_test_containers() -> Result<(), Box<dyn std::error::Error
             &container_id[..12.min(container_id.len())]
         );
         let rm_output = Command::new("podman")
-            .args(["rm", "-f", container_id])
+            .args(["rm", "-f", "--", container_id])
             .output()?;
 
         if rm_output.status.success() {

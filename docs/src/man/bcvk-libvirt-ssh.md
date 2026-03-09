@@ -37,7 +37,7 @@ SSH to libvirt domain with embedded SSH key
 
     SSH connection timeout in seconds
 
-    Default: 30
+    Default: 5
 
 **--log-level**=*LOG_LEVEL*
 

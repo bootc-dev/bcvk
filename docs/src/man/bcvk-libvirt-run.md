@@ -73,6 +73,14 @@ Run a bootable container as a persistent VM
 
     Default to composefs-native storage
 
+**--bootloader**=*BOOTLOADER*
+
+    Which bootloader to use for composefs-native backend
+
+**--allow-missing-fsverity**
+
+    Allow installation without fs-verity support for composefs-native backend
+
 **-p**, **--port**=*PORT_MAPPINGS*
 
     Port mapping from host to VM (format: host_port:guest_port, e.g., 8080:80)

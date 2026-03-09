@@ -23,6 +23,7 @@ mod tests {
     pub mod run_ephemeral;
     pub mod run_ephemeral_ssh;
     pub mod to_disk;
+    pub mod varlink;
 }
 
 /// Create a new xshell Shell for running commands

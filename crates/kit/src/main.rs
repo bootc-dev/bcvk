@@ -57,6 +57,8 @@ pub(crate) mod systemd;
 mod to_disk;
 #[cfg(target_os = "linux")]
 mod utils;
+#[cfg(target_os = "linux")]
+mod varlink_ipc;
 
 /// Default state directory for bcvk container data
 #[cfg(target_os = "linux")]
@@ -184,8 +186,9 @@ enum Commands {
 ///
 /// Sets up structured logging with environment-based filtering,
 /// error layer integration, and console output formatting.
-/// Logs are filtered by RUST_LOG environment variable, defaulting to 'info'.
-fn install_tracing() {
+/// Logs are filtered by `RUST_LOG` environment variable, falling back
+/// to `default_level` (typically `"info"` for CLI, `"warn"` for varlink).
+fn install_tracing(default_level: &str) {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::fmt;
     use tracing_subscriber::prelude::*;
@@ -197,7 +200,7 @@ fn install_tracing() {
         .event_format(format)
         .with_writer(std::io::stderr);
     let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
+        .or_else(|_| EnvFilter::try_new(default_level))
         .unwrap();
 
     tracing_subscriber::registry()
@@ -215,8 +218,32 @@ fn install_tracing() {
 // On non-Linux, all commands return errors so post-match code is unreachable
 #[cfg_attr(not(target_os = "linux"), allow(unreachable_code))]
 fn main() -> Result<(), Report> {
-    install_tracing();
+    // Detect varlink socket activation early to set a quieter default log
+    // level. The varlink protocol runs on a separate fd so logging doesn't
+    // interfere, but info-level chatter is unhelpful when running as a service.
+    // LISTEN_PID validation is handled by libsystemd::activation::receive_descriptors()
+    // in try_activated_listener(). We only check LISTEN_FDS here to select the log level.
+    #[cfg(target_os = "linux")]
+    let varlink_mode = std::env::var_os("LISTEN_FDS").is_some();
+    #[cfg(not(target_os = "linux"))]
+    let varlink_mode = false;
+
+    install_tracing(if varlink_mode { "warn" } else { "info" });
     color_eyre::install()?;
+
+    // If invoked via varlink socket activation (e.g. `varlinkctl exec:bcvk`),
+    // serve the varlink interface and exit. This must happen before clap
+    // parsing since the activated process receives no CLI arguments.
+    #[cfg(target_os = "linux")]
+    if varlink_mode {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("Init tokio runtime")?;
+        if rt.block_on(varlink_ipc::try_serve_varlink())? {
+            return Ok(());
+        }
+    }
 
     let cli = Cli::parse();
 
@@ -245,7 +272,19 @@ fn main() -> Result<(), Report> {
 
         #[cfg(target_os = "linux")]
         Commands::ToDisk(opts) => {
-            to_disk::run(opts)?;
+            let target = opts.target_disk.clone();
+            match to_disk::run(opts)? {
+                to_disk::RunOutcome::Cached => {
+                    println!("Reusing existing cached disk image at: {target}");
+                }
+                to_disk::RunOutcome::Created => {}
+                to_disk::RunOutcome::DryRunWouldReuse => {
+                    println!("would-reuse");
+                }
+                to_disk::RunOutcome::DryRunWouldRegenerate => {
+                    println!("would-regenerate");
+                }
+            }
         }
 
         #[cfg(target_os = "linux")]
