@@ -364,11 +364,25 @@ EOF
     }
 }
 
+/// Outcome of a `run()` call, indicating whether a disk was created fresh
+/// or reused from cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// A new disk image was created (or an existing one was regenerated).
+    Created,
+    /// An existing cached disk image was reused without reinstalling.
+    Cached,
+    /// Dry-run mode: the disk would have been reused.
+    DryRunWouldReuse,
+    /// Dry-run mode: the disk would have been regenerated.
+    DryRunWouldRegenerate,
+}
+
 /// Execute a bootc installation using an ephemeral VM with SSH
 ///
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
-pub fn run(opts: ToDiskOpts) -> Result<()> {
+pub fn run(opts: ToDiskOpts) -> Result<RunOutcome> {
     // Phase 0: Check for existing cached disk image
     let would_reuse = if opts.target_disk.exists() {
         debug!(
@@ -389,14 +403,9 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         )? {
             Ok(()) => {
                 if opts.additional.dry_run {
-                    println!("would-reuse");
-                    return Ok(());
+                    return Ok(RunOutcome::DryRunWouldReuse);
                 }
-                println!(
-                    "Reusing existing cached disk image (digest {image_digest}) at: {}",
-                    opts.target_disk
-                );
-                return Ok(());
+                return Ok(RunOutcome::Cached);
             }
             Err(e) => {
                 debug!("Existing disk does not match requirements, recreating: {e}");
@@ -413,14 +422,13 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         false
     };
 
-    // In dry-run mode, report whether we would regenerate
+    // In dry-run mode, report what would happen without doing it
     if opts.additional.dry_run {
-        if would_reuse {
-            println!("would-reuse");
+        return if would_reuse {
+            Ok(RunOutcome::DryRunWouldReuse)
         } else {
-            println!("would-regenerate");
-        }
-        return Ok(());
+            Ok(RunOutcome::DryRunWouldRegenerate)
+        };
     }
 
     // Phase 1: Validation and preparation
@@ -532,7 +540,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
         let progress_bar = crate::boot_progress::create_boot_progress_bar();
         let (duration, progress_bar) = wait_for_ssh_ready(&container_id, None, progress_bar)?;
         progress_bar.finish_and_clear();
-        println!(
+        tracing::info!(
             "Connected ({} elapsed), beginning installation...",
             HumanDuration(duration)
         );
@@ -560,7 +568,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
     // Cleanup: stop and remove the container
     debug!("Cleaning up ephemeral container...");
     let _ = std::process::Command::new("podman")
-        .args(["rm", "-f", &container_id])
+        .args(["rm", "-f", "--", &container_id])
         .output();
 
     // Handle the result - remove disk file on failure
@@ -578,7 +586,7 @@ pub fn run(opts: ToDiskOpts) -> Result<()> {
                 debug!("Failed to write metadata to disk image: {}", e);
                 // Don't fail the operation just because metadata couldn't be written
             }
-            Ok(())
+            Ok(RunOutcome::Created)
         }
         Err(e) => {
             let _ = std::fs::remove_file(&opts.target_disk);

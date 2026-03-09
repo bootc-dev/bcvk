@@ -25,8 +25,10 @@ tracing-subscriber = { workspace = true }
 tracing-error = { workspace = true }
 xshell = { workspace = true }
 cfg-if = { workspace = true }
-serde = "1.0.199"
+serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
+zlink = "0.4"
+tokio = { version = "1", features = ["rt", "net", "macros"] }
 libtest-mimic = "0.7.3"
 tempfile = "3"
 uuid = { version = "1.18.1", features = ["v4"] }
@@ -36,6 +38,9 @@ linkme = "0.3.30"
 paste = "1.0"
 rand = { workspace = true }
 scopeguard = "1"
+cap-std-ext = { workspace = true }
+libc = "0.2"
+rustix = { version = "1", features = ["process"] }
 
 [lints]
 workspace = true

@@ -33,7 +33,7 @@ fn show_container_logs(container_name: &str) {
 
     // Get container state in a single inspect call
     let state = Command::new("podman")
-        .args(["inspect", container_name])
+        .args(["inspect", "--", container_name])
         .output()
         .ok()
         .and_then(|output| {
@@ -70,7 +70,7 @@ fn show_container_logs(container_name: &str) {
     }
 
     let output = match Command::new("podman")
-        .args(["logs", container_name])
+        .args(["logs", "--", container_name])
         .stderr(Stdio::inherit())
         .output()
     {
@@ -110,7 +110,7 @@ impl Drop for ContainerCleanup {
     fn drop(&mut self) {
         debug!("Cleaning up ephemeral container {}", self.container_id);
         let result = Command::new("podman")
-            .args(["rm", "-f", &self.container_id])
+            .args(["rm", "-f", "--", &self.container_id])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
@@ -137,7 +137,13 @@ pub struct RunEphemeralSshOpts {
 /// Check if container is running
 fn is_container_running(container_name: &str) -> Result<bool> {
     let output = Command::new("podman")
-        .args(["inspect", container_name, "--format", "{{.State.Status}}"])
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Status}}",
+            "--",
+            container_name,
+        ])
         .output()
         .context("Failed to inspect container state")?;
 
@@ -173,6 +179,7 @@ pub fn wait_for_vm_ssh(
     let mut cmd = Command::new("podman");
     cmd.args([
         "exec",
+        "--",
         container_name,
         "/var/lib/bcvk/entrypoint",
         "monitor-status",
