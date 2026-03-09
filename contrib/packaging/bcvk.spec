@@ -11,8 +11,8 @@ URL:            https://github.com/bootc-dev/bcvk
 Source0:        %{url}/releases/download/v%{version}/bcvk-%{version}.tar.zstd
 Source1:        %{url}/releases/download/v%{version}/bcvk-%{version}-vendor.tar.zstd
 
-# https://fedoraproject.org/wiki/Changes/EncourageI686LeafRemoval
-ExcludeArch:    %{ix86}
+# Only build for architectures with full support and testing
+ExclusiveArch:  x86_64 aarch64
 
 Requires: binutils
 Requires: openssh-clients
