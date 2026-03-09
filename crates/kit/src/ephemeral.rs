@@ -158,7 +158,7 @@ impl EphemeralCommands {
 }
 
 /// List ephemeral VM containers with bcvk.ephemeral=1 label
-fn list_ephemeral_containers() -> Result<Vec<ContainerListEntry>> {
+pub(crate) fn list_ephemeral_containers() -> Result<Vec<ContainerListEntry>> {
     use bootc_utils::CommandRunExt;
 
     let containers: Vec<ContainerListEntry> = Command::new("podman")
@@ -174,10 +174,50 @@ fn list_ephemeral_containers() -> Result<Vec<ContainerListEntry>> {
     Ok(containers)
 }
 
+/// Per-container result from a removal operation
+#[derive(Debug)]
+pub(crate) struct RemoveContainerResult {
+    /// Container ID that was targeted for removal
+    pub id: String,
+    /// Whether the container was successfully removed
+    pub removed: bool,
+    /// Error message if removal failed
+    pub error: Option<String>,
+}
+
+/// Remove the given ephemeral containers, returning per-container results
+pub(crate) fn remove_ephemeral_containers(
+    containers: &[ContainerListEntry],
+) -> Vec<RemoveContainerResult> {
+    containers
+        .iter()
+        .map(|container| {
+            let result = Command::new("podman")
+                .args(["rm", "-f", &container.id])
+                .output();
+            match result {
+                Ok(output) if output.status.success() => RemoveContainerResult {
+                    id: container.id.clone(),
+                    removed: true,
+                    error: None,
+                },
+                Ok(output) => RemoveContainerResult {
+                    id: container.id.clone(),
+                    removed: false,
+                    error: Some(String::from_utf8_lossy(&output.stderr).to_string()),
+                },
+                Err(e) => RemoveContainerResult {
+                    id: container.id.clone(),
+                    removed: false,
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect()
+}
+
 /// Remove all ephemeral VM containers
 fn remove_all_ephemeral_containers(force: bool) -> Result<()> {
-    use bootc_utils::CommandRunExt;
-
     let containers = list_ephemeral_containers()?;
 
     if containers.is_empty() {
@@ -210,22 +250,17 @@ fn remove_all_ephemeral_containers(force: bool) -> Result<()> {
         }
     }
 
-    for container in &containers {
-        println!(
-            "Removing container {}",
-            &container.id[..12.min(container.id.len())]
-        );
-        let result = Command::new("podman")
-            .args(["rm", "-f", &container.id])
-            .run();
-
-        match result {
-            Ok(_) => println!("Removed {}", &container.id[..12.min(container.id.len())]),
-            Err(e) => eprintln!(
+    let results = remove_ephemeral_containers(&containers);
+    for result in &results {
+        let short_id = &result.id[..12.min(result.id.len())];
+        if result.removed {
+            println!("Removed {short_id}");
+        } else {
+            eprintln!(
                 "Failed to remove {}: {}",
-                &container.id[..12.min(container.id.len())],
-                e
-            ),
+                short_id,
+                result.error.as_deref().unwrap_or("unknown error")
+            );
         }
     }
 
