@@ -47,8 +47,7 @@ cpio = "0.4"
 # Linux-only dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 bcvk-qemu = { path = "../bcvk-qemu" }
-# For some recent APIs, TODO switch back to published version
-cap-std-ext = { git = "https://github.com/coreos/cap-std-ext", rev = "cfdb25d51ffc697e70aa0d8d3cefe9ec2133bd0a" }
+cap-std-ext = { workspace = true }
 bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
 bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
 rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }

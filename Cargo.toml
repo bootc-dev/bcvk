@@ -11,6 +11,7 @@ rand = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tracing-error = { version = "0.2.0" }
+cap-std-ext = "5.1"
 xshell = "0.2.7"
 
 [workspace.lints.rust]

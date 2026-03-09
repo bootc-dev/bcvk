@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 camino = "1.1"
-cap-std-ext = { git = "https://github.com/coreos/cap-std-ext", rev = "cfdb25d51ffc697e70aa0d8d3cefe9ec2133bd0a" }
+cap-std-ext = { workspace = true }
 color-eyre = { workspace = true }
 data-encoding = "2.9"
 libc = "0.2"
