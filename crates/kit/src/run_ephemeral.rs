@@ -178,7 +178,10 @@ pub struct CommonVmOpts {
     #[clap(long, help = "Number of vCPUs (overridden by --itype if specified)")]
     pub vcpus: Option<u32>,
 
-    #[clap(long, help = "Enable console output to terminal for debugging")]
+    #[clap(
+        long,
+        help = "Connect the QEMU console to the container's stdio (visible via podman logs/attach)"
+    )]
     pub console: bool,
 
     #[clap(
