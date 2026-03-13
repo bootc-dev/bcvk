@@ -32,13 +32,12 @@ jobs:
   - job: copr_build
     trigger: pull_request
     targets:
-      # Primary targets: supported Fedora (x86_64 and aarch64 only)
+      # Primary targets: supported Fedora and CentOS Stream (x86_64 and aarch64 only)
       # bcvk only supports x86_64 and aarch64 architectures
-      # CentOS Stream support can be added later
-      # - centos-stream-9-x86_64
-      # - centos-stream-9-aarch64
-      # - centos-stream-10-x86_64
-      # - centos-stream-10-aarch64
+      - centos-stream-9-x86_64
+      - centos-stream-9-aarch64
+      - centos-stream-10-x86_64
+      - centos-stream-10-aarch64
       - fedora-43-x86_64
       - fedora-43-aarch64
       - fedora-rawhide-x86_64
