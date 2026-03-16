@@ -55,11 +55,15 @@ jobs:
     trigger: release
     dist_git_branches:
       - fedora-all
+      - c9s
+      - c10s
 
   - job: koji_build
     trigger: commit
     dist_git_branches:
       - fedora-all
+      - c9s
+      - c10s
 
   - job: bodhi_update
     trigger: commit
