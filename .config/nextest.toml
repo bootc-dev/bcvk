@@ -34,11 +34,22 @@ path = "junit.xml"
 store-success-output = true
 store-failure-output = true
 
-# Per-test overrides for libvirt tests that create VMs
-# Tests that run `bootc install` can be heavy, so require 4 threads to limit parallelism
+# Per-test overrides for tests that create VMs or run `bootc install`.
+# These are memory-hungry (each spins up a QEMU VM with swap), so on the
+# 16 GB CI runners two of them in parallel can trigger the OOM killer.
+# Requiring all 2 threads effectively serialises them.
+#
+# NOTE: use /regex/ syntax, not ~substring — the ~ operator treats ^ $ as
+# literal characters, so ~^foo never matches anything.
 [[profile.integration.overrides]]
-filter = 'test(~^libvirt_run) | test(~^to_disk)'
-threads-required = 4
+filter = '''
+  test(/to_?disk/)
+  | test(/^test_libvirt_run/)
+  | test(/^test_libvirt_(comprehensive|ssh_integration|port_forward_(xml|connectivity))/)
+  | test(/^test_base_disk_creation/)
+  | test(=test_varlink_ephemeral_run_ps_and_ssh)
+'''
+threads-required = 2
 
 # Timeout for test_run_ephemeral_with_instancetype which hangs in CI due to
 # GitHub Actions environment changes (passes locally, last passed in CI on Feb 5)
