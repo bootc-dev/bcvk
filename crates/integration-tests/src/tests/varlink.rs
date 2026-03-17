@@ -13,7 +13,7 @@
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cap_std_ext::cmdext::CapStdExtCommandExt;
 use color_eyre::Result;
@@ -521,8 +521,139 @@ integration_test!(test_varlink_todisk_creates_disk);
 // Tests: cross-interface / varlinkctl
 // ===========================================================================
 
+/// Check whether `varlinkctl` can successfully talk to a zlink-based server.
+///
+/// Older versions of systemd's `varlinkctl` (or versions affected by
+/// <https://github.com/z-galaxy/zlink/issues/233>) send an introspection
+/// request that zlink cannot deserialize, causing the connection to be
+/// immediately dropped. Rather than failing hard on such systems, we
+/// detect the incompatibility here and let callers skip or adapt.
+fn varlinkctl_is_compatible() -> bool {
+    static RESULT: OnceLock<bool> = OnceLock::new();
+    *RESULT.get_or_init(|| {
+        let bck = match get_bck_command() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("note: varlinkctl probe: get_bck_command() failed: {e}");
+                return false;
+            }
+        };
+        let sh = match shell() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("note: varlinkctl probe: shell() failed: {e}");
+                return false;
+            }
+        };
+        // Try a varlinkctl call; if it fails, the tool is either missing
+        // or incompatible with our server.  The most common incompatibility
+        // is that varlinkctl sends org.varlink.service.GetInfo during its
+        // initial handshake, which zlink cannot deserialize (zlink#233).
+        let ok = xshell::cmd!(sh, "varlinkctl call exec:{bck} io.bootc.vk.images.List")
+            .ignore_status()
+            .read()
+            .map(|output| {
+                serde_json::from_str::<serde_json::Value>(&output)
+                    .ok()
+                    .and_then(|v| v.get("images").cloned())
+                    .is_some()
+            })
+            .unwrap_or(false);
+        if !ok {
+            eprintln!(
+                "note: varlinkctl probe failed; varlinkctl-dependent tests will be skipped \
+                 (see https://github.com/z-galaxy/zlink/issues/233)"
+            );
+        }
+        ok
+    })
+}
+
+/// Cross-check the images `List` API using the Rust varlink client, and
+/// optionally verify that `varlinkctl` returns the same result when it is
+/// available and compatible.
+///
+/// The Rust client path is the primary assertion — it always runs. The
+/// `varlinkctl` cross-check is best-effort: if the installed systemd is
+/// too old or suffers from the zlink introspection deserialization bug
+/// (<https://github.com/z-galaxy/zlink/issues/233>), the cross-check is
+/// skipped with a log message.
+fn test_varlink_images_list_crosscheck() -> Result<()> {
+    let image = get_test_image();
+
+    // Ensure the test image is pulled so we have at least one image to compare
+    let sh = shell()?;
+    xshell::cmd!(sh, "podman pull -q {image}").run()?;
+
+    // Primary path: Rust varlink client
+    let mut bcvk = activated_connection()?;
+    let reply = bcvk.rt.block_on(async { bcvk.conn.list().await })??;
+    assert!(
+        !reply.images.is_empty(),
+        "Rust client: expected at least one image"
+    );
+    assert!(
+        reply.images.iter().any(|name| name.contains(&image)),
+        "Rust client: expected test image {image} in list, got: {:?}",
+        reply.images
+    );
+
+    // Cross-check: varlinkctl (best-effort)
+    if varlinkctl_is_compatible() {
+        let bck = get_bck_command()?;
+        let output =
+            xshell::cmd!(sh, "varlinkctl call exec:{bck} io.bootc.vk.images.List").read()?;
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
+        let varlinkctl_images = parsed
+            .get("images")
+            .and_then(|v| v.as_array())
+            .expect("varlinkctl response missing 'images' array");
+        let varlinkctl_names: Vec<&str> = varlinkctl_images
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+
+        // Both should see the same set of images
+        assert_eq!(
+            reply.images.len(),
+            varlinkctl_names.len(),
+            "image count mismatch: Rust client={:?}, varlinkctl={:?}",
+            reply.images,
+            varlinkctl_names
+        );
+        for img in &reply.images {
+            assert!(
+                varlinkctl_names.contains(&img.as_str()),
+                "varlinkctl missing image {img} that Rust client returned"
+            );
+        }
+        eprintln!(
+            "varlinkctl cross-check passed ({} images)",
+            reply.images.len()
+        );
+    } else {
+        eprintln!(
+            "note: skipping varlinkctl cross-check (varlinkctl missing or incompatible \
+             with this zlink server, see https://github.com/z-galaxy/zlink/issues/233)"
+        );
+    }
+
+    Ok(())
+}
+integration_test!(test_varlink_images_list_crosscheck);
+
 /// Verify that `varlinkctl call` against the images List method works.
+///
+/// Skipped when `varlinkctl` is not compatible with the zlink server
+/// (e.g. systemd < 258 due to <https://github.com/z-galaxy/zlink/issues/233>).
 fn test_varlink_exec_varlinkctl() -> Result<()> {
+    if !varlinkctl_is_compatible() {
+        eprintln!(
+            "note: skipping test_varlink_exec_varlinkctl (varlinkctl missing or incompatible, \
+             see https://github.com/z-galaxy/zlink/issues/233)"
+        );
+        return Ok(());
+    }
     let sh = shell()?;
     let bck = get_bck_command()?;
     let output = xshell::cmd!(sh, "varlinkctl call exec:{bck} io.bootc.vk.images.List").read()?;
@@ -536,7 +667,16 @@ fn test_varlink_exec_varlinkctl() -> Result<()> {
 integration_test!(test_varlink_exec_varlinkctl);
 
 /// Test that `varlinkctl introspect` shows all three interface names.
+///
+/// Skipped when `varlinkctl` is not compatible with the zlink server.
 fn test_varlink_introspect_varlinkctl() -> Result<()> {
+    if !varlinkctl_is_compatible() {
+        eprintln!(
+            "note: skipping test_varlink_introspect_varlinkctl (varlinkctl missing or incompatible, \
+             see https://github.com/z-galaxy/zlink/issues/233)"
+        );
+        return Ok(());
+    }
     let sh = shell()?;
     let bck = get_bck_command()?;
     let output = xshell::cmd!(sh, "varlinkctl introspect exec:{bck} io.bootc.vk.images").read()?;
