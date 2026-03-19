@@ -53,17 +53,16 @@ jobs:
 
   - job: propose_downstream
     trigger: release
-    dist_git_branches:
+    dist_git_branches: &dist_git_branches
       - fedora-all
-      - c9s
-      - c10s
+      - epel9
+      - epel10.1
+      - epel10.2
+      - epel10.3
 
   - job: koji_build
     trigger: commit
-    dist_git_branches:
-      - fedora-all
-      - c9s
-      - c10s
+    dist_git_branches: *dist_git_branches
 
   - job: bodhi_update
     trigger: commit
