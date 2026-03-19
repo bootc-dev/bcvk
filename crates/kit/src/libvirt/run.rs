@@ -285,6 +285,10 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub disable_tpm: bool,
 
+    /// Enable firmware debug log (captures OVMF/EDK2 DEBUG output via isa-debugcon)
+    #[clap(long)]
+    pub firmware_log: bool,
+
     /// Directory containing secure boot keys (required for uefi-secure)
     #[clap(long)]
     pub secure_boot_keys: Option<Utf8PathBuf>,
@@ -1099,7 +1103,12 @@ fn create_libvirt_domain_from_disk(
         .with_transient_disk(opts.transient)
         .with_network("none") // Use QEMU args for SSH networking instead
         .with_firmware(opts.firmware)
-        .with_tpm(!opts.disable_tpm)
+        .with_tpm(!opts.disable_tpm);
+    if opts.firmware_log {
+        domain_builder =
+            domain_builder.with_firmware_log(crate::libvirt::domain::FirmwareLogOutput::Console);
+    }
+    domain_builder = domain_builder
         .with_metadata("bootc:source-image", &opts.image)
         .with_metadata("bootc:memory-mb", &memory.to_string())
         .with_metadata("bootc:vcpus", &cpus.to_string())

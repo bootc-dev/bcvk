@@ -686,7 +686,21 @@ fn test_libvirt_run_no_storage_opts_without_bind_storage() -> Result<()> {
         "Domain XML should NOT contain bind-storage-ro metadata when flag is not used. Found in XML."
     );
     println!("✓ Domain XML does not contain bind-storage-ro metadata");
-    println!("✓ Test passed: STORAGE_OPTS credentials are correctly excluded when --bind-storage-ro is not used");
+
+    // Verify that firmware debug log (isa-debugcon) is NOT present by default.
+    // Verbose OVMF firmware causes debug spam (e.g. VirtioSerialIoGetControl)
+    // when this device is present, so it must be opt-in via --firmware-log.
+    if std::env::consts::ARCH == "x86_64" {
+        assert!(
+            !domain_xml.contains("isa-debugcon"),
+            "Domain XML should NOT contain isa-debugcon by default (use --firmware-log to enable)"
+        );
+        println!(
+            "✓ Domain XML does not contain isa-debugcon (firmware debug log disabled by default)"
+        );
+    }
+
+    println!("✓ Test passed: default domain config has no unexpected extras");
     Ok(())
 }
 integration_test!(test_libvirt_run_no_storage_opts_without_bind_storage);

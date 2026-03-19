@@ -85,7 +85,7 @@ impl DomainBuilder {
             ovmf_code_format: None,
             nvram_template: None,
             nvram_format: None,
-            firmware_log: Some(FirmwareLogOutput::Console), // Default to pty for virsh console access
+            firmware_log: None,
         }
     }
 
@@ -775,58 +775,5 @@ mod tests {
         assert!(xml_ro.contains("<readonly/>"));
         assert!(xml_ro.contains("source dir=\"/host/storage\""));
         assert!(xml_ro.contains("target dir=\"hoststorage\""));
-    }
-
-    #[test]
-    fn test_firmware_log_default() {
-        // By default, firmware log should be enabled (pty/console mode)
-        let xml = DomainBuilder::new()
-            .with_name("test-firmware-log-default")
-            .build_xml()
-            .unwrap();
-
-        // On x86_64, should have isa-debugcon serial device
-        if std::env::consts::ARCH == "x86_64" {
-            assert!(xml.contains("serial type=\"pty\""));
-            assert!(xml.contains("target type=\"isa-debug\""));
-            assert!(xml.contains("model name=\"isa-debugcon\""));
-            assert!(xml.contains("address type=\"isa\" iobase=\"0x402\""));
-        }
-    }
-
-    #[test]
-    fn test_firmware_log_file() {
-        // Test firmware log to file
-        let xml = DomainBuilder::new()
-            .with_name("test-firmware-log-file")
-            .with_firmware_log(FirmwareLogOutput::File("/tmp/ovmf-debug.log".to_string()))
-            .build_xml()
-            .unwrap();
-
-        // On x86_64, should have isa-debugcon with file output
-        if std::env::consts::ARCH == "x86_64" {
-            assert!(xml.contains("serial type=\"file\""));
-            assert!(xml.contains("source path=\"/tmp/ovmf-debug.log\""));
-            assert!(xml.contains("target type=\"isa-debug\""));
-            assert!(xml.contains("model name=\"isa-debugcon\""));
-            assert!(xml.contains("address type=\"isa\" iobase=\"0x402\""));
-        }
-    }
-
-    #[test]
-    fn test_firmware_log_disabled() {
-        // Test disabling firmware log by setting firmware_log to None after construction
-        // Note: There's no public API to disable it once set, but we can test the XML
-        // generation doesn't include it on non-x86 architectures
-        let xml = DomainBuilder::new()
-            .with_name("test-firmware-log")
-            .build_xml()
-            .unwrap();
-
-        // On non-x86_64, should NOT have isa-debugcon (it's x86-only)
-        if std::env::consts::ARCH != "x86_64" {
-            assert!(!xml.contains("isa-debugcon"));
-            assert!(!xml.contains("isa-debug"));
-        }
     }
 }
