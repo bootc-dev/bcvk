@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use cap_std_ext::cmdext::CapStdExtCommandExt;
-use color_eyre::Result;
+use anyhow::Result;
 use serde::Deserialize;
 
 use crate::{get_bck_command, get_test_image, integration_test, shell};
@@ -307,7 +307,7 @@ fn test_varlink_ephemeral_run_bad_image() -> Result<()> {
     })?;
     match result {
         Err(EphemeralError::PodmanError { .. }) => Ok(()),
-        Ok(reply) => Err(color_eyre::eyre::eyre!(
+        Ok(reply) => Err(anyhow::anyhow!(
             "expected error for nonexistent image, got container_id: {}",
             reply.container_id
         )),
@@ -390,7 +390,7 @@ fn test_varlink_ephemeral_run_ps_and_ssh() -> Result<()> {
             Ok(status) if status.success() => break,
             _ if std::time::Instant::now() > deadline => {
                 cleanup_container(&run_reply.container_id);
-                return Err(color_eyre::eyre::eyre!(
+                return Err(anyhow::anyhow!(
                     "SSH did not become ready within 120s using info from GetSshConnectionInfo"
                 ));
             }
@@ -431,7 +431,7 @@ fn test_varlink_todisk_bad_image() -> Result<()> {
     })?;
     match result {
         Err(ToDiskError::Failed { .. }) => Ok(()),
-        Ok(reply) => Err(color_eyre::eyre::eyre!(
+        Ok(reply) => Err(anyhow::anyhow!(
             "expected Failed error for nonexistent image, got path: {}",
             reply.path
         )),
@@ -468,7 +468,7 @@ fn test_varlink_todisk_bad_format() -> Result<()> {
             );
             Ok(())
         }
-        Ok(reply) => Err(color_eyre::eyre::eyre!(
+        Ok(reply) => Err(anyhow::anyhow!(
             "expected Failed error for invalid format, got path: {}",
             reply.path
         )),

@@ -14,8 +14,8 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
+use anyhow::Result;
 use camino::Utf8Path;
-use color_eyre::Result;
 use integration_tests::integration_test;
 
 use std::fs;
