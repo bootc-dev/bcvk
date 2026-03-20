@@ -146,6 +146,10 @@ For longer-running VMs where you need to reconnect multiple times, use
 
     Additional kernel command line arguments
 
+**--ignition**=*IGNITION_CONFIG*
+
+    Path to Ignition config file (JSON format) to inject via fw_cfg
+
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES

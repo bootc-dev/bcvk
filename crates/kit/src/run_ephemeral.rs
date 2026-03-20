@@ -120,6 +120,15 @@ use crate::{
     systemd, utils, CONTAINER_STATEDIR,
 };
 
+/// fw_cfg name for Ignition configuration (per FCOS documentation)
+const IGNITION_FW_CFG_NAME: &str = "opt/com.coreos/config";
+
+/// virtio-blk serial name for Ignition configuration (per FCOS documentation)
+const IGNITION_SERIAL_NAME: &str = "ignition";
+
+/// Mount path for Ignition config inside the container
+const IGNITION_CONFIG_MOUNT_PATH: &str = "/run/ignition-config.json";
+
 /// Common container lifecycle options for podman commands.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommonPodmanOptions {
@@ -287,6 +296,12 @@ pub struct RunEphemeralOpts {
     #[clap(long = "karg", help = "Additional kernel command line arguments")]
     pub kernel_args: Vec<String>,
 
+    #[clap(
+        long = "ignition",
+        help = "Path to Ignition config file (JSON format) to inject via fw_cfg"
+    )]
+    pub ignition_config: Option<String>,
+
     /// Host DNS servers (read on host, configured via podman --dns flags)
     /// Not a CLI option - populated automatically from host's /etc/resolv.conf
     #[clap(skip)]
@@ -400,6 +415,17 @@ fn prepare_run_command_with_temp(
     opts: RunEphemeralOpts,
 ) -> Result<(std::process::Command, tempfile::TempDir)> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
+
+    // Check Ignition support early (before launching container) if --ignition is specified
+    if opts.ignition_config.is_some() {
+        let has_ignition = check_ignition_support(&opts.image)?;
+        if !has_ignition {
+            return Err(eyre!(
+                "Image does not support Ignition. See man bcvk-ephemeral-run for details."
+            ));
+        }
+        debug!("Image {} supports Ignition", opts.image);
+    }
 
     let script = include_str!("../scripts/entrypoint.sh");
 
@@ -579,6 +605,30 @@ fn prepare_run_command_with_temp(
     // Mount systemd units directory if specified
     if let Some(ref units_dir) = opts.systemd_units_dir {
         cmd.args(["-v", &format!("{}:/run/systemd-units:ro", units_dir)]);
+    }
+
+    // Mount Ignition config file if specified
+    if let Some(ref ignition_path) = opts.ignition_config {
+        // Convert to absolute path if needed
+        let path = Utf8Path::new(ignition_path);
+        let ignition_abs = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            let current_dir = Utf8PathBuf::try_from(std::env::current_dir()?)
+                .context("Current directory path is not valid UTF-8")?;
+            current_dir.join(path)
+        };
+
+        // Just validate we can access the file here, we pass the path
+        // to podman as a bind mount which will reopen.
+        if !ignition_abs.try_exists()? {
+            return Err(eyre!("Ignition config file not found: {}", ignition_abs));
+        }
+
+        cmd.args([
+            "-v",
+            &format!("{}:{}:ro", ignition_abs, IGNITION_CONFIG_MOUNT_PATH),
+        ]);
     }
 
     // Read host DNS servers and configure them via podman --dns flags
@@ -832,6 +882,62 @@ fn check_required_container_binaries() -> Result<()> {
 
     debug!("All required container binaries found");
     Ok(())
+}
+
+/// Check if the container image has Ignition support
+///
+/// Checks for labels indicating Ignition support:
+/// - 'coreos.ignition' (future convention, not yet widely used)
+/// - 'com.coreos.osname' (heuristic: CoreOS-based images likely have Ignition)
+///
+/// Returns true if the image is likely to support Ignition.
+fn check_ignition_support(image: &str) -> Result<bool> {
+    use std::collections::HashMap;
+    use std::process::Stdio;
+
+    // Fetch all labels with a single podman inspect call
+    let output = Command::new("podman")
+        .args(["image", "inspect", "--format", "{{json .Labels}}", image])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to inspect image for labels")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(eyre!(
+            "Failed to inspect image {} for labels: {}",
+            image,
+            stderr.trim()
+        ));
+    }
+
+    // Parse the JSON output
+    let labels: HashMap<String, String> =
+        serde_json::from_slice(&output.stdout).context("Failed to parse image labels as JSON")?;
+
+    // Check for coreos.ignition label (could contain version info or just "1")
+    if let Some(ignition_value) = labels.get("coreos.ignition") {
+        if !ignition_value.is_empty() {
+            debug!(
+                "Image {} has coreos.ignition={} label",
+                image, ignition_value
+            );
+            return Ok(true);
+        }
+    }
+
+    // Fallback: check for com.coreos.osname (CoreOS-based images)
+    if let Some(osname_value) = labels.get("com.coreos.osname").filter(|v| !v.is_empty()) {
+        debug!(
+            "Image {} has com.coreos.osname={}, assuming Ignition support",
+            image, osname_value
+        );
+        return Ok(true);
+    }
+
+    debug!("Image {} does not appear to support Ignition", image);
+    Ok(false)
 }
 
 /// VM execution inside container: extracts kernel/initramfs, starts virtiofsd processes,
@@ -1262,8 +1368,53 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         kernel_cmdline.push("ds=iid-datasource-none".to_string());
     }
 
+    // Add Ignition platform kernel argument if Ignition config is specified
+    // This tells Ignition which platform it's running on and where to find the config
+    if opts.ignition_config.is_some() {
+        kernel_cmdline.push("ignition.platform.id=qemu".to_string());
+    }
+
     kernel_cmdline.extend(opts.kernel_args.clone());
     qemu_config.set_kernel_cmdline(kernel_cmdline);
+
+    // Add Ignition config if specified
+    // Different architectures require different methods (per FCOS docs):
+    // - x86_64/aarch64: fw_cfg
+    // - s390x/ppc64le: virtio-blk with serial "ignition"
+    if opts.ignition_config.is_some() {
+        let ignition_path = Utf8Path::new(IGNITION_CONFIG_MOUNT_PATH);
+        if !ignition_path.exists() {
+            return Err(eyre!(
+                "Ignition config not found at expected location: {}\n\
+                 This is an internal error - the config should have been mounted by podman.",
+                ignition_path
+            ));
+        }
+
+        let arch = std::env::consts::ARCH;
+        match arch {
+            "x86_64" | "aarch64" => {
+                debug!("Adding Ignition config via fw_cfg: {}", ignition_path);
+                qemu_config.add_fw_cfg(IGNITION_FW_CFG_NAME.to_string(), ignition_path.to_owned());
+            }
+            "s390x" | "powerpc64" => {
+                debug!("Adding Ignition config via virtio-blk: {}", ignition_path);
+                qemu_config.add_virtio_blk_device_with_format_ro(
+                    ignition_path.to_string(),
+                    IGNITION_SERIAL_NAME.to_string(),
+                    crate::to_disk::Format::Raw,
+                    true, // readonly as required by FCOS
+                );
+            }
+            _ => {
+                return Err(eyre!(
+                    "Ignition config injection not supported on architecture: {}\n\
+                     Supported architectures: x86_64, aarch64, s390x, powerpc64",
+                    arch
+                ));
+            }
+        }
+    }
 
     // TODO allocate unlinked unnamed file and pass via fd
     let mut tmp_swapfile = None;
@@ -1366,6 +1517,7 @@ Options=
                     disk_file,
                     serial,
                     format: format.into(),
+                    readonly: false,
                 });
             }
         }
