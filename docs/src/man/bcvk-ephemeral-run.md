@@ -148,6 +148,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Additional kernel command line arguments
 
+**--ignition**=*IGNITION_CONFIG*
+
+    Path to Ignition config file (JSON format) to inject via fw_cfg
+
 <!-- END GENERATED OPTIONS -->
 
 # EXAMPLES
@@ -257,6 +261,54 @@ Use predefined instance types for consistent resource allocation:
     bcvk ephemeral run -d --rm -K --itype u1.small --name vm localhost/mybootc
     bcvk ephemeral run -d --rm -K --itype u1.medium --name vm localhost/mybootc
     bcvk ephemeral run -d --rm -K --itype u1.large --name vm localhost/mybootc
+
+## Ignition Configuration
+
+Inject [Ignition](https://coreos.github.io/ignition/) configuration files for first-boot provisioning on CoreOS-based images:
+
+    # Create an Ignition config file (v3.3.0 format)
+    cat > config.ign <<EOF
+    {
+      "ignition": {
+        "version": "3.3.0"
+      },
+      "passwd": {
+        "users": [
+          {
+            "name": "core",
+            "sshAuthorizedKeys": [
+              "ssh-ed25519 AAAAC3... user@example.com"
+            ]
+          }
+        ]
+      },
+      "storage": {
+        "files": [
+          {
+            "path": "/etc/hostname",
+            "contents": {
+              "source": "data:,my-coreos-vm"
+            },
+            "mode": 420
+          }
+        ]
+      }
+    }
+    EOF
+
+    # Run Fedora CoreOS with Ignition config
+    bcvk ephemeral run -d --rm \
+        --ignition config.ign \
+        --name fcos-vm \
+        quay.io/fedora/fedora-coreos:stable
+
+**Important notes**:
+- Only works with Ignition-capable images (Fedora CoreOS, RHEL CoreOS, or custom bootc images with Ignition support)
+- Config is injected via fw_cfg on x86_64/aarch64, virtio-blk on s390x/ppc64le (following FCOS conventions)
+- The `ignition.platform.id=qemu` kernel argument is automatically added
+- For ephemeral VMs, Ignition typically only runs on the first boot of a newly provisioned system
+
+See the [Ignition documentation](https://coreos.github.io/ignition/) and [bootc initramfs documentation](https://docs.fedoraproject.org/en-US/bootc/initramfs/) for creating custom bootc images with Ignition support.
 
 # DEBUGGING
 
