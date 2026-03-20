@@ -525,6 +525,7 @@ pub fn run(opts: ToDiskOpts) -> Result<RunOutcome> {
             opts.additional.format.as_str()
         )], // Attach target disk
         kernel_args: Default::default(),
+        ignition_config: None,
         debug_entrypoint: None,
     };
 

@@ -39,6 +39,15 @@ pub trait QemuConfigExt {
         serial: String,
         format: F,
     ) -> &mut Self;
+
+    /// Add a virtio-blk device with specified format and readonly flag using kit's Format type.
+    fn add_virtio_blk_device_with_format_ro<F: Into<DiskFormat>>(
+        &mut self,
+        disk_file: String,
+        serial: String,
+        format: F,
+        readonly: bool,
+    ) -> &mut Self;
 }
 
 impl QemuConfigExt for QemuConfig {
@@ -49,5 +58,15 @@ impl QemuConfigExt for QemuConfig {
         format: F,
     ) -> &mut Self {
         self.add_virtio_blk_device(disk_file, serial, format.into())
+    }
+
+    fn add_virtio_blk_device_with_format_ro<F: Into<DiskFormat>>(
+        &mut self,
+        disk_file: String,
+        serial: String,
+        format: F,
+        readonly: bool,
+    ) -> &mut Self {
+        self.add_virtio_blk_device_ro(disk_file, serial, format.into(), readonly)
     }
 }

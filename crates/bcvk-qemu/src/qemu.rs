@@ -78,6 +78,8 @@ pub struct VirtioBlkDevice {
     pub serial: String,
     /// Disk image format.
     pub format: DiskFormat,
+    /// Mount as read-only.
+    pub readonly: bool,
 }
 
 /// VM display and console configuration.
@@ -224,6 +226,9 @@ pub struct QemuConfig {
     pub systemd_notify: Option<File>,
 
     vhost_fd: Option<File>,
+
+    /// fw_cfg entries for passing config files to the guest
+    fw_cfg_entries: Vec<(String, Utf8PathBuf)>,
 }
 
 impl QemuConfig {
@@ -366,10 +371,22 @@ impl QemuConfig {
         serial: String,
         format: DiskFormat,
     ) -> &mut Self {
+        self.add_virtio_blk_device_ro(disk_file, serial, format, false)
+    }
+
+    /// Add a virtio-blk device with specified format and readonly flag.
+    pub fn add_virtio_blk_device_ro(
+        &mut self,
+        disk_file: String,
+        serial: String,
+        format: DiskFormat,
+        readonly: bool,
+    ) -> &mut Self {
         self.virtio_blk_devices.push(VirtioBlkDevice {
             disk_file,
             serial,
             format,
+            readonly,
         });
         self
     }
@@ -438,6 +455,13 @@ impl QemuConfig {
         self.network_mode = NetworkMode::User {
             hostfwd: vec![hostfwd],
         };
+        self
+    }
+
+    /// Add a fw_cfg entry to pass a file to the guest.
+    /// The file will be accessible in the guest via the fw_cfg interface.
+    pub fn add_fw_cfg(&mut self, name: String, file_path: Utf8PathBuf) -> &mut Self {
+        self.fw_cfg_entries.push((name, file_path));
         self
     }
 }
@@ -560,13 +584,19 @@ fn spawn(
     // Add virtio-blk block devices
     for (idx, blk_device) in config.virtio_blk_devices.iter().enumerate() {
         let drive_id = format!("drive{}", idx);
+        let readonly_flag = if blk_device.readonly {
+            ",readonly=on"
+        } else {
+            ""
+        };
         cmd.args([
             "-drive",
             &format!(
-                "file={},format={},if=none,id={}",
+                "file={},format={},if=none,id={}{}",
                 blk_device.disk_file,
                 blk_device.format.as_str(),
-                drive_id
+                drive_id,
+                readonly_flag
             ),
             "-device",
             &format!(
@@ -721,6 +751,11 @@ fn spawn(
     // Add extra credentials passed to this function
     for credential in extra_credentials {
         cmd.args(["-smbios", &format!("type=11,value={}", credential)]);
+    }
+
+    // Add fw_cfg entries
+    for (name, file_path) in &config.fw_cfg_entries {
+        cmd.args(["-fw_cfg", &format!("name={},file={}", name, file_path)]);
     }
 
     // Configure stdio based on display mode
@@ -992,5 +1027,25 @@ mod tests {
     fn test_disk_format() {
         assert_eq!(DiskFormat::Raw.as_str(), "raw");
         assert_eq!(DiskFormat::Qcow2.as_str(), "qcow2");
+    }
+
+    #[test]
+    fn test_fw_cfg_entry() {
+        let mut config = QemuConfig::new_direct_boot(
+            1024,
+            1,
+            "/test/kernel".to_string(),
+            "/test/initramfs".to_string(),
+            "/test/socket".into(),
+        );
+        config.add_fw_cfg(
+            "opt/com.coreos/config".to_string(),
+            "/test/ignition.json".into(),
+        );
+
+        // Test that the fw_cfg entry is created correctly
+        assert_eq!(config.fw_cfg_entries.len(), 1);
+        assert_eq!(config.fw_cfg_entries[0].0, "opt/com.coreos/config");
+        assert_eq!(config.fw_cfg_entries[0].1.as_str(), "/test/ignition.json");
     }
 }
