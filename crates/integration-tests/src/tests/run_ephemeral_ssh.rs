@@ -14,7 +14,7 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
-use color_eyre::Result;
+use anyhow::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
 use xshell::cmd;
 
@@ -43,7 +43,7 @@ fn wait_for_container_removal(container_name: &str) -> Result<()> {
         }
 
         if start.elapsed() >= timeout {
-            return Err(color_eyre::eyre::eyre!(
+            return Err(anyhow::anyhow!(
                 "Timeout waiting for container {} to be removed. Active containers: {}",
                 container_name,
                 containers

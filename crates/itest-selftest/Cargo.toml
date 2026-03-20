@@ -1,0 +1,20 @@
+[package]
+name = "itest-selftest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "itest-selftest"
+path = "src/main.rs"
+
+[dependencies]
+itest = { path = "../itest" }
+anyhow = "1"
+linkme = "0.3"
+rustix = { version = "1", features = ["process", "fs", "system"] }
+xshell = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

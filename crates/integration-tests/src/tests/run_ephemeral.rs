@@ -14,7 +14,7 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
-use color_eyre::Result;
+use anyhow::Result;
 use integration_tests::integration_test;
 use xshell::cmd;
 

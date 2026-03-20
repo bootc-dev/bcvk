@@ -16,8 +16,8 @@
 
 use std::process::Output;
 
+use anyhow::Result;
 use camino::Utf8PathBuf;
-use color_eyre::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
 use xshell::cmd;
 

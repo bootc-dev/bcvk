@@ -1,0 +1,15 @@
+# Workspace root for container builds.
+#
+# This is used by the Containerfile to create a minimal workspace
+# containing only itest and itest-selftest, without needing the
+# full bcvk workspace.
+
+[workspace]
+members = ["itest-selftest"]
+resolver = "2"
+
+[workspace.dependencies]
+xshell = "0.2.7"
+
+[workspace.lints.rust]
+unsafe_code = "deny"

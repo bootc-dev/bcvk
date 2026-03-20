@@ -1,0 +1,34 @@
+# Build the itest-selftest binary and bake it into a bootc image.
+#
+# Build context must be the bcvk repo root:
+#   podman build -t localhost/itest-selftest:latest \
+#     -f crates/itest-selftest/Containerfile .
+
+ARG base=quay.io/centos-bootc/centos-bootc:stream10
+
+FROM $base AS build
+RUN dnf -y install cargo rust && dnf clean all
+
+# Copy only the crates needed to compile itest-selftest.
+# We give it its own workspace so we don't need the rest of bcvk.
+COPY crates/itest /build/crates/itest
+COPY crates/itest-selftest /build/crates/itest-selftest
+
+WORKDIR /build/crates/itest-selftest
+
+# Use a minimal workspace root so we don't need the full bcvk workspace.
+COPY crates/itest-selftest/Cargo.container.toml /build/crates/Cargo.toml
+
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    cargo fetch --manifest-path /build/crates/Cargo.toml
+
+RUN --network=none \
+    --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/build/crates/target \
+    cargo build --release --manifest-path /build/crates/Cargo.toml && \
+    install -m 755 /build/crates/target/release/itest-selftest /usr/bin/itest-selftest
+
+FROM $base
+COPY --from=build /usr/bin/itest-selftest /usr/bin/itest-selftest

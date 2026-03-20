@@ -1,0 +1,22 @@
+image := "localhost/itest-selftest:latest"
+bcvk := env("BCVK_PATH", "bcvk")
+
+# Build the selftest container image
+build:
+    podman build -t {{ image }} -f Containerfile ../..
+
+# Run all tests (build image first if needed)
+test *ARGS: build
+    {{ bcvk }} ephemeral run-ssh {{ image }} -- itest-selftest {{ ARGS }}
+
+# Run all tests against a pre-built image (skip rebuild)
+test-quick *ARGS:
+    {{ bcvk }} ephemeral run-ssh {{ image }} -- itest-selftest {{ ARGS }}
+
+# List available tests
+list: build
+    {{ bcvk }} ephemeral run-ssh {{ image }} -- itest-selftest --list
+
+# Clean up
+clean:
+    -podman rmi {{ image }}

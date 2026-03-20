@@ -5,7 +5,7 @@
 //! - QEMU netdev configuration with hostfwd
 //! - Actual network connectivity through forwarded ports
 
-use color_eyre::Result;
+use anyhow::Result;
 use integration_tests::integration_test;
 use scopeguard::defer;
 use xshell::cmd;

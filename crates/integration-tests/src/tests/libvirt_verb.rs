@@ -7,7 +7,7 @@
 //! - `bcvk libvirt ssh` - SSH into domains
 //! - Domain lifecycle management (start/stop/rm/inspect)
 
-use color_eyre::Result;
+use anyhow::Result;
 use integration_tests::integration_test;
 use scopeguard::defer;
 use xshell::cmd;

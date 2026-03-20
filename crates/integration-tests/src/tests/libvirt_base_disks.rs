@@ -6,7 +6,7 @@
 //! - base-disks list command
 //! - base-disks prune command
 
-use color_eyre::Result;
+use anyhow::Result;
 use integration_tests::integration_test;
 use scopeguard::defer;
 use xshell::cmd;
