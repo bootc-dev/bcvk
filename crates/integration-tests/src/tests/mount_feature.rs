@@ -15,8 +15,8 @@
 //! - Warning and continuing on failures
 
 use camino::Utf8Path;
-use color_eyre::Result;
 use integration_tests::integration_test;
+use itest::TestResult;
 
 use std::fs;
 use tempfile::TempDir;
@@ -71,7 +71,7 @@ StandardError=journal+console
     Ok(())
 }
 
-fn test_mount_feature_bind() -> Result<()> {
+fn test_mount_feature_bind() -> TestResult {
     // Create a temporary directory to test bind mounting
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let temp_dir_path = Utf8Path::from_path(temp_dir.path()).expect("temp dir path is not utf8");
@@ -117,7 +117,7 @@ fn test_mount_feature_bind() -> Result<()> {
 }
 integration_test!(test_mount_feature_bind);
 
-fn test_mount_feature_ro_bind() -> Result<()> {
+fn test_mount_feature_ro_bind() -> TestResult {
     // Create a temporary directory to test read-only bind mounting
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let temp_dir_path = Utf8Path::from_path(temp_dir.path()).expect("temp dir path is not utf8");

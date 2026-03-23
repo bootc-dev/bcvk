@@ -14,8 +14,8 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
-use color_eyre::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
+use itest::TestResult;
 use xshell::cmd;
 
 use std::time::{Duration, Instant};
@@ -26,7 +26,7 @@ use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
 ///
 /// Returns Ok(()) if container is removed within timeout, Err otherwise.
 /// Timeout is set to 60 seconds to account for slow CI runners.
-fn wait_for_container_removal(container_name: &str) -> Result<()> {
+fn wait_for_container_removal(container_name: &str) -> anyhow::Result<()> {
     let sh = shell()?;
     let timeout = Duration::from_secs(60);
     let start = Instant::now();
@@ -43,7 +43,7 @@ fn wait_for_container_removal(container_name: &str) -> Result<()> {
         }
 
         if start.elapsed() >= timeout {
-            return Err(color_eyre::eyre::eyre!(
+            return Err(anyhow::anyhow!(
                 "Timeout waiting for container {} to be removed. Active containers: {}",
                 container_name,
                 containers
@@ -55,7 +55,7 @@ fn wait_for_container_removal(container_name: &str) -> Result<()> {
 }
 
 /// Build a test fixture image with the kernel removed
-fn build_broken_image() -> Result<String> {
+fn build_broken_image() -> anyhow::Result<String> {
     let sh = shell()?;
     let fixture_path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/Dockerfile.no-kernel");
     let image_name = format!("localhost/bcvk-test-no-kernel:{}", std::process::id());
@@ -71,7 +71,7 @@ fn build_broken_image() -> Result<String> {
 }
 
 /// Test running a non-interactive command via SSH
-fn test_run_ephemeral_ssh_command() -> Result<()> {
+fn test_run_ephemeral_ssh_command() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -93,7 +93,7 @@ fn test_run_ephemeral_ssh_command() -> Result<()> {
 integration_test!(test_run_ephemeral_ssh_command);
 
 /// Test that the container is cleaned up when SSH exits
-fn test_run_ephemeral_ssh_cleanup() -> Result<()> {
+fn test_run_ephemeral_ssh_cleanup() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -114,7 +114,7 @@ fn test_run_ephemeral_ssh_cleanup() -> Result<()> {
 integration_test!(test_run_ephemeral_ssh_cleanup);
 
 /// Test running system commands via SSH
-fn test_run_ephemeral_ssh_system_command() -> Result<()> {
+fn test_run_ephemeral_ssh_system_command() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -130,7 +130,7 @@ fn test_run_ephemeral_ssh_system_command() -> Result<()> {
 integration_test!(test_run_ephemeral_ssh_system_command);
 
 /// Test that ephemeral run-ssh properly forwards exit codes
-fn test_run_ephemeral_ssh_exit_code() -> Result<()> {
+fn test_run_ephemeral_ssh_exit_code() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -157,7 +157,7 @@ integration_test!(test_run_ephemeral_ssh_exit_code);
 /// This parameterized test runs once per image in BCVK_ALL_IMAGES and verifies
 /// that our systemd version compatibility fix works correctly with both newer
 /// systemd (Fedora) and older systemd (CentOS Stream 9)
-fn test_run_ephemeral_ssh_cross_distro_compatibility(image: &str) -> Result<()> {
+fn test_run_ephemeral_ssh_cross_distro_compatibility(image: &str) -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -211,7 +211,7 @@ fn test_run_ephemeral_ssh_cross_distro_compatibility(image: &str) -> Result<()> 
 parameterized_integration_test!(test_run_ephemeral_ssh_cross_distro_compatibility);
 
 /// Test that /run is mounted as tmpfs and supports unix domain sockets
-fn test_run_tmpfs() -> Result<()> {
+fn test_run_tmpfs() -> TestResult {
     use std::fs;
     use tempfile::TempDir;
 
@@ -282,7 +282,7 @@ integration_test!(test_run_tmpfs);
 /// when ephemeral run-ssh fails early due to a broken image (missing kernel).
 /// Previously this would fail with "setns `mnt`: Bad file descriptor" when using
 /// podman's --rm flag. Now it should fail cleanly and remove the container.
-fn test_run_ephemeral_ssh_broken_image_cleanup() -> Result<()> {
+fn test_run_ephemeral_ssh_broken_image_cleanup() -> TestResult {
     // Build a broken test image (bootc image with kernel removed)
     eprintln!("Building broken test image...");
     let broken_image = build_broken_image()?;
@@ -335,7 +335,7 @@ integration_test!(test_run_ephemeral_ssh_broken_image_cleanup);
 ///
 /// Verifies that ephemeral bootc VMs can access the network and resolve DNS correctly.
 /// Uses HTTP request to quay.io to test both DNS resolution and network connectivity.
-fn test_run_ephemeral_dns_resolution() -> Result<()> {
+fn test_run_ephemeral_dns_resolution() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -364,7 +364,7 @@ integration_test!(test_run_ephemeral_dns_resolution);
 /// Note: This tests the ephemeral timeout (~240s), not the libvirt SSH timeout (~60s).
 /// The libvirt SSH timeout (60s) is used by `bcvk libvirt ssh` and would require
 /// creating a libvirt VM to test properly.
-fn test_run_ephemeral_ssh_timeout() -> Result<()> {
+fn test_run_ephemeral_ssh_timeout() -> TestResult {
     eprintln!("Testing SSH timeout with masked sshd.service...");
     eprintln!("This test takes ~240 seconds to complete...");
 
@@ -443,7 +443,7 @@ fn parse_journal_entries(output: &str) -> Vec<JournalEntry> {
 ///
 /// Uses `journalctl -o json` for structured output parsed with serde,
 /// avoiding brittle text parsing of human-readable journal formats.
-fn test_systemd_health_cross_distro(image: &str) -> Result<()> {
+fn test_systemd_health_cross_distro(image: &str) -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;

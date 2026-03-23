@@ -7,8 +7,8 @@
 //! - `bcvk libvirt ssh` - SSH into domains
 //! - Domain lifecycle management (start/stop/rm/inspect)
 
-use color_eyre::Result;
 use integration_tests::integration_test;
+use itest::TestResult;
 use scopeguard::defer;
 use xshell::cmd;
 
@@ -26,7 +26,7 @@ fn random_suffix() -> String {
 }
 
 /// Test libvirt list functionality (lists domains)
-fn test_libvirt_list_functionality() -> Result<()> {
+fn test_libvirt_list_functionality() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -46,7 +46,7 @@ fn test_libvirt_list_functionality() -> Result<()> {
 integration_test!(test_libvirt_list_functionality);
 
 /// Test libvirt list with JSON output
-fn test_libvirt_list_json_output() -> Result<()> {
+fn test_libvirt_list_json_output() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -67,7 +67,7 @@ fn test_libvirt_list_json_output() -> Result<()> {
 integration_test!(test_libvirt_list_json_output);
 
 /// Test domain resource configuration options
-fn test_libvirt_run_resource_options() -> Result<()> {
+fn test_libvirt_run_resource_options() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -93,7 +93,7 @@ fn test_libvirt_run_resource_options() -> Result<()> {
 integration_test!(test_libvirt_run_resource_options);
 
 /// Test domain networking configuration
-fn test_libvirt_run_networking() -> Result<()> {
+fn test_libvirt_run_networking() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -118,7 +118,7 @@ fn test_libvirt_run_networking() -> Result<()> {
 integration_test!(test_libvirt_run_networking);
 
 /// Test SSH integration with created domains (syntax only)
-fn test_libvirt_ssh_integration() -> Result<()> {
+fn test_libvirt_ssh_integration() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -145,7 +145,7 @@ integration_test!(test_libvirt_ssh_integration);
 
 /// Comprehensive workflow test: creates a VM and tests multiple features
 /// This consolidates several smaller tests to reduce expensive disk image creation
-fn test_libvirt_comprehensive_workflow() -> Result<()> {
+fn test_libvirt_comprehensive_workflow() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -390,7 +390,7 @@ fn cleanup_domain(domain_name: &str) {
 ///
 /// Creates a VM using cmd! with the given prefix and test image.
 /// Returns the created domain name on success.
-fn create_test_vm_and_assert(domain_prefix: &str, test_image: &str) -> Result<String> {
+fn create_test_vm_and_assert(domain_prefix: &str, test_image: &str) -> anyhow::Result<String> {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = LIBVIRT_INTEGRATION_TEST_LABEL;
@@ -409,7 +409,7 @@ fn create_test_vm_and_assert(domain_prefix: &str, test_image: &str) -> Result<St
 
 /// Check if libvirt supports readonly virtiofs (requires libvirt 11.0+)
 /// Returns true if supported, false if not supported
-fn check_libvirt_supports_readonly_virtiofs() -> Result<bool> {
+fn check_libvirt_supports_readonly_virtiofs() -> anyhow::Result<bool> {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -432,7 +432,7 @@ fn check_libvirt_supports_readonly_virtiofs() -> Result<bool> {
 }
 
 /// Test VM startup and shutdown with libvirt run
-fn test_libvirt_run_vm_lifecycle() -> Result<()> {
+fn test_libvirt_run_vm_lifecycle() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_volume = "test-vm-lifecycle";
@@ -512,7 +512,7 @@ fn test_libvirt_run_vm_lifecycle() -> Result<()> {
 integration_test!(test_libvirt_run_vm_lifecycle);
 
 /// Test container storage binding functionality end-to-end
-fn test_libvirt_run_bind_storage_ro() -> Result<()> {
+fn test_libvirt_run_bind_storage_ro() -> TestResult {
     // Check if libvirt supports readonly virtiofs (requires libvirt 11.0+)
     if !check_libvirt_supports_readonly_virtiofs()? {
         return Ok(());
@@ -618,7 +618,7 @@ fn test_libvirt_run_bind_storage_ro() -> Result<()> {
 integration_test!(test_libvirt_run_bind_storage_ro);
 
 /// Test that STORAGE_OPTS credentials are NOT injected when --bind-storage-ro is not used
-fn test_libvirt_run_no_storage_opts_without_bind_storage() -> Result<()> {
+fn test_libvirt_run_no_storage_opts_without_bind_storage() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -692,7 +692,7 @@ fn test_libvirt_run_no_storage_opts_without_bind_storage() -> Result<()> {
 integration_test!(test_libvirt_run_no_storage_opts_without_bind_storage);
 
 /// Test print-firmware command (hidden debugging command)
-fn test_libvirt_print_firmware() -> Result<()> {
+fn test_libvirt_print_firmware() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -727,7 +727,7 @@ fn test_libvirt_print_firmware() -> Result<()> {
 integration_test!(test_libvirt_print_firmware);
 
 /// Test error handling for invalid configurations
-fn test_libvirt_error_handling() -> Result<()> {
+fn test_libvirt_error_handling() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -767,7 +767,7 @@ fn test_libvirt_error_handling() -> Result<()> {
 integration_test!(test_libvirt_error_handling);
 
 /// Test transient VM functionality
-fn test_libvirt_run_transient_vm() -> Result<()> {
+fn test_libvirt_run_transient_vm() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -885,7 +885,7 @@ integration_test!(test_libvirt_run_transient_vm);
 /// 1. Create a transient VM
 /// 2. Replace it with another transient VM using --replace
 /// 3. Verify the replacement works (no errors about undefine on transient domains)
-fn test_libvirt_run_transient_replace() -> Result<()> {
+fn test_libvirt_run_transient_replace() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -959,7 +959,7 @@ integration_test!(test_libvirt_run_transient_replace);
 
 /// Test automatic bind mount functionality with systemd mount units
 /// Also validates kernel argument (--karg) functionality
-fn test_libvirt_run_bind_mounts() -> Result<()> {
+fn test_libvirt_run_bind_mounts() -> TestResult {
     use camino::Utf8Path;
     use std::fs;
     use tempfile::TempDir;

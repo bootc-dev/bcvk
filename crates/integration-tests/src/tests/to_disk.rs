@@ -17,8 +17,8 @@
 use std::process::Output;
 
 use camino::Utf8PathBuf;
-use color_eyre::Result;
 use integration_tests::{integration_test, parameterized_integration_test};
+use itest::TestResult;
 use xshell::cmd;
 
 use tempfile::TempDir;
@@ -34,7 +34,11 @@ use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
 ///
 /// Note: sfdisk can only read partition tables from raw disk images, not qcow2.
 /// For qcow2 images, partition validation is skipped.
-fn validate_disk_image(disk_path: &Utf8PathBuf, output: &Output, context: &str) -> Result<()> {
+fn validate_disk_image(
+    disk_path: &Utf8PathBuf,
+    output: &Output,
+    context: &str,
+) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(disk_path).expect("Failed to get disk metadata");
     assert!(metadata.len() > 0, "{}: Disk image is empty", context);
 
@@ -76,7 +80,7 @@ fn validate_disk_image(disk_path: &Utf8PathBuf, output: &Output, context: &str) 
 }
 
 /// Test actual bootc installation to a disk image
-fn test_to_disk() -> Result<()> {
+fn test_to_disk() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -93,7 +97,7 @@ fn test_to_disk() -> Result<()> {
 integration_test!(test_to_disk);
 
 /// Test bootc installation to a qcow2 disk image
-fn test_to_disk_qcow2() -> Result<()> {
+fn test_to_disk_qcow2() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -124,7 +128,7 @@ fn test_to_disk_qcow2() -> Result<()> {
 integration_test!(test_to_disk_qcow2);
 
 /// Test disk image caching functionality
-fn test_to_disk_caching() -> Result<()> {
+fn test_to_disk_caching() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -176,7 +180,7 @@ fn test_to_disk_caching() -> Result<()> {
 integration_test!(test_to_disk_caching);
 
 /// Test that different image references with the same digest create separate cached disks
-fn test_to_disk_different_imgref_same_digest() -> Result<()> {
+fn test_to_disk_different_imgref_same_digest() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -232,7 +236,7 @@ integration_test!(test_to_disk_different_imgref_same_digest);
 ///
 /// This parameterized test runs to-disk with multiple container images,
 /// particularly testing AlmaLinux which had cross-device link issues (issue #125)
-fn test_to_disk_for_image(image: &str) -> Result<()> {
+fn test_to_disk_for_image(image: &str) -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;

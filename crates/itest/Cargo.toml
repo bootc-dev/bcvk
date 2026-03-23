@@ -1,0 +1,17 @@
+[package]
+name = "itest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Reusable integration test infrastructure for bootc-dev projects"
+
+[dependencies]
+libtest-mimic = "0.8"
+linkme = "0.3"
+paste = "1"
+quick-junit = "0.5"
+rustix = { version = "1", default-features = false, features = ["process"] }
+xshell = { workspace = true }
+
+[lints]
+workspace = true

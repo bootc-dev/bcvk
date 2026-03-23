@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use cap_std_ext::cmdext::CapStdExtCommandExt;
-use color_eyre::Result;
+use itest::TestResult;
 use serde::Deserialize;
 
 use crate::{get_bck_command, get_test_image, integration_test, shell};
@@ -201,7 +201,7 @@ struct ActivatedBcvk {
 /// The child process is bound to the calling thread via
 /// `lifecycle_bind_to_parent_thread`, so it is automatically killed when the
 /// test thread exits. This must NOT be called inside `spawn_blocking`.
-fn activated_connection() -> Result<ActivatedBcvk> {
+fn activated_connection() -> anyhow::Result<ActivatedBcvk> {
     let bck = get_bck_command()?;
     let (ours, theirs) = UnixStream::pair()?;
     let theirs_fd: Arc<std::os::fd::OwnedFd> = Arc::new(theirs.into());
@@ -245,7 +245,7 @@ fn cleanup_container(id: &str) {
 // ===========================================================================
 
 /// Verify that the images `List` method returns a vec of image name strings.
-fn test_varlink_images_list() -> Result<()> {
+fn test_varlink_images_list() -> TestResult {
     let mut bcvk = activated_connection()?;
     let reply = bcvk.rt.block_on(async { bcvk.conn.list().await })??;
     // In CI there may be no bootc images; just verify deserialization succeeds.
@@ -260,7 +260,7 @@ integration_test!(test_varlink_images_list);
 ///
 /// This test pulls the primary test image (which has the `containers.bootc=1`
 /// label) and then verifies it appears in the varlink List response.
-fn test_varlink_images_list_contains_test_image() -> Result<()> {
+fn test_varlink_images_list_contains_test_image() -> TestResult {
     let image = get_test_image();
 
     // Ensure the image is pulled
@@ -284,7 +284,7 @@ integration_test!(test_varlink_images_list_contains_test_image);
 // ===========================================================================
 
 /// Verify that the ephemeral `Ps` method returns container ID strings.
-fn test_varlink_ephemeral_ps() -> Result<()> {
+fn test_varlink_ephemeral_ps() -> TestResult {
     let mut bcvk = activated_connection()?;
     let reply = bcvk.rt.block_on(async { bcvk.conn.ps().await })??;
     for id in &reply.container_ids {
@@ -295,7 +295,7 @@ fn test_varlink_ephemeral_ps() -> Result<()> {
 integration_test!(test_varlink_ephemeral_ps);
 
 /// Test that `Run` with a nonexistent image returns an error.
-fn test_varlink_ephemeral_run_bad_image() -> Result<()> {
+fn test_varlink_ephemeral_run_bad_image() -> TestResult {
     let mut bcvk = activated_connection()?;
     let result = bcvk.rt.block_on(async {
         bcvk.conn
@@ -307,17 +307,18 @@ fn test_varlink_ephemeral_run_bad_image() -> Result<()> {
     })?;
     match result {
         Err(EphemeralError::PodmanError { .. }) => Ok(()),
-        Ok(reply) => Err(color_eyre::eyre::eyre!(
+        Ok(reply) => Err(anyhow::anyhow!(
             "expected error for nonexistent image, got container_id: {}",
             reply.container_id
-        )),
+        )
+        .into()),
     }
 }
 integration_test!(test_varlink_ephemeral_run_bad_image);
 
 /// End-to-end test: Run a VM, verify it in Ps, get SSH connection info,
 /// and actually SSH into it using the returned values.
-fn test_varlink_ephemeral_run_ps_and_ssh() -> Result<()> {
+fn test_varlink_ephemeral_run_ps_and_ssh() -> TestResult {
     let image = get_test_image();
     let mut bcvk = activated_connection()?;
 
@@ -390,9 +391,10 @@ fn test_varlink_ephemeral_run_ps_and_ssh() -> Result<()> {
             Ok(status) if status.success() => break,
             _ if std::time::Instant::now() > deadline => {
                 cleanup_container(&run_reply.container_id);
-                return Err(color_eyre::eyre::eyre!(
+                return Err(anyhow::anyhow!(
                     "SSH did not become ready within 120s using info from GetSshConnectionInfo"
-                ));
+                )
+                .into());
             }
             _ => std::thread::sleep(std::time::Duration::from_secs(2)),
         }
@@ -409,7 +411,7 @@ integration_test!(test_varlink_ephemeral_run_ps_and_ssh);
 // ===========================================================================
 
 /// Test that `ToDisk` with a nonexistent image returns a `Failed` error.
-fn test_varlink_todisk_bad_image() -> Result<()> {
+fn test_varlink_todisk_bad_image() -> TestResult {
     let mut bcvk = activated_connection()?;
     let target = tempfile::NamedTempFile::new()?;
     let target_path = target.path().to_str().unwrap().to_string();
@@ -431,16 +433,17 @@ fn test_varlink_todisk_bad_image() -> Result<()> {
     })?;
     match result {
         Err(ToDiskError::Failed { .. }) => Ok(()),
-        Ok(reply) => Err(color_eyre::eyre::eyre!(
+        Ok(reply) => Err(anyhow::anyhow!(
             "expected Failed error for nonexistent image, got path: {}",
             reply.path
-        )),
+        )
+        .into()),
     }
 }
 integration_test!(test_varlink_todisk_bad_image);
 
 /// Test that `ToDisk` rejects invalid format strings.
-fn test_varlink_todisk_bad_format() -> Result<()> {
+fn test_varlink_todisk_bad_format() -> TestResult {
     let mut bcvk = activated_connection()?;
     let td = tempfile::TempDir::new()?;
     let target_path = td.path().join("disk.img");
@@ -468,10 +471,11 @@ fn test_varlink_todisk_bad_format() -> Result<()> {
             );
             Ok(())
         }
-        Ok(reply) => Err(color_eyre::eyre::eyre!(
+        Ok(reply) => Err(anyhow::anyhow!(
             "expected Failed error for invalid format, got path: {}",
             reply.path
-        )),
+        )
+        .into()),
     }
 }
 integration_test!(test_varlink_todisk_bad_format);
@@ -481,7 +485,7 @@ integration_test!(test_varlink_todisk_bad_format);
 /// This is a heavyweight test that launches a VM internally. It verifies
 /// the reply contains a valid path, that the file exists, and that it is
 /// not marked as cached (first run).
-fn test_varlink_todisk_creates_disk() -> Result<()> {
+fn test_varlink_todisk_creates_disk() -> TestResult {
     let image = get_test_image();
     let td = tempfile::TempDir::new()?;
     let target_path = td.path().join("test-disk.raw");
@@ -578,7 +582,7 @@ fn varlinkctl_is_compatible() -> bool {
 /// too old or suffers from the zlink introspection deserialization bug
 /// (<https://github.com/z-galaxy/zlink/issues/233>), the cross-check is
 /// skipped with a log message.
-fn test_varlink_images_list_crosscheck() -> Result<()> {
+fn test_varlink_images_list_crosscheck() -> TestResult {
     let image = get_test_image();
 
     // Ensure the test image is pulled so we have at least one image to compare
@@ -646,7 +650,7 @@ integration_test!(test_varlink_images_list_crosscheck);
 ///
 /// Skipped when `varlinkctl` is not compatible with the zlink server
 /// (e.g. systemd < 258 due to <https://github.com/z-galaxy/zlink/issues/233>).
-fn test_varlink_exec_varlinkctl() -> Result<()> {
+fn test_varlink_exec_varlinkctl() -> TestResult {
     if !varlinkctl_is_compatible() {
         eprintln!(
             "note: skipping test_varlink_exec_varlinkctl (varlinkctl missing or incompatible, \
@@ -669,7 +673,7 @@ integration_test!(test_varlink_exec_varlinkctl);
 /// Test that `varlinkctl introspect` shows all three interface names.
 ///
 /// Skipped when `varlinkctl` is not compatible with the zlink server.
-fn test_varlink_introspect_varlinkctl() -> Result<()> {
+fn test_varlink_introspect_varlinkctl() -> TestResult {
     if !varlinkctl_is_compatible() {
         eprintln!(
             "note: skipping test_varlink_introspect_varlinkctl (varlinkctl missing or incompatible, \

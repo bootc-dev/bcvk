@@ -14,8 +14,8 @@
 //! - "This is acceptable in CI/testing environments"
 //! - Warning and continuing on failures
 
-use color_eyre::Result;
 use integration_tests::integration_test;
+use itest::TestResult;
 use xshell::cmd;
 
 use std::fs;
@@ -37,7 +37,7 @@ pub fn get_container_kernel_version(image: &str) -> String {
     .expect("Failed to get container kernel version")
 }
 
-fn test_run_ephemeral_correct_kernel() -> Result<()> {
+fn test_run_ephemeral_correct_kernel() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -54,7 +54,7 @@ fn test_run_ephemeral_correct_kernel() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_correct_kernel);
 
-fn test_run_ephemeral_poweroff() -> Result<()> {
+fn test_run_ephemeral_poweroff() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -69,7 +69,7 @@ fn test_run_ephemeral_poweroff() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_poweroff);
 
-fn test_run_ephemeral_with_memory_limit() -> Result<()> {
+fn test_run_ephemeral_with_memory_limit() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -84,7 +84,7 @@ fn test_run_ephemeral_with_memory_limit() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_with_memory_limit);
 
-fn test_run_ephemeral_with_vcpus() -> Result<()> {
+fn test_run_ephemeral_with_vcpus() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -99,7 +99,7 @@ fn test_run_ephemeral_with_vcpus() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_with_vcpus);
 
-fn test_run_ephemeral_execute() -> Result<()> {
+fn test_run_ephemeral_execute() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -134,7 +134,7 @@ fn test_run_ephemeral_execute() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_execute);
 
-fn test_run_ephemeral_container_ssh_access() -> Result<()> {
+fn test_run_ephemeral_container_ssh_access() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -170,7 +170,7 @@ fn test_run_ephemeral_container_ssh_access() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_container_ssh_access);
 
-fn test_run_ephemeral_with_instancetype() -> Result<()> {
+fn test_run_ephemeral_with_instancetype() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -227,7 +227,7 @@ fn test_run_ephemeral_with_instancetype() -> Result<()> {
 }
 integration_test!(test_run_ephemeral_with_instancetype);
 
-fn test_run_ephemeral_instancetype_invalid() -> Result<()> {
+fn test_run_ephemeral_instancetype_invalid() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -262,7 +262,7 @@ integration_test!(test_run_ephemeral_instancetype_invalid);
 ///
 /// This tests compatibility with bootc images that only ship a Unified Kernel Image,
 /// verifying that bcvk can extract kernel/initramfs from the UKI using objcopy.
-fn test_run_ephemeral_uki_only() -> Result<()> {
+fn test_run_ephemeral_uki_only() -> TestResult {
     let sh = shell()?;
     let base_image = get_test_image();
     let uki_image = "bcvk-test-uki-only:latest";
@@ -334,7 +334,7 @@ integration_test!(test_run_ephemeral_uki_only);
 ///
 /// This tests a real-world UKI image that may have both UKI and traditional
 /// kernel files, verifying that bcvk correctly prefers the UKI.
-fn test_run_ephemeral_centos_uki() -> Result<()> {
+fn test_run_ephemeral_centos_uki() -> TestResult {
     const CENTOS_UKI_IMAGE: &str = "ghcr.io/bootc-dev/dev-bootc:centos-10-uki";
 
     debug!("Testing ephemeral boot with {}", CENTOS_UKI_IMAGE);
@@ -372,7 +372,7 @@ integration_test!(test_run_ephemeral_centos_uki);
 ///
 /// This test verifies that shared libraries can be loaded (which requires mmap())
 /// and that we can explicitly mmap a file from the virtiofs root.
-fn test_run_ephemeral_virtiofs_mmap() -> Result<()> {
+fn test_run_ephemeral_virtiofs_mmap() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -407,7 +407,7 @@ integration_test!(test_run_ephemeral_virtiofs_mmap);
 /// - / is read-only virtiofs
 /// - /etc is overlayfs with tmpfs upper (writable)
 /// - /var is tmpfs (not overlayfs, so podman can use overlayfs inside)
-fn test_run_ephemeral_mount_layout() -> Result<()> {
+fn test_run_ephemeral_mount_layout() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
@@ -470,7 +470,7 @@ integration_test!(test_run_ephemeral_mount_layout);
 /// (which inject_systemd_units() knows how to copy), let the system boot
 /// normally, then use --execute to check the journal for the expected
 /// "ordering cycle" diagnostic.
-fn test_run_ephemeral_detect_ordering_cycle() -> Result<()> {
+fn test_run_ephemeral_detect_ordering_cycle() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;

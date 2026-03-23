@@ -5,15 +5,15 @@
 //! - QEMU netdev configuration with hostfwd
 //! - Actual network connectivity through forwarded ports
 
-use color_eyre::Result;
 use integration_tests::integration_test;
+use itest::TestResult;
 use scopeguard::defer;
 use xshell::cmd;
 
 use crate::{get_bck_command, get_test_image, shell, LIBVIRT_INTEGRATION_TEST_LABEL};
 
 /// Test port forwarding argument parsing
-fn test_libvirt_port_forward_parsing() -> Result<()> {
+fn test_libvirt_port_forward_parsing() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -41,7 +41,7 @@ fn test_libvirt_port_forward_parsing() -> Result<()> {
 integration_test!(test_libvirt_port_forward_parsing);
 
 /// Test port forwarding error handling for invalid formats
-fn test_libvirt_port_forward_invalid() -> Result<()> {
+fn test_libvirt_port_forward_invalid() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -98,7 +98,7 @@ fn test_libvirt_port_forward_invalid() -> Result<()> {
 integration_test!(test_libvirt_port_forward_invalid);
 
 /// Test that port forwarding is correctly configured in domain XML
-fn test_libvirt_port_forward_xml() -> Result<()> {
+fn test_libvirt_port_forward_xml() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -179,7 +179,7 @@ fn test_libvirt_port_forward_xml() -> Result<()> {
 integration_test!(test_libvirt_port_forward_xml);
 
 /// Test actual network connectivity through forwarded ports
-fn test_libvirt_port_forward_connectivity() -> Result<()> {
+fn test_libvirt_port_forward_connectivity() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -354,7 +354,7 @@ fn cleanup_domain(domain_name: &str) {
 }
 
 /// Find an available port on the host
-fn find_available_port() -> Result<u16> {
+fn find_available_port() -> anyhow::Result<u16> {
     use std::net::TcpListener;
 
     // Try to bind to port 0, which will allocate an available port
