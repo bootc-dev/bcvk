@@ -6,8 +6,8 @@
 //! - base-disks list command
 //! - base-disks prune command
 
-use color_eyre::Result;
 use integration_tests::integration_test;
+use itest::TestResult;
 use scopeguard::defer;
 use xshell::cmd;
 
@@ -16,7 +16,7 @@ use regex::Regex;
 use crate::{get_bck_command, get_test_image, shell};
 
 /// Test that base disk is created and reused for multiple VMs
-fn test_base_disk_creation_and_reuse() -> Result<()> {
+fn test_base_disk_creation_and_reuse() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();
@@ -103,7 +103,7 @@ fn test_base_disk_creation_and_reuse() -> Result<()> {
 integration_test!(test_base_disk_creation_and_reuse);
 
 /// Test base-disks list command
-fn test_base_disks_list_command() -> Result<()> {
+fn test_base_disks_list_command() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -129,7 +129,7 @@ fn test_base_disks_list_command() -> Result<()> {
 integration_test!(test_base_disks_list_command);
 
 /// Test base-disks prune command with dry-run
-fn test_base_disks_prune_dry_run() -> Result<()> {
+fn test_base_disks_prune_dry_run() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
 
@@ -151,7 +151,7 @@ fn test_base_disks_prune_dry_run() -> Result<()> {
 integration_test!(test_base_disks_prune_dry_run);
 
 /// Test that VM disks reference base disks correctly
-fn test_vm_disk_references_base() -> Result<()> {
+fn test_vm_disk_references_base() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let test_image = get_test_image();

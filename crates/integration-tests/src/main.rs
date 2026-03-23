@@ -2,16 +2,13 @@
 
 use camino::Utf8Path;
 
-use color_eyre::eyre::{eyre, Context};
-use color_eyre::Result;
-use libtest_mimic::{Arguments, Trial};
+use anyhow::{anyhow, Context};
 use serde_json::Value;
 use xshell::{cmd, Shell};
 
-// Re-export constants from lib for internal use
+// Re-export from the lib crate for internal use
 pub(crate) use integration_tests::{
-    image_to_test_suffix, integration_test, INTEGRATION_TESTS, INTEGRATION_TEST_LABEL,
-    LIBVIRT_INTEGRATION_TEST_LABEL, PARAMETERIZED_INTEGRATION_TESTS,
+    integration_test, INTEGRATION_TEST_LABEL, LIBVIRT_INTEGRATION_TEST_LABEL,
 };
 
 mod tests {
@@ -27,13 +24,13 @@ mod tests {
 }
 
 /// Create a new xshell Shell for running commands
-pub(crate) fn shell() -> Result<Shell> {
-    Shell::new().map_err(|e| eyre!("Failed to create shell: {}", e))
+pub(crate) fn shell() -> anyhow::Result<Shell> {
+    Shell::new().map_err(|e| anyhow!("Failed to create shell: {}", e))
 }
 
 /// Get the path to the bcvk binary, checking BCVK_PATH env var first, then falling back to "bcvk"
-pub(crate) fn get_bck_command() -> Result<String> {
-    if let Some(path) = std::env::var("BCVK_PATH").ok() {
+pub(crate) fn get_bck_command() -> anyhow::Result<String> {
+    if let Ok(path) = std::env::var("BCVK_PATH") {
         return Ok(path);
     }
     // Force the user to set this if we're running from the project dir
@@ -41,11 +38,11 @@ pub(crate) fn get_bck_command() -> Result<String> {
         .into_iter()
         .find(|p| Utf8Path::new(p).exists())
     {
-        return Err(eyre!(
+        return Err(anyhow!(
             "Detected {path} - set BCVK_PATH={path} to run using this binary"
         ));
     }
-    return Ok("bcvk".to_owned());
+    Ok("bcvk".to_owned())
 }
 
 /// Get the primary bootc image to use for tests
@@ -83,7 +80,7 @@ pub(crate) fn get_all_test_images() -> Vec<String> {
     }
 }
 
-fn test_images_list() -> Result<()> {
+fn test_images_list() -> itest::TestResult {
     println!("Running test: bcvk images list --json");
 
     let sh = shell()?;
@@ -98,16 +95,12 @@ fn test_images_list() -> Result<()> {
     // Verify the structure and content of the JSON
     let images_array = images
         .as_array()
-        .ok_or_else(|| eyre!("Expected JSON array in output, got: {}", stdout))?;
+        .ok_or_else(|| anyhow!("Expected JSON array in output, got: {}", stdout))?;
 
     // Verify that the array contains valid image objects
     for (index, image) in images_array.iter().enumerate() {
         if !image.is_object() {
-            return Err(eyre!(
-                "Image entry {} is not a JSON object: {}",
-                index,
-                image
-            ));
+            return Err(anyhow!("Image entry {} is not a JSON object: {}", index, image).into());
         }
     }
 
@@ -121,32 +114,11 @@ fn test_images_list() -> Result<()> {
 integration_test!(test_images_list);
 
 fn main() {
-    let args = Arguments::from_args();
+    let config = itest::TestConfig {
+        report_name: "bcvk-integration-tests".into(),
+        suite_name: "integration".into(),
+        parameters: get_all_test_images(),
+    };
 
-    let mut tests: Vec<Trial> = Vec::new();
-
-    // Collect regular tests from the distributed slice
-    tests.extend(INTEGRATION_TESTS.iter().map(|test| {
-        let name = test.name;
-        let f = test.f;
-        Trial::test(name, move || f().map_err(|e| format!("{:?}", e).into()))
-    }));
-
-    // Collect parameterized tests and generate variants for each image
-    let all_images = get_all_test_images();
-    for param_test in PARAMETERIZED_INTEGRATION_TESTS.iter() {
-        for image in &all_images {
-            let image = image.clone();
-            let test_suffix = image_to_test_suffix(&image);
-            let test_name = format!("{}_{}", param_test.name, test_suffix);
-            let f = param_test.f;
-
-            tests.push(Trial::test(test_name, move || {
-                f(&image).map_err(|e| format!("{:?}", e).into())
-            }));
-        }
-    }
-
-    // Run the tests and exit with the result
-    libtest_mimic::run(&args, tests).exit();
+    itest::run_tests_with_config(config);
 }
