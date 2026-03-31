@@ -1,7 +1,7 @@
 //! Integration tests for Ignition config injection
 
-use color_eyre::Result;
 use integration_tests::integration_test;
+use itest::TestResult;
 use xshell::cmd;
 
 use std::fs;
@@ -23,7 +23,7 @@ const FCOS_IMAGE: &str = "quay.io/fedora/fedora-coreos:stable";
 /// Note: We don't test actual Ignition application here because FCOS won't
 /// apply Ignition configs in ephemeral mode (treats it as subsequent boot).
 /// The config injection works correctly for custom bootc images with Ignition.
-fn test_run_ephemeral_ignition_works() -> Result<()> {
+fn test_run_ephemeral_ignition_works() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -61,7 +61,7 @@ fn test_run_ephemeral_ignition_works() -> Result<()> {
 integration_test!(test_run_ephemeral_ignition_works);
 
 /// Test that Ignition config validation rejects nonexistent files
-fn test_run_ephemeral_ignition_invalid_path() -> Result<()> {
+fn test_run_ephemeral_ignition_invalid_path() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
@@ -98,7 +98,7 @@ fn test_run_ephemeral_ignition_invalid_path() -> Result<()> {
 integration_test!(test_run_ephemeral_ignition_invalid_path);
 
 /// Test that Ignition is rejected for images that don't support it
-fn test_run_ephemeral_ignition_unsupported_image() -> Result<()> {
+fn test_run_ephemeral_ignition_unsupported_image() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let label = INTEGRATION_TEST_LABEL;
