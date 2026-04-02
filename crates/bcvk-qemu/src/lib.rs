@@ -44,6 +44,8 @@
 
 mod credentials;
 mod qemu;
+/// Minimal QMP (QEMU Machine Protocol) client for runtime VM control.
+pub mod qmp;
 mod virtiofsd;
 
 pub use credentials::{
@@ -54,7 +56,8 @@ pub use credentials::{
 
 pub use qemu::{
     BootMode, DiskFormat, DisplayMode, MachineType, NetworkMode, QemuConfig, ResourceLimits,
-    RunningQemu, VirtioBlkDevice, VirtioSerialOut, VirtiofsMount, VHOST_VSOCK,
+    RunningQemu, VirtioBlkDevice, VirtioSerialBidir, VirtioSerialOut, VirtiofsMount,
+    QMP_SOCKET_PATH, VHOST_VSOCK,
 };
 
 pub use virtiofsd::{spawn_virtiofsd_async, validate_virtiofsd_config, VirtiofsConfig};
