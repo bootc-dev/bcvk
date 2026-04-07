@@ -301,6 +301,10 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub transient: bool,
 
+    /// Path to Ignition config file (JSON format) for first-boot provisioning
+    #[clap(long = "ignition")]
+    pub ignition_config: Option<Utf8PathBuf>,
+
     /// Additional metadata key-value pairs (used internally, not exposed via CLI)
     #[clap(skip)]
     pub metadata: std::collections::HashMap<String, String>,
@@ -448,9 +452,34 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
     let image_digest = inspect.digest.to_string();
     debug!("Image digest: {}", image_digest);
 
+    // Check Ignition support and validate config file path early
+    if let Some(ref ignition_path) = opts.ignition_config {
+        let has_ignition = check_ignition_support(&opts.image)?;
+        if !has_ignition {
+            return Err(eyre!(
+                "Image does not support Ignition. See man bcvk-libvirt-run for details."
+            ));
+        }
+        debug!("Image {} supports Ignition", opts.image);
+
+        // Validate that the Ignition config file exists before proceeding
+        if !ignition_path.try_exists()? {
+            return Err(eyre!("Ignition config file not found: {}", ignition_path));
+        }
+    }
+
     if opts.update_from_host {
         opts.bind_storage_ro = true;
         opts.install.target_transport = Some(UPDATE_FROM_HOST_TRANSPORT.to_owned());
+    }
+
+    // Add Ignition kernel argument to install options if Ignition config is specified
+    // This ensures the kernel arg is baked into the installed system's GRUB configuration
+    if opts.ignition_config.is_some() {
+        opts.install
+            .karg
+            .push("ignition.platform.id=qemu".to_string());
+        debug!("Added ignition.platform.id=qemu kernel argument to install options");
     }
 
     // Phase 1: Find or create a base disk image
@@ -1022,6 +1051,62 @@ mod tests {
     }
 }
 
+/// Check if the container image has Ignition support
+///
+/// Checks for labels indicating Ignition support:
+/// - 'coreos.ignition' (future convention, not yet widely used)
+/// - 'com.coreos.osname' (heuristic: CoreOS-based images likely have Ignition)
+///
+/// Returns true if the image is likely to support Ignition.
+fn check_ignition_support(image: &str) -> Result<bool> {
+    use std::collections::HashMap;
+    use std::process::Stdio;
+
+    // Fetch all labels with a single podman inspect call
+    let output = std::process::Command::new("podman")
+        .args(["image", "inspect", "--format", "{{json .Labels}}", image])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to inspect image for labels")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(eyre!(
+            "Failed to inspect image {} for labels: {}",
+            image,
+            stderr.trim()
+        ));
+    }
+
+    // Parse the JSON output
+    let labels: HashMap<String, String> =
+        serde_json::from_slice(&output.stdout).context("Failed to parse image labels as JSON")?;
+
+    // Check for coreos.ignition label (could contain version info or just "1")
+    if let Some(ignition_value) = labels.get("coreos.ignition") {
+        if !ignition_value.is_empty() {
+            debug!(
+                "Image {} has coreos.ignition={} label",
+                image, ignition_value
+            );
+            return Ok(true);
+        }
+    }
+
+    // Fallback: check for com.coreos.osname (CoreOS-based images)
+    if let Some(osname_value) = labels.get("com.coreos.osname").filter(|v| !v.is_empty()) {
+        debug!(
+            "Image {} has com.coreos.osname={}, assuming Ignition support",
+            image, osname_value
+        );
+        return Ok(true);
+    }
+
+    debug!("Image {} does not appear to support Ignition", image);
+    Ok(false)
+}
+
 /// Create a libvirt domain directly from a disk image file
 fn create_libvirt_domain_from_disk(
     domain_name: &str,
@@ -1251,6 +1336,60 @@ fn create_libvirt_domain_from_disk(
             crate::credentials::smbios_creds_for_storage_opts()
                 .context("Failed to generate storage opts credentials")?,
         );
+    }
+
+    // Handle Ignition config injection if specified
+    if let Some(ref ignition_path) = opts.ignition_config {
+        debug!("Processing Ignition config from {}", ignition_path);
+
+        // Copy Ignition config to libvirt pool for persistence
+        // (file existence already validated earlier in run())
+        let pool_path = get_libvirt_storage_pool_path(global_opts.connect.as_deref())
+            .context("Failed to get libvirt storage pool path for Ignition config")?;
+        let ignition_persistent_path = pool_path.join(format!("{}_ignition.json", domain_name));
+
+        std::fs::copy(ignition_path, &ignition_persistent_path).with_context(|| {
+            format!(
+                "Failed to copy Ignition config to {}",
+                ignition_persistent_path
+            )
+        })?;
+        debug!("Copied Ignition config to {}", ignition_persistent_path);
+
+        // Configure Ignition injection based on architecture
+        let arch = std::env::consts::ARCH;
+        match arch {
+            "x86_64" | "aarch64" => {
+                // Use fw_cfg for x86_64/aarch64 (standard QEMU platforms)
+                debug!("Adding Ignition config via fw_cfg for {}", arch);
+                const IGNITION_FW_CFG_NAME: &str = "opt/com.coreos/config";
+                domain_builder = domain_builder.add_fw_cfg(
+                    IGNITION_FW_CFG_NAME.to_string(),
+                    ignition_persistent_path.to_string(),
+                );
+            }
+            "s390x" | "powerpc64le" => {
+                // Use virtio-blk with serial="ignition" for s390x/ppc64le
+                debug!("Adding Ignition config via virtio-blk for {}", arch);
+                domain_builder =
+                    domain_builder.with_ignition_disk(ignition_persistent_path.to_string());
+            }
+            _ => {
+                return Err(eyre!(
+                    "Ignition config injection not supported on architecture: {}\n\
+                     Supported architectures: x86_64, aarch64, s390x, powerpc64le",
+                    arch
+                ));
+            }
+        }
+
+        // Add metadata about Ignition
+        domain_builder = domain_builder
+            .with_metadata("bootc:ignition-config", ignition_path.as_str())
+            .with_metadata(
+                "bootc:ignition-persistent-path",
+                ignition_persistent_path.as_str(),
+            );
     }
 
     // Create a dropin for remote-fs.target that wants all virtiofs mount units.

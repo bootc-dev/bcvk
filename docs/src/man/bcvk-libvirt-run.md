@@ -189,6 +189,52 @@ Server management workflow:
     # Access for maintenance
     bcvk libvirt ssh production-server
 
+## Ignition Configuration
+
+Inject [Ignition](https://coreos.github.io/ignition/) configuration files for first-boot provisioning on CoreOS-based images:
+
+    # Create an Ignition config file (v3.3.0 format)
+    cat > config.ign <<EOF
+    {
+      "ignition": {
+        "version": "3.3.0"
+      },
+      "passwd": {
+        "users": [
+          {
+            "name": "core",
+            "sshAuthorizedKeys": [
+              "ssh-ed25519 AAAAC3... user@example.com"
+            ]
+          }
+        ]
+      },
+      "storage": {
+        "files": [
+          {
+            "path": "/etc/hostname",
+            "contents": {
+              "source": "data:,my-coreos-vm"
+            },
+            "mode": 420
+          }
+        ]
+      }
+    }
+    EOF
+
+    # Run Fedora CoreOS with Ignition config
+    bcvk libvirt run --name fcos-vm \
+        --ignition config.ign \
+        --memory 4G --cpus 2 \
+        quay.io/fedora/fedora-coreos:stable
+
+**Important notes**:
+- Only works with Ignition-capable images (Fedora CoreOS, RHEL CoreOS, or custom bootc images with Ignition support)
+- Config is injected via fw_cfg on x86_64/aarch64, virtio-blk on s390x/ppc64le (following FCOS conventions)
+- The Ignition config is stored persistently in the libvirt storage pool
+- For custom bootc images with Ignition support, see the [Ignition documentation](https://coreos.github.io/ignition/) and [bootc initramfs documentation](https://docs.fedoraproject.org/en-US/bootc/initramfs/)
+
 # SEE ALSO
 
 **bcvk**(8)

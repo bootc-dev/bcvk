@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use color_eyre::Result;
+use tracing::debug;
 
 /// Check if a domain is persistent (vs transient)
 ///
@@ -105,6 +106,26 @@ fn remove_vm_impl(
         if std::path::Path::new(disk_path).exists() {
             std::fs::remove_file(disk_path)
                 .with_context(|| format!("Failed to remove disk file: {}", disk_path))?;
+        }
+    }
+
+    // Remove Ignition config file if it exists (stored in metadata)
+    // Parse domain XML to get the ignition persistent path
+    if let Ok(xml_output) = global_opts
+        .virsh_command()
+        .args(&["dumpxml", vm_name])
+        .output()
+    {
+        if let Ok(xml_str) = String::from_utf8(xml_output.stdout) {
+            if let Ok(dom) = crate::xml_utils::parse_xml_dom(&xml_str) {
+                if let Some(ignition_path_node) = dom.find("bootc:ignition-persistent-path") {
+                    let ignition_path = ignition_path_node.text_content().trim();
+                    if !ignition_path.is_empty() && std::path::Path::new(ignition_path).exists() {
+                        debug!("Removing Ignition config file: {}", ignition_path);
+                        let _ = std::fs::remove_file(ignition_path); // Don't fail if this fails
+                    }
+                }
+            }
         }
     }
 

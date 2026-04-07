@@ -1397,7 +1397,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
                 debug!("Adding Ignition config via fw_cfg: {}", ignition_path);
                 qemu_config.add_fw_cfg(IGNITION_FW_CFG_NAME.to_string(), ignition_path.to_owned());
             }
-            "s390x" | "powerpc64" => {
+            "s390x" | "powerpc64le" => {
                 debug!("Adding Ignition config via virtio-blk: {}", ignition_path);
                 qemu_config.add_virtio_blk_device_with_format_ro(
                     ignition_path.to_string(),
@@ -1409,7 +1409,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
             _ => {
                 return Err(eyre!(
                     "Ignition config injection not supported on architecture: {}\n\
-                     Supported architectures: x86_64, aarch64, s390x, powerpc64",
+                     Supported architectures: x86_64, aarch64, s390x, powerpc64le",
                     arch
                 ));
             }
