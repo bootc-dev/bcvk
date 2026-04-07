@@ -55,6 +55,8 @@ pub struct DomainBuilder {
     nvram_template: Option<String>, // Custom NVRAM template with enrolled keys
     nvram_format: Option<String>,   // Format of NVRAM template (raw, qcow2)
     firmware_log: Option<FirmwareLogOutput>, // OVMF debug log output via isa-debugcon
+    fw_cfg_entries: Vec<(String, String)>, // fw_cfg entries (name, file_path)
+    ignition_disk_path: Option<String>, // Path to Ignition config for virtio-blk injection
 }
 
 impl Default for DomainBuilder {
@@ -86,6 +88,8 @@ impl DomainBuilder {
             nvram_template: None,
             nvram_format: None,
             firmware_log: None,
+            fw_cfg_entries: Vec::new(),
+            ignition_disk_path: None,
         }
     }
 
@@ -204,6 +208,21 @@ impl DomainBuilder {
         self
     }
 
+    /// Add a fw_cfg entry for passing config files to the guest
+    ///
+    /// This is used for Ignition config injection on x86_64/aarch64.
+    /// The entry will be converted to a QEMU commandline argument in the domain XML.
+    pub fn add_fw_cfg(mut self, name: String, file_path: String) -> Self {
+        self.fw_cfg_entries.push((name, file_path));
+        self
+    }
+
+    /// Set Ignition config disk path for virtio-blk injection (s390x/ppc64le)
+    pub fn with_ignition_disk(mut self, disk_path: String) -> Self {
+        self.ignition_disk_path = Some(disk_path);
+        self
+    }
+
     /// Build the domain XML
     pub fn build_xml(self) -> Result<String> {
         let name = self.name.ok_or_else(|| eyre!("Domain name is required"))?;
@@ -221,7 +240,7 @@ impl DomainBuilder {
         let mut writer = XmlWriter::new();
 
         // Root domain element
-        let domain_attrs = if self.qemu_args.is_empty() {
+        let domain_attrs = if self.qemu_args.is_empty() && self.fw_cfg_entries.is_empty() {
             vec![("type", "kvm")]
         } else {
             vec![
@@ -379,6 +398,17 @@ impl DomainBuilder {
             writer.end_element("disk")?;
         }
 
+        // Ignition config disk (virtio-blk with serial="ignition" for s390x/ppc64le)
+        if let Some(ref ignition_disk) = self.ignition_disk_path {
+            writer.start_element("disk", &[("type", "file"), ("device", "disk")])?;
+            writer.write_empty_element("driver", &[("name", "qemu"), ("type", "raw")])?;
+            writer.write_empty_element("source", &[("file", ignition_disk)])?;
+            writer.write_empty_element("target", &[("dev", "vdb"), ("bus", "virtio")])?;
+            writer.write_text_element("serial", "ignition")?;
+            writer.write_empty_element("readonly", &[])?;
+            writer.end_element("disk")?;
+        }
+
         // Network
         let network_config = self.network.as_deref().unwrap_or("default");
         match network_config {
@@ -483,9 +513,22 @@ impl DomainBuilder {
 
         writer.end_element("devices")?;
 
-        // QEMU commandline section (if we have QEMU args)
-        if !self.qemu_args.is_empty() {
+        // QEMU commandline section (if we have QEMU args or fw_cfg entries)
+        if !self.qemu_args.is_empty() || !self.fw_cfg_entries.is_empty() {
             writer.start_element("qemu:commandline", &[])?;
+
+            // Add fw_cfg entries first
+            // Format: -fw_cfg name=<name>,file=<path>
+            // Verified working: config accessible at /sys/firmware/qemu_fw_cfg/by_name/<name>/raw
+            for (name, file_path) in &self.fw_cfg_entries {
+                writer.write_empty_element("qemu:arg", &[("value", "-fw_cfg")])?;
+                writer.write_empty_element(
+                    "qemu:arg",
+                    &[("value", &format!("name={},file={}", name, file_path))],
+                )?;
+            }
+
+            // Then add other QEMU args
             for arg in &self.qemu_args {
                 writer.write_empty_element("qemu:arg", &[("value", arg)])?;
             }
