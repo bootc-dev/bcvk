@@ -1565,12 +1565,24 @@ dependencies = [
 name = "itest"
 version = "0.1.0"
 dependencies = [
+ "itest-macros",
  "libtest-mimic",
  "linkme",
  "paste",
  "quick-junit",
  "rustix",
+ "tempfile",
+ "tokio",
  "xshell",
+]
+
+[[package]]
+name = "itest-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
