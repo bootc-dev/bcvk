@@ -58,7 +58,6 @@ jobs:
       - epel9
       - epel10.1
       - epel10.2
-      - epel10.3
 
   - job: koji_build
     trigger: commit
