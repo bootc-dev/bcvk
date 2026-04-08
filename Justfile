@@ -24,7 +24,8 @@ unit *ARGS:
 pull-test-images:
     podman pull -q {{ALL_BASE_IMAGES}} >/dev/null
 
-# Run integration tests (auto-detects nextest, with cleanup)
+# Run integration tests (prefers cargo-nextest, falls back to cargo test with
+# built-in fork-exec output capture)
 test-integration *ARGS: build pull-test-images
     #!/usr/bin/env bash
     set -euo pipefail
@@ -36,16 +37,15 @@ test-integration *ARGS: build pull-test-images
     # Clean up any leftover containers before starting
     cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
 
-    # Run the tests
+    # Prefer nextest for better UX (retries, timing, etc.), but the harness
+    # captures output itself via fork-exec so cargo test works too.
     if command -v cargo-nextest &> /dev/null; then
-        cargo nextest run --release -P integration -p integration-tests {{ ARGS }}
-        TEST_EXIT_CODE=$?
+        cargo nextest run --release -P integration -p integration-tests {{ ARGS }} && TEST_EXIT_CODE=0 || TEST_EXIT_CODE=$?
     else
-        cargo test --release -p integration-tests -- {{ ARGS }}
-        TEST_EXIT_CODE=$?
+        cargo test --release -p integration-tests -- {{ ARGS }} && TEST_EXIT_CODE=0 || TEST_EXIT_CODE=$?
     fi
 
-    # Clean up containers after tests complete
+    # Clean up containers after tests complete (must run even on failure)
     cargo run --release --bin test-cleanup -p integration-tests 2>/dev/null || true
 
     exit $TEST_EXIT_CODE

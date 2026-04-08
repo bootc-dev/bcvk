@@ -38,6 +38,7 @@
 mod harness;
 mod junit;
 mod privilege;
+mod resources;
 
 pub use harness::{run_tests, run_tests_with_config, TestConfig};
 pub use privilege::{require_root, DispatchMode};
@@ -48,6 +49,13 @@ pub use privilege::{require_root, DispatchMode};
 pub use linkme;
 #[doc(hidden)]
 pub use paste;
+#[doc(hidden)]
+pub use tokio;
+
+// Re-export the proc-macro attribute.  Named `test_attr` to avoid
+// conflicts with both the `#[test]` prelude attribute and the
+// `integration_test!` declarative macro.
+pub use itest_macros::integration_test as test_attr;
 
 /// Error type for integration tests.
 ///
@@ -66,6 +74,112 @@ pub type TestFn = fn() -> TestResult;
 /// Signature for a parameterised test (receives one string parameter).
 pub type ParameterizedTestFn = fn(&str) -> TestResult;
 
+/// Options that control how a test is dispatched to a VM.
+#[derive(Debug, Clone, Default)]
+pub struct VmOptions {
+    /// Instance type (e.g. `"u1.large"`) passed to `bcvk --itype`.
+    ///
+    /// When set, takes precedence over `memory_mib` and `vcpus`.
+    pub itype: Option<&'static str>,
+
+    /// Explicit VM memory in MiB.
+    ///
+    /// When `None` and `itype` is also `None`, auto-detected from host
+    /// resources (capped at 70% of available memory).
+    pub memory_mib: Option<u32>,
+
+    /// Explicit VM vCPU count.
+    ///
+    /// When `None` and `itype` is also `None`, auto-detected from host
+    /// resources.
+    pub vcpus: Option<u32>,
+}
+
+/// Per-test metadata that maps to external test runner formats.
+///
+/// This struct captures test properties that are meaningful across
+/// runners (tmt, autopkgtest, nextest).  All fields are optional;
+/// the harness fills in sensible defaults when emitting metadata.
+///
+/// Fields are `const`-constructible so they can live in distributed
+/// slices.
+///
+/// # Format mapping
+///
+/// | Field | tmt (FMF) | autopkgtest (DEP-8) |
+/// |---|---|---|
+/// | `timeout` | `duration:` | *(global only)* |
+/// | `needs_root` | *(plan-level)* | `Restrictions: needs-root` |
+/// | `isolation` | *(plan-level)* | `Restrictions: isolation-{container,machine}` |
+/// | `tags` | `tag:` | `Classes:` |
+/// | `summary` | `summary:` | *(none)* |
+/// | `needs_internet` | *(none)* | `Restrictions: needs-internet` |
+/// | `flaky` | `result: xfail` | `Restrictions: flaky` |
+#[derive(Debug, Clone)]
+pub struct TestMeta {
+    /// Maximum test duration (e.g. `"5m"`, `"1h"`).
+    ///
+    /// Defaults to the harness-wide default when `None`.
+    pub timeout: Option<&'static str>,
+
+    /// Whether the test requires root privileges.
+    ///
+    /// Set automatically by [`privileged_test!`] and [`booted_test!`].
+    pub needs_root: bool,
+
+    /// Minimum isolation level required.
+    ///
+    /// Maps to autopkgtest `isolation-container` / `isolation-machine`.
+    pub isolation: Isolation,
+
+    /// Free-form tags for filtering and categorization.
+    ///
+    /// Maps to tmt `tag:` and autopkgtest `Classes:`.
+    pub tags: &'static [&'static str],
+
+    /// One-line summary.  Falls back to the test name when `None`.
+    pub summary: Option<&'static str>,
+
+    /// Whether the test requires unrestricted internet access.
+    pub needs_internet: bool,
+
+    /// Whether the test is known to be flaky.
+    ///
+    /// Maps to autopkgtest `Restrictions: flaky` and tmt `result: xfail`.
+    pub flaky: bool,
+}
+
+impl TestMeta {
+    /// An empty metadata set — all defaults.
+    pub const EMPTY: Self = Self {
+        timeout: None,
+        needs_root: false,
+        isolation: Isolation::None,
+        tags: &[],
+        summary: None,
+        needs_internet: false,
+        flaky: false,
+    };
+}
+
+impl Default for TestMeta {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+/// Minimum isolation level a test requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Isolation {
+    /// No special isolation (default).
+    #[default]
+    None,
+    /// Needs its own container (can start services, open ports).
+    Container,
+    /// Needs its own machine (can interact with kernel, reboot).
+    Machine,
+}
+
 /// Metadata for a registered integration test.
 #[derive(Debug)]
 pub struct IntegrationTest {
@@ -73,12 +187,23 @@ pub struct IntegrationTest {
     pub name: &'static str,
     /// Test function.
     pub f: TestFn,
+    /// Per-test metadata for external runners.
+    pub meta: TestMeta,
 }
 
 impl IntegrationTest {
-    /// Create a new integration test.
+    /// Create a new integration test with default metadata.
     pub const fn new(name: &'static str, f: TestFn) -> Self {
-        Self { name, f }
+        Self {
+            name,
+            f,
+            meta: TestMeta::EMPTY,
+        }
+    }
+
+    /// Create a new integration test with explicit metadata.
+    pub const fn with_meta(name: &'static str, f: TestFn, meta: TestMeta) -> Self {
+        Self { name, f, meta }
     }
 }
 
@@ -89,12 +214,23 @@ pub struct ParameterizedIntegrationTest {
     pub name: &'static str,
     /// Test function receiving one string parameter.
     pub f: ParameterizedTestFn,
+    /// Per-test metadata for external runners.
+    pub meta: TestMeta,
 }
 
 impl ParameterizedIntegrationTest {
-    /// Create a new parameterised integration test.
+    /// Create a new parameterised integration test with default metadata.
     pub const fn new(name: &'static str, f: ParameterizedTestFn) -> Self {
-        Self { name, f }
+        Self {
+            name,
+            f,
+            meta: TestMeta::EMPTY,
+        }
+    }
+
+    /// Create a new parameterised integration test with explicit metadata.
+    pub const fn with_meta(name: &'static str, f: ParameterizedTestFn, meta: TestMeta) -> Self {
+        Self { name, f, meta }
     }
 }
 
@@ -115,17 +251,54 @@ pub static PARAMETERIZED_INTEGRATION_TESTS: [ParameterizedIntegrationTest];
 
 /// Register a test function.
 ///
+/// The function may return any `Result<(), E>` where
+/// `E: Into<Box<dyn Error + Send + Sync>>` — this includes
+/// `anyhow::Result`, `eyre::Result`, and plain `std::io::Result`.
+///
 /// ```ignore
-/// fn my_test() -> itest::TestResult { Ok(()) }
+/// fn my_test() -> anyhow::Result<()> { Ok(()) }
 /// itest::integration_test!(my_test);
+/// ```
+///
+/// With metadata:
+///
+/// ```ignore
+/// fn slow_test() -> itest::TestResult { Ok(()) }
+/// itest::integration_test!(slow_test, meta = const { itest::TestMeta {
+///     timeout: Some("1h"),
+///     tags: &["slow", "network"],
+///     needs_internet: true,
+///     ..itest::TestMeta::EMPTY
+/// }});
 /// ```
 #[macro_export]
 macro_rules! integration_test {
+    ($fn_name:ident, meta = const $meta:block) => {
+        $crate::paste::paste! {
+            // Wrapper converts any compatible error type to TestError.
+            fn [<__itest_wrap_ $fn_name>]() -> $crate::TestResult {
+                $fn_name().map_err(::std::convert::Into::into)
+            }
+            #[$crate::linkme::distributed_slice($crate::INTEGRATION_TESTS)]
+            static [<__ITEST_ $fn_name:upper>]: $crate::IntegrationTest =
+                $crate::IntegrationTest::with_meta(
+                    stringify!($fn_name),
+                    [<__itest_wrap_ $fn_name>],
+                    $meta,
+                );
+        }
+    };
     ($fn_name:ident) => {
         $crate::paste::paste! {
+            fn [<__itest_wrap_ $fn_name>]() -> $crate::TestResult {
+                $fn_name().map_err(::std::convert::Into::into)
+            }
             #[$crate::linkme::distributed_slice($crate::INTEGRATION_TESTS)]
-            static [<$fn_name:upper>]: $crate::IntegrationTest =
-                $crate::IntegrationTest::new(stringify!($fn_name), $fn_name);
+            static [<__ITEST_ $fn_name:upper>]: $crate::IntegrationTest =
+                $crate::IntegrationTest::new(
+                    stringify!($fn_name),
+                    [<__itest_wrap_ $fn_name>],
+                );
         }
     };
 }
@@ -139,13 +312,43 @@ macro_rules! integration_test {
 /// fn my_test(image: &str) -> itest::TestResult { Ok(()) }
 /// itest::parameterized_integration_test!(my_test);
 /// ```
+///
+/// With metadata:
+///
+/// ```ignore
+/// fn slow_test(image: &str) -> itest::TestResult { Ok(()) }
+/// itest::parameterized_integration_test!(slow_test, meta = const { itest::TestMeta {
+///     timeout: Some("30m"),
+///     ..itest::TestMeta::EMPTY
+/// }});
+/// ```
 #[macro_export]
 macro_rules! parameterized_integration_test {
+    ($fn_name:ident, meta = const $meta:block) => {
+        $crate::paste::paste! {
+            fn [<__itest_wrap_ $fn_name>](p: &str) -> $crate::TestResult {
+                $fn_name(p).map_err(::std::convert::Into::into)
+            }
+            #[$crate::linkme::distributed_slice($crate::PARAMETERIZED_INTEGRATION_TESTS)]
+            static [<__ITEST_ $fn_name:upper>]: $crate::ParameterizedIntegrationTest =
+                $crate::ParameterizedIntegrationTest::with_meta(
+                    stringify!($fn_name),
+                    [<__itest_wrap_ $fn_name>],
+                    $meta,
+                );
+        }
+    };
     ($fn_name:ident) => {
         $crate::paste::paste! {
+            fn [<__itest_wrap_ $fn_name>](p: &str) -> $crate::TestResult {
+                $fn_name(p).map_err(::std::convert::Into::into)
+            }
             #[$crate::linkme::distributed_slice($crate::PARAMETERIZED_INTEGRATION_TESTS)]
-            static [<$fn_name:upper>]: $crate::ParameterizedIntegrationTest =
-                $crate::ParameterizedIntegrationTest::new(stringify!($fn_name), $fn_name);
+            static [<__ITEST_ $fn_name:upper>]: $crate::ParameterizedIntegrationTest =
+                $crate::ParameterizedIntegrationTest::new(
+                    stringify!($fn_name),
+                    [<__itest_wrap_ $fn_name>],
+                );
         }
     };
 }
@@ -158,31 +361,49 @@ macro_rules! parameterized_integration_test {
 /// The test binary name is taken from the first argument; it must match the
 /// installed binary name so that `bcvk ephemeral run-ssh` can invoke it.
 ///
+/// An optional `itype = "..."` argument specifies the VM instance type
+/// (e.g. `"u1.large"` for 2 vCPU / 8 GiB).  When omitted the default
+/// instance type is used.
+///
 /// ```ignore
 /// itest::privileged_test!("my-binary", my_test, {
-///     // runs as root
+///     // runs as root with default VM size
+///     Ok(())
+/// });
+///
+/// itest::privileged_test!("my-binary", big_test, itype = "u1.large", {
+///     // runs as root in a larger VM — note trailing comma after itype
 ///     Ok(())
 /// });
 /// ```
 #[macro_export]
 macro_rules! privileged_test {
-    ($binary:expr, $fn_name:ident, $body:expr) => {
+    ($binary:expr, $fn_name:ident, $(itype = $itype:expr,)? $body:expr) => {
         fn $fn_name() -> $crate::TestResult {
+            #[allow(unused_mut)]
+            let mut vm_opts = $crate::VmOptions::default();
+            $( vm_opts.itype = Some($itype); )?
             if $crate::require_root(
                 stringify!($fn_name),
                 $binary,
                 $crate::DispatchMode::Privileged,
+                &vm_opts,
             )?
             .is_some()
             {
                 return Ok(());
             }
-            // Inner closure: its return type is inferred from $body,
+            // Inner closure: return type is inferred from $body,
             // allowing any Result<(), E> where E: Into<TestError>.
             let inner = || $body;
             inner().map_err(::std::convert::Into::into)
         }
-        $crate::integration_test!($fn_name);
+        $crate::integration_test!($fn_name, meta = const {
+            $crate::TestMeta {
+                needs_root: true,
+                ..$crate::TestMeta::EMPTY
+            }
+        });
     };
 }
 
@@ -191,25 +412,46 @@ macro_rules! privileged_test {
 /// When not running as root the test is dispatched via `bcvk libvirt run`
 /// which does a full `bootc install to-disk`.
 ///
+/// An optional `itype = "..."` argument specifies the VM instance type.
+///
 /// ```ignore
 /// itest::booted_test!("my-binary", my_test, {
 ///     // runs inside a booted ostree deployment
 ///     Ok(())
 /// });
+///
+/// itest::booted_test!("my-binary", big_test, itype = "u1.large", {
+///     // runs in a larger VM — note trailing comma after itype
+///     Ok(())
+/// });
 /// ```
 #[macro_export]
 macro_rules! booted_test {
-    ($binary:expr, $fn_name:ident, $body:expr) => {
+    ($binary:expr, $fn_name:ident, $(itype = $itype:expr,)? $body:expr) => {
         fn $fn_name() -> $crate::TestResult {
-            if $crate::require_root(stringify!($fn_name), $binary, $crate::DispatchMode::Booted)?
-                .is_some()
+            #[allow(unused_mut)]
+            let mut vm_opts = $crate::VmOptions::default();
+            $( vm_opts.itype = Some($itype); )?
+            if $crate::require_root(
+                stringify!($fn_name),
+                $binary,
+                $crate::DispatchMode::Booted,
+                &vm_opts,
+            )?
+            .is_some()
             {
                 return Ok(());
             }
             let inner = || $body;
             inner().map_err(::std::convert::Into::into)
         }
-        $crate::integration_test!($fn_name);
+        $crate::integration_test!($fn_name, meta = const {
+            $crate::TestMeta {
+                needs_root: true,
+                isolation: $crate::Isolation::Machine,
+                ..$crate::TestMeta::EMPTY
+            }
+        });
     };
 }
 

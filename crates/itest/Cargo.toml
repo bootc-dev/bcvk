@@ -5,13 +5,30 @@ edition = "2021"
 publish = false
 description = "Reusable integration test infrastructure for bootc-dev projects"
 
+# Disable auto-discovery so the fixture binary doesn't conflict
+autobins = false
+autotests = false
+
+[[bin]]
+name = "itest-fixture"
+path = "tests/fixture.rs"
+
+[[test]]
+name = "harness_integration"
+path = "tests/harness_integration.rs"
+
 [dependencies]
+itest-macros = { path = "../itest-macros" }
 libtest-mimic = "0.8"
 linkme = "0.3"
 paste = "1"
 quick-junit = "0.5"
-rustix = { version = "1", default-features = false, features = ["process"] }
+rustix = { version = "1", default-features = false, features = ["fs", "pipe", "process"] }
+tokio = { version = "1", features = ["rt"] }
 xshell = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

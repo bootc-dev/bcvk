@@ -1,0 +1,17 @@
+[package]
+name = "itest-macros"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Proc-macro companion crate for itest"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[lints]
+workspace = true

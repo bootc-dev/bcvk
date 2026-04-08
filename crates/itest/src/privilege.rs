@@ -8,8 +8,15 @@
 //!   install).
 //! * **Booted** — `bcvk libvirt run` + SSH (full disk install via
 //!   `bootc install to-disk`).
+//!
+//! Before launching a VM, `require_root` acquires tokens from the
+//! global VM jobserver (one token per 128 MiB of VM memory).  This
+//! limits total concurrent VM memory to what the host can sustain.
 
-use crate::TestError;
+use crate::resources::{
+    itype_memory_mib, vm_jobserver, DEFAULT_VM_MEMORY_MIB, DEFAULT_VM_VCPUS, TOKEN_MIB,
+};
+use crate::{TestError, VmOptions};
 use xshell::{cmd, Shell};
 
 /// How a test should be dispatched when not running as root.
@@ -29,11 +36,17 @@ pub enum DispatchMode {
 /// * Returns `Ok(Some(()))` after successfully dispatching — the
 ///   caller should return early.
 ///
+/// Before launching a VM, acquires tokens from the global VM
+/// jobserver — one token per 128 MiB of VM memory.  This ensures
+/// concurrent VMs don't exceed the host's memory budget, regardless
+/// of the test runner being used.
+///
 /// # Arguments
 ///
 /// * `test_name` — the name passed to `--exact` when re-invoking.
 /// * `test_binary` — binary name or path invoked inside the VM.
 /// * `mode` — [`DispatchMode::Privileged`] or [`DispatchMode::Booted`].
+/// * `vm_options` — VM sizing options (instance type, etc.).
 ///
 /// # Environment variables
 ///
@@ -42,14 +55,11 @@ pub enum DispatchMode {
 ///   when not root).
 /// * `ITEST_IN_VM` — recursion guard: if set we expect to already be
 ///   root; if not, something is broken.
-///
-/// Projects that need different env var names should set `ITEST_IMAGE`
-/// from their own project-specific variable in `main()`, or define
-/// thin wrapper functions.
 pub fn require_root(
     test_name: &str,
     test_binary: &str,
     mode: DispatchMode,
+    vm_options: &VmOptions,
 ) -> Result<Option<()>, TestError> {
     if rustix::process::getuid().is_root() {
         return Ok(None);
@@ -66,18 +76,45 @@ pub fn require_root(
             .into()
     })?;
 
+    // Determine VM memory for jobserver token count.
+    // Priority: itype → look up its memory; explicit memory_mib; default.
+    let memory_mib = match vm_options.itype {
+        Some(it) => itype_memory_mib(it).unwrap_or(DEFAULT_VM_MEMORY_MIB),
+        None => vm_options.memory_mib.unwrap_or(DEFAULT_VM_MEMORY_MIB),
+    };
+
+    // Acquire jobserver tokens (1 token = 128 MiB, rounded up)
+    let tokens = (memory_mib + TOKEN_MIB - 1) / TOKEN_MIB;
+    let _permit = vm_jobserver().acquire(tokens).map_err(|e| -> TestError {
+        format!("failed to acquire {tokens} VM token(s): {e}").into()
+    })?;
+
     let sh = Shell::new()?;
     let bcvk = std::env::var("BCVK_PATH").unwrap_or_else(|_| "bcvk".into());
-
-    // Pass the recursion guard so the binary knows it's inside a VM
     let in_vm_env = "ITEST_IN_VM=1";
+
+    // Build VM sizing arguments.
+    let mut vm_args: Vec<String> = Vec::new();
+
+    if let Some(itype) = vm_options.itype {
+        vm_args.push("--itype".into());
+        vm_args.push(itype.into());
+    } else {
+        let mem = vm_options.memory_mib.unwrap_or(DEFAULT_VM_MEMORY_MIB);
+        let cpus = vm_options.vcpus.unwrap_or(DEFAULT_VM_VCPUS);
+
+        vm_args.push("--memory".into());
+        vm_args.push(format!("{mem}M"));
+        vm_args.push("--vcpus".into());
+        vm_args.push(cpus.to_string());
+    }
 
     match mode {
         DispatchMode::Booted => {
             let vm_name = format!("itest-{}", test_name.replace('_', "-"));
             cmd!(
                 sh,
-                "{bcvk} libvirt run --name {vm_name} --replace --detach --ssh-wait {image}"
+                "{bcvk} libvirt run --name {vm_name} --replace --detach --ssh-wait {vm_args...} {image}"
             )
             .run()?;
 
@@ -96,11 +133,12 @@ pub fn require_root(
         DispatchMode::Privileged => {
             cmd!(
                 sh,
-                "{bcvk} ephemeral run-ssh {image} -- env {in_vm_env} {test_binary} --exact {test_name}"
+                "{bcvk} ephemeral run-ssh {vm_args...} {image} -- env {in_vm_env} {test_binary} --exact {test_name}"
             )
             .run()?;
         }
     }
 
+    // _permit dropped here → tokens returned to pipe
     Ok(Some(()))
 }
