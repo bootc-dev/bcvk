@@ -402,9 +402,9 @@ dependencies = [
 
 [[package]]
 name = "cap-std-ext"
-version = "5.1.1"
+version = "5.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f9d7cf114dea582f663f03f4c563d0fc5ca2c8fa4c496eb538d8f01981ea51"
+checksum = "6c6c5ac70c4465b47c3a322330f87c2df31e42ac527497d94dc1f1d1cb8989f9"
 dependencies = [
  "cap-primitives",
  "cap-tempfile",
@@ -1479,11 +1479,9 @@ dependencies = [
  "cfg-if",
  "dirs",
  "itest",
- "libc",
  "linkme",
  "rand",
  "regex",
- "rustix",
  "scopeguard",
  "serde",
  "serde_json",

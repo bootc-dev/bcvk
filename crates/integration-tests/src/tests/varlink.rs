@@ -11,11 +11,10 @@
 //! If something is not working, use assert/unwrap to fail hard.
 
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
-use cap_std_ext::cmdext::CapStdExtCommandExt;
+use cap_std_ext::cmdext::{CapStdExtCommandExt, CmdFds, SystemdFdName};
 use itest::TestResult;
 use serde::Deserialize;
 
@@ -190,13 +189,11 @@ struct ActivatedBcvk {
 
 /// Spawn bcvk with socket activation and return a zlink connection.
 ///
-/// Creates a Unix socketpair and spawns bcvk directly with socket-activation
-/// env vars (`LISTEN_FDS`, `LISTEN_PID`, `LISTEN_FDNAMES`) set via
-/// `libc::setenv` in a `pre_exec` hook. We avoid `Command::env()` because
-/// Rust's std overwrites the global `environ` pointer *after* `pre_exec`
-/// callbacks run, which would discard our `LISTEN_PID` value (which must
-/// equal `getpid()` for libsystemd's `receive_descriptors` to accept it).
-/// See `library/std/src/sys/process/unix/unix.rs` in rust-lang/rust.
+/// Creates a Unix socketpair and spawns bcvk with socket-activation
+/// fd passing using `CmdFds::new_systemd_fds()`. This atomically places
+/// the socket at fd 3 and sets `LISTEN_PID`, `LISTEN_FDS`, and
+/// `LISTEN_FDNAMES` in the child process -- replacing the previous manual
+/// `pre_exec` + `libc::setenv` approach.
 ///
 /// The child process is bound to the calling thread via
 /// `lifecycle_bind_to_parent_thread`, so it is automatically killed when the
@@ -207,21 +204,10 @@ fn activated_connection() -> anyhow::Result<ActivatedBcvk> {
     let theirs_fd: Arc<std::os::fd::OwnedFd> = Arc::new(theirs.into());
 
     let mut cmd = Command::new(&bck);
-    // Do NOT use cmd.env() here -- it causes Rust's Command to build an
-    // envp array that replaces environ after our pre_exec setenv calls.
-    cmd.take_fd_n(theirs_fd, 3)
-        .lifecycle_bind_to_parent_thread();
-    #[allow(unsafe_code)]
-    unsafe {
-        cmd.pre_exec(|| {
-            let pid = rustix::process::getpid();
-            let pid_dec = rustix::path::DecInt::new(pid.as_raw_nonzero().get());
-            libc::setenv(c"LISTEN_PID".as_ptr(), pid_dec.as_c_str().as_ptr(), 1);
-            libc::setenv(c"LISTEN_FDS".as_ptr(), c"1".as_ptr(), 1);
-            libc::setenv(c"LISTEN_FDNAMES".as_ptr(), c"varlink".as_ptr(), 1);
-            Ok(())
-        });
-    }
+    let fds = CmdFds::new_systemd_fds([(theirs_fd, SystemdFdName::new("varlink"))]);
+    // Do NOT use cmd.env() here -- it would cause Rust's Command to build
+    // an envp array that replaces environ after take_fds' setenv calls.
+    cmd.take_fds(fds).lifecycle_bind_to_parent_thread();
     let _child = cmd.spawn()?;
 
     ours.set_nonblocking(true)?;

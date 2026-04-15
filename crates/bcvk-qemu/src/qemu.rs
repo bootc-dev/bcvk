@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use cap_std_ext::cmdext::CapStdExtCommandExt;
+use cap_std_ext::cmdext::{CapStdExtCommandExt, CmdFds};
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use libc::{VMADDR_CID_ANY, VMADDR_PORT_ANY};
@@ -571,12 +571,13 @@ fn spawn(
         cmd.arg("-no-reboot");
     }
 
+    let mut cmd_fds = CmdFds::new();
     for (idx, fd) in config.fdset.iter().enumerate() {
         let fd_id = 100 + idx as u32; // Start at 100 to avoid conflicts
         let set_id = idx + 1; // fdset starts at 1
 
         // Pass the write FD to QEMU
-        cmd.take_fd_n(Arc::clone(fd), fd_id as i32);
+        cmd_fds.take_fd_n(Arc::clone(fd), fd_id as i32);
 
         cmd.args(["-add-fd", &format!("fd={},set={}", fd_id, set_id)]);
     }
@@ -736,7 +737,7 @@ fn spawn(
     // Add AF_VSOCK device if enabled
     if let Some((vhostfd, guest_cid)) = vsock {
         debug!("Adding AF_VSOCK device with guest CID: {}", guest_cid);
-        cmd.take_fd_n(Arc::new(vhostfd), 42);
+        cmd_fds.take_fd_n(Arc::new(vhostfd), 42);
         cmd.args([
             "-device",
             &format!("vhost-vsock-pci,guest-cid={},vhostfd=42", guest_cid),
@@ -772,6 +773,8 @@ fn spawn(
             }
         }
     }
+
+    cmd.take_fds(cmd_fds);
 
     tracing::debug!("{cmd:?}");
 

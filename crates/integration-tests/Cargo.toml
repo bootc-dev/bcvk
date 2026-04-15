@@ -38,8 +38,6 @@ regex = "1"
 rand = { workspace = true }
 scopeguard = "1"
 cap-std-ext = { workspace = true }
-libc = "0.2"
-rustix = { version = "1", features = ["process"] }
 
 [lints]
 workspace = true
