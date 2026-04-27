@@ -14,7 +14,6 @@ Source1:        %{url}/releases/download/v%{version}/bcvk-%{version}-vendor.tar.
 # Only build for architectures with full support and testing
 ExclusiveArch:  x86_64 aarch64
 
-Requires: binutils
 Requires: openssh-clients
 Requires: podman
 Requires: qemu-img

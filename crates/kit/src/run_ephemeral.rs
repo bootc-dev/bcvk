@@ -861,11 +861,15 @@ fn parse_service_exit_code(status_content: &str) -> Result<i32> {
     Ok(0)
 }
 
-/// Check for required binaries in the target container image
+/// Check for required binaries in the privileged container
 ///
-/// These binaries must be present in the container image being run as an ephemeral VM.
+/// These binaries must be present in the privileged container that runs bcvk,
+/// not the guest bootc image that gets booted inside the VM.
 fn check_required_container_binaries() -> Result<()> {
-    // We use systemctl in a few places. objcopy is for UKI extraction.
+    // systemctl: used for checking cloud-init and other systemd operations
+    // objcopy: for UKI kernel extraction (when using UKI images)
+    // NOTE: bwrap is checked earlier in entrypoint.sh, not here, because by the
+    // time run_impl() executes we're already inside the bwrap namespace
     let required_binaries = ["systemctl", "objcopy"];
 
     let mut missing = Vec::new();

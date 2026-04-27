@@ -10,12 +10,18 @@ sudo dnf install bcvk
 
 ## Prerequisites
 
-Required:
+### Host Requirements
+
+For building from source:
 - [Rust](https://www.rust-lang.org/)
 - Git
+
+For running bcvk:
 - QEMU/KVM
+- qemu-img
 - virtiofsd
 - Podman
+- openssh-clients (for libvirt SSH operations)
 
 Optional:
 - libvirt (for persistent VM features)
@@ -23,6 +29,14 @@ Optional:
   sudo systemctl enable --now libvirtd
   sudo usermod -a -G libvirt $USER
   ```
+
+### Target Bootc Image Requirements
+
+For `bcvk ephemeral` operations, the bootc container images you run must contain:
+- systemctl (systemd)
+- objcopy (binutils)
+- bwrap (bubblewrap)
+- ssh, ssh-keygen (openssh-clients)
 
 ## Development Binaries
 
