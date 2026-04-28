@@ -382,7 +382,15 @@ pub enum RunOutcome {
 ///
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
-pub fn run(opts: ToDiskOpts) -> Result<RunOutcome> {
+pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
+    // Normalize the source image name by stripping containers-storage: prefix if present.
+    // The containers-storage: prefix is a transport specifier used by some tools like skopeo,
+    // but podman commands (image inspect, run --mount=type=image) expect just the image name.
+    // We'll add it back where needed (e.g., in bootc install commands).
+    if let Some(stripped) = opts.source_image.strip_prefix("containers-storage:") {
+        opts.source_image = stripped.to_string();
+    }
+
     // Phase 0: Check for existing cached disk image
     let would_reuse = if opts.target_disk.exists() {
         debug!(
