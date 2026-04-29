@@ -88,7 +88,7 @@
 //! - Ensures perfect fidelity of user options across process boundaries
 
 use std::fs::File;
-use std::io::{BufWriter, Seek, Write};
+use std::io::{BufWriter, IsTerminal, Seek, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -404,6 +404,18 @@ pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
 
 /// Launch privileged container with QEMU+KVM for ephemeral VM.
 pub fn run(opts: RunEphemeralOpts) -> Result<()> {
+    // Print helpful hint when running in foreground mode without console
+    if !opts.podman.detach && !opts.common.console && std::io::stderr().is_terminal() {
+        if let Some(name) = &opts.podman.name {
+            eprintln!(
+                "Hint: Use 'bcvk ephemeral ssh {}' to connect, or add --console to see VM output",
+                name
+            );
+        } else {
+            eprintln!("Hint: Add --console to see VM output, or use -d for background mode");
+        }
+    }
+
     let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
     // Keep _temp_dir alive until exec replaces our process
     // At this point our process is replaced by `podman`, we are just a wrapper for creating
