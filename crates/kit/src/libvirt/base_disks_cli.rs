@@ -8,14 +8,24 @@ use color_eyre::Result;
 use comfy_table::{presets::UTF8_FULL, Table};
 use serde_json;
 
-use super::base_disks::{list_base_disks, prune_base_disks};
+use super::base_disks::{find_or_create_base_disk, list_base_disks, prune_base_disks};
 use super::OutputFormat;
+use crate::images;
+use crate::install_options::InstallOptions;
 
 /// Options for base-disks command
 #[derive(Debug, Parser)]
 pub struct LibvirtBaseDisksOpts {
     #[command(subcommand)]
     pub command: BaseDisksSubcommand,
+}
+
+/// Options for base-disks create command
+#[derive(Debug, Parser)]
+pub struct CreateBaseDiskOpts {
+    pub source_image: String,
+    #[clap(flatten)]
+    pub install_options: InstallOptions,
 }
 
 /// Base disk subcommands
@@ -51,6 +61,26 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtBaseDisksO
         BaseDisksSubcommand::List(list_opts) => run_list(connect_uri, list_opts),
         BaseDisksSubcommand::Prune(prune_opts) => run_prune(connect_uri, prune_opts),
     }
+}
+
+/// Execute the to-base-disk command (standalone)
+pub fn run_create(
+    global_opts: &crate::libvirt::LibvirtOptions,
+    opts: CreateBaseDiskOpts,
+) -> Result<()> {
+    let connect_uri = global_opts.connect.as_deref();
+    let inspect = images::inspect(&opts.source_image)?;
+    let image_digest = inspect.digest.to_string();
+
+    let path = find_or_create_base_disk(
+        &opts.source_image,
+        &image_digest,
+        &opts.install_options,
+        connect_uri,
+    )?;
+    println!("Created base disk: {path}");
+
+    Ok(())
 }
 
 /// Execute the list subcommand
@@ -114,12 +144,12 @@ fn run_list(connect_uri: Option<&str>, opts: ListOpts) -> Result<()> {
         OutputFormat::Yaml => {
             return Err(color_eyre::eyre::eyre!(
                 "YAML format is not supported for base-disks list command"
-            ))
+            ));
         }
         OutputFormat::Xml => {
             return Err(color_eyre::eyre::eyre!(
                 "XML format is not supported for base-disks list command"
-            ))
+            ));
         }
     }
 
