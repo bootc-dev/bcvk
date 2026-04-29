@@ -222,6 +222,10 @@ pub enum LibvirtSubcommands {
     #[clap(name = "base-disks")]
     BaseDisks(base_disks_cli::LibvirtBaseDisksOpts),
 
+    /// Create a base disk image for libvirt VMs
+    #[clap(name = "to-base-disk")]
+    ToBaseDisk(base_disks_cli::CreateBaseDiskOpts),
+
     /// Print detected firmware paths and configuration
     #[clap(name = "print-firmware", hide = true)]
     PrintFirmware(print_firmware::LibvirtPrintFirmwareOpts),
