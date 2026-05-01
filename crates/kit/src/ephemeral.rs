@@ -64,6 +64,42 @@ pub struct ContainerListEntry {
 
 /// Ephemeral VM operations
 #[derive(Debug, Subcommand)]
+#[command(after_long_help = "\
+EXAMPLES:
+
+  Fire-and-forget interactive session (VM is removed on exit):
+
+    bcvk ephemeral run-ssh quay.io/fedora/fedora-bootc:42
+
+  Background VM you can reconnect to:
+
+    bcvk ephemeral run -d --rm --ssh-keygen --name myvm quay.io/fedora/fedora-bootc:42
+    bcvk ephemeral ssh myvm
+    podman stop myvm
+
+  Run a single command and capture its exit code (CI pattern):
+
+    bcvk ephemeral run-ssh quay.io/fedora/fedora-bootc:42 -- systemctl is-active myservice
+
+  Stream the boot console in real time:
+
+    bcvk ephemeral run -d --console --name myvm quay.io/fedora/fedora-bootc:42
+    podman logs -f myvm
+
+  Mount a host directory into the VM (available at /run/virtiofs-mnt-src):
+
+    bcvk ephemeral run-ssh --bind .:src quay.io/fedora/fedora-bootc:42
+
+  Make the root filesystem writable (changes are still lost on shutdown):
+
+    bcvk ephemeral run-ssh --karg systemd.volatile=overlay quay.io/fedora/fedora-bootc:42
+
+  Tip for systemd unit authors - detect ephemeral vs. real hardware:
+
+    ConditionKernelCommandLine=!rootfstype=virtiofs
+
+  (virtiofs root is the stable indicator that the VM is running under bcvk ephemeral)\
+")]
 pub enum EphemeralCommands {
     /// Run bootc containers as ephemeral VMs
     #[clap(name = "run")]

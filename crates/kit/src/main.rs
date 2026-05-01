@@ -135,13 +135,13 @@ enum Commands {
     Images(images::ImagesOpts),
 
     #[cfg(target_os = "linux")]
-    /// Manage ephemeral VMs for bootc containers
+    /// Run bootc images as stateless VMs via QEMU+Podman (no root required)
     #[clap(subcommand)]
     Ephemeral(ephemeral::EphemeralCommands),
 
     // macOS stub: ephemeral command exists but errors out
     #[cfg(not(target_os = "linux"))]
-    /// Manage ephemeral VMs for bootc containers (not available on this platform)
+    /// Run bootc images as stateless VMs via QEMU+Podman (not available on this platform)
     #[clap(subcommand)]
     Ephemeral(StubEphemeralCommands),
 
@@ -152,7 +152,31 @@ enum Commands {
 
     // Note: libvirt is intentionally NOT available on macOS
     #[cfg(target_os = "linux")]
-    /// Manage libvirt integration for bootc containers
+    /// Run bootc images as persistent VMs managed by libvirt
+    #[clap(after_long_help = "\
+EXAMPLES:
+
+  Check that your libvirt environment is ready:
+
+    bcvk libvirt status
+
+  Create a persistent VM and SSH into it:
+
+    bcvk libvirt run --name myvm quay.io/centos-bootc/centos-bootc:stream10
+    bcvk libvirt ssh myvm
+
+  List running bootc VMs:
+
+    bcvk libvirt list
+
+  Connect to a remote hypervisor:
+
+    bcvk libvirt -c qemu+ssh://myhost/system run quay.io/fedora/fedora-bootc:42
+
+  Use base disks for fast VM cloning (saves disk space and creation time):
+
+    bcvk libvirt base-disks --help\
+")]
     Libvirt {
         /// Hypervisor connection URI (e.g., qemu:///system, qemu+ssh://host/system)
         #[clap(short = 'c', long = "connect", global = true)]
