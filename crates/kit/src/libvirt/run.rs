@@ -297,6 +297,10 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub label: Vec<String>,
 
+    /// Enable graphical console (SPICE) for virt-manager access
+    #[clap(long)]
+    pub graphical_console: bool,
+
     /// Create a transient VM that disappears on shutdown/reboot
     #[clap(long)]
     pub transient: bool,
@@ -471,6 +475,12 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
     if opts.update_from_host {
         opts.bind_storage_ro = true;
         opts.install.target_transport = Some(UPDATE_FROM_HOST_TRANSPORT.to_owned());
+    }
+
+    // Add console=tty1 kernel argument for graphical console support
+    if opts.graphical_console {
+        opts.install.karg.push("console=tty1".to_string());
+        debug!("Added console=tty1 kernel argument for graphical console");
     }
 
     // Add Ignition kernel argument to install options if Ignition config is specified
@@ -1192,6 +1202,9 @@ fn create_libvirt_domain_from_disk(
     if opts.firmware_log {
         domain_builder =
             domain_builder.with_firmware_log(crate::libvirt::domain::FirmwareLogOutput::Console);
+    }
+    if opts.graphical_console {
+        domain_builder = domain_builder.with_graphical_console();
     }
     domain_builder = domain_builder
         .with_metadata("bootc:source-image", &opts.image)
