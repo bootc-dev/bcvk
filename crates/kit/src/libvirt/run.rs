@@ -683,6 +683,14 @@ fn ensure_default_pool(connect_uri: Option<&str>) -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = std::fs::remove_file(xml_path);
+
+        // Check if the error is because the pool already exists
+        if stderr.contains("already exists") {
+            // Pool was created by race between our tests
+            info!("Default storage pool already exists, continuing");
+            return Ok(());
+        }
+
         return Err(color_eyre::eyre::eyre!(
             "Failed to define default pool: {}",
             stderr
@@ -951,7 +959,7 @@ fn check_libvirt_readonly_support() -> Result<()> {
                 "Could not parse libvirt version. \
                 The --bind-storage-ro flag requires libvirt 11.0+ with rust-based virtiofsd support. \
                 Please ensure you have a compatible libvirt version installed."
-            ))
+            )),
         }
     }
 }
