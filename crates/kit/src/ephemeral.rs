@@ -65,7 +65,7 @@ pub struct ContainerListEntry {
 /// Ephemeral VM operations
 #[derive(Debug, Subcommand)]
 #[command(after_long_help = "\
-EXAMPLES:
+# Basic usage
 
   Fire-and-forget interactive session (VM is removed on exit):
 
@@ -86,15 +86,42 @@ EXAMPLES:
     bcvk ephemeral run -d --console --name myvm quay.io/fedora/fedora-bootc:42
     podman logs -f myvm
 
+# Custom container images (Containerfile)
+
+  Any image built from a bootc-compatible base can be used directly — no push
+  to a registry required.  Build locally and pass the image tag just like a
+  public reference:
+
+    podman build -t myimage .
+    bcvk ephemeral run-ssh myimage
+
+# Host directory mounts
+
   Mount a host directory into the VM (available at /run/virtiofs-mnt-src):
 
     bcvk ephemeral run-ssh --bind .:src quay.io/fedora/fedora-bootc:42
+
+# Disk image inspection (virtio-blk)
+
+  Attach an existing disk image (e.g. a bootc-generated one) as a virtio-blk
+  device for mounting, inspection, or fsck without booting that image:
+
+    bcvk ephemeral run-ssh --mount-disk-file /path/to/disk.img:data quay.io/fedora/fedora-bootc:42 -- \\
+        sh -c 'mount /dev/disk/by-id/virtio-data-part3 /mnt && ls /mnt'
+
+  The disk appears inside the VM as /dev/disk/by-id/virtio-<name> with
+  partition symlinks virtio-<name>-part1 etc.  Bootc images use a GPT layout
+  (part1=BIOS-BOOT, part2=EFI, part3=root), so -part3 is the root filesystem.
+  Using the virtio-<name> prefix is unambiguous even when multiple disks are
+  attached.
+
+# Additional tips
 
   Make the root filesystem writable (changes are still lost on shutdown):
 
     bcvk ephemeral run-ssh --karg systemd.volatile=overlay quay.io/fedora/fedora-bootc:42
 
-  Tip for systemd unit authors - detect ephemeral vs. real hardware:
+  Detect ephemeral vs. real hardware in a systemd unit:
 
     ConditionKernelCommandLine=!rootfstype=virtiofs
 
