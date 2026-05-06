@@ -138,6 +138,10 @@ Run a bootable container as a persistent VM
 
     Disable TPM 2.0 support (enabled by default)
 
+**--firmware-log**
+
+    Enable firmware debug log (captures OVMF/EDK2 DEBUG output via isa-debugcon)
+
 **--secure-boot-keys**=*SECURE_BOOT_KEYS*
 
     Directory containing secure boot keys (required for uefi-secure)
@@ -149,6 +153,10 @@ Run a bootable container as a persistent VM
 **--transient**
 
     Create a transient VM that disappears on shutdown/reboot
+
+**--ignition**=*IGNITION_CONFIG*
+
+    Path to Ignition config file (JSON format) for first-boot provisioning
 
 <!-- END GENERATED OPTIONS -->
 
