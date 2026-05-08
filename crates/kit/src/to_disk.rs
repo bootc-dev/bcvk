@@ -142,6 +142,15 @@ pub struct ToDiskAdditionalOpts {
     /// Check if the disk would be regenerated without actually creating it
     #[clap(long)]
     pub dry_run: bool,
+
+    /// Pass an extra argument to the inner `podman run` that executes `bootc
+    /// install`.  May be specified multiple times.  Useful for testing edge
+    /// cases; for example `--bootc-install-podman-arg=--read-only` stresses
+    /// the install path by making the container rootfs read-only, which
+    /// exercises bootloader code paths that avoid writing to the host's
+    /// read-only /boot (similar to osbuild sandbox environments).
+    #[clap(long = "bootc-install-podman-arg")]
+    pub bootc_install_podman_args: Vec<String>,
 }
 
 /// Configuration options for installing a bootc container image to disk
@@ -222,6 +231,19 @@ impl ToDiskOpts {
             .map(|v| format!("--env=RUST_LOG={v}"))
             .unwrap_or_default();
 
+        // Build extra podman args as a shell-safe string
+        let extra_podman_args = self
+            .additional
+            .bootc_install_podman_args
+            .iter()
+            .map(|a| {
+                shlex::try_quote(a)
+                    .map(|q| q.to_string())
+                    .map_err(|e| eyre!("Failed to quote podman arg '{}': {}", a, e))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .join(" ");
+
         // Size /var/tmp tmpfs to match swap size (disk_size)
         // This avoids duplicating size calculation logic
         let tmpfs_size_str = format!("size={}k", disk_size / 1024);
@@ -271,6 +293,7 @@ impl ToDiskOpts {
                 --security-opt label=type:unconfined_t \
                 --env=STORAGE_OPTS \
                 {INSTALL_LOG} \
+                {EXTRA_PODMAN_ARGS} \
                 {SOURCE_IMGREF} \
                 bootc install to-disk \
                 --generic-image \
@@ -309,6 +332,7 @@ EOF
                     --security-opt label=type:unconfined_t \
                     --env=STORAGE_OPTS \
                     {INSTALL_LOG} \
+                    {EXTRA_PODMAN_ARGS} \
                     containers-storage:{SOURCE_IMAGE} \
                     bootc install to-disk \
                     --generic-image \
@@ -330,6 +354,7 @@ EOF
         .replace("{SOURCE_IMGREF}", &quoted_source_imgref)
         .replace("{SOURCE_IMAGE}", &quoted_source_image)
         .replace("{INSTALL_LOG}", &install_log)
+        .replace("{EXTRA_PODMAN_ARGS}", &extra_podman_args)
         .replace("{BOOTC_ARGS}", &bootc_args);
 
         Ok(vec!["/bin/bash".to_string(), "-c".to_string(), script])
@@ -683,5 +708,27 @@ mod tests {
         assert_eq!(size2, 5120 * 1024 * 1024);
 
         Ok(())
+    }
+
+    /// Clap parses `--flag=--value` by treating everything after `=` as the raw
+    /// value, so `--bootc-install-podman-arg=--read-only` works without needing
+    /// `allow_hyphen_values = true`.  This test documents and locks that behaviour.
+    #[test]
+    fn test_podman_arg_equals_form_accepts_hyphen_values() {
+        use clap::Parser;
+
+        let opts = ToDiskOpts::try_parse_from([
+            "bcvk",
+            "test:latest",
+            "/tmp/test.img",
+            "--bootc-install-podman-arg=--read-only",
+            "--bootc-install-podman-arg=--env=FOO=bar",
+        ])
+        .expect("--flag=--value form must parse without allow_hyphen_values");
+
+        assert_eq!(
+            opts.additional.bootc_install_podman_args,
+            ["--read-only", "--env=FOO=bar"]
+        );
     }
 }

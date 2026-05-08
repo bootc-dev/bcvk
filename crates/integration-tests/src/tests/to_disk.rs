@@ -232,6 +232,30 @@ fn test_to_disk_different_imgref_same_digest() -> TestResult {
 }
 integration_test!(test_to_disk_different_imgref_same_digest);
 
+/// Test that --bootc-install-podman-arg passes an innocuous extra arg to the inner podman run
+fn test_to_disk_bootc_install_podman_arg() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
+        .expect("temp path is not UTF-8");
+
+    // Pass an innocuous podman label arg - this exercises the new flag without
+    // affecting the installation outcome.
+    let output = cmd!(
+        sh,
+        "{bck} to-disk --label {label} --bootc-install-podman-arg=--label=bcvk-test=1 {image} {disk_path}"
+    )
+    .output()?;
+
+    validate_disk_image(&disk_path, &output, "test_to_disk_bootc_install_podman_arg")?;
+    Ok(())
+}
+integration_test!(test_to_disk_bootc_install_podman_arg);
+
 /// Test to-disk with various bootc images to ensure compatibility
 ///
 /// This parameterized test runs to-disk with multiple container images,

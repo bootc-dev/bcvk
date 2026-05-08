@@ -127,6 +127,10 @@ The installation process:
 
     Check if the disk would be regenerated without actually creating it
 
+**--bootc-install-podman-arg**=*BOOTC_INSTALL_PODMAN_ARGS*
+
+    Pass an extra argument to the inner `podman run` that executes `bootc install`.  May be specified multiple times.  Useful for testing edge cases; for example `--bootc-install-podman-arg=--read-only` stresses the install path by making the container rootfs read-only, which exercises bootloader code paths that avoid writing to the host's read-only /boot (similar to osbuild sandbox environments)
+
 <!-- END GENERATED OPTIONS -->
 
 # ARGUMENTS
