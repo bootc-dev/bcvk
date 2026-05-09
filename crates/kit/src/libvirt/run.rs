@@ -305,6 +305,14 @@ pub struct LibvirtRunOpts {
     #[clap(long = "ignition")]
     pub ignition_config: Option<Utf8PathBuf>,
 
+    /// Log virtio console (OS/journald on hvc0) to this file (created if absent)
+    #[clap(long = "console-log")]
+    pub console_log: Option<Utf8PathBuf>,
+
+    /// Log platform console (UEFI/bootloader on ttyS0) to this file (created if absent)
+    #[clap(long = "platform-console-log")]
+    pub platform_console_log: Option<Utf8PathBuf>,
+
     /// Additional metadata key-value pairs (used internally, not exposed via CLI)
     #[clap(skip)]
     pub metadata: std::collections::HashMap<String, String>,
@@ -1461,6 +1469,60 @@ fn create_libvirt_domain_from_disk(
     qemu_args.push(netdev_config);
     qemu_args.push("-device".to_string());
     qemu_args.push("virtio-net-pci,netdev=ssh0,addr=0x3".to_string());
+
+    // Helper closure: resolve to absolute path, guard against directory, pre-create.
+    // QEMU's chardev logfile= requires the file to exist before the domain starts.
+    let resolve_log_path = |log_path: &Utf8Path, flag: &str| -> Result<Utf8PathBuf> {
+        let raw_parent = log_path.parent().unwrap_or(Utf8Path::new("."));
+        let effective_parent = if raw_parent.as_str().is_empty() {
+            Utf8Path::new(".")
+        } else {
+            raw_parent
+        };
+        let parent = effective_parent
+            .canonicalize_utf8()
+            .with_context(|| format!("{flag} parent directory not found: {log_path}"))?;
+        let abs = parent.join(log_path.file_name().unwrap_or(log_path.as_str()));
+        if abs.is_dir() {
+            eyre::bail!("{flag} path is a directory: {abs}");
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&abs)
+            .with_context(|| format!("create {flag} log file {abs}"))?;
+        Ok(abs)
+    };
+
+    let virtio_log = opts
+        .console_log
+        .as_deref()
+        .map(|p| resolve_log_path(p, "--console-log"))
+        .transpose()?;
+
+    let serial_log = opts
+        .platform_console_log
+        .as_deref()
+        .map(|p| resolve_log_path(p, "--platform-console-log"))
+        .transpose()?;
+
+    if let (Some(v), Some(s)) = (&virtio_log, &serial_log) {
+        if v == s {
+            eyre::bail!(
+                "--console-log and --platform-console-log cannot point to the same file \
+                 (QEMU opens each chardev logfile independently and returns EBUSY if both \
+                 paths are identical)"
+            );
+        }
+    }
+
+    if let Some(p) = &virtio_log {
+        domain_builder = domain_builder.with_virtio_console_log(p.as_str());
+    }
+    if let Some(p) = &serial_log {
+        domain_builder = domain_builder.with_serial_console_log(p.as_str());
+    }
 
     let domain_xml = domain_builder
         .with_qemu_args(qemu_args)
