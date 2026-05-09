@@ -55,6 +55,8 @@ pub struct DomainBuilder {
     nvram_template: Option<String>, // Custom NVRAM template with enrolled keys
     nvram_format: Option<String>,   // Format of NVRAM template (raw, qcow2)
     firmware_log: Option<FirmwareLogOutput>, // OVMF debug log output via isa-debugcon
+    virtio_console_log: Option<String>, // Virtio console log file path (hvc0 — OS/journald)
+    serial_console_log: Option<String>, // Serial console log file path (ttyS0 — UEFI/bootloader)
     fw_cfg_entries: Vec<(String, String)>, // fw_cfg entries (name, file_path)
     ignition_disk_path: Option<String>, // Path to Ignition config for virtio-blk injection
 }
@@ -88,6 +90,8 @@ impl DomainBuilder {
             nvram_template: None,
             nvram_format: None,
             firmware_log: None,
+            virtio_console_log: None,
+            serial_console_log: None,
             fw_cfg_entries: Vec::new(),
             ignition_disk_path: None,
         }
@@ -205,6 +209,18 @@ impl DomainBuilder {
     #[allow(dead_code)]
     pub fn with_firmware_log(mut self, output: FirmwareLogOutput) -> Self {
         self.firmware_log = Some(output);
+        self
+    }
+
+    /// Log virtio console output (OS/journald on hvc0) to the given host file.
+    pub fn with_virtio_console_log(mut self, path: &str) -> Self {
+        self.virtio_console_log = Some(path.to_string());
+        self
+    }
+
+    /// Log serial console output (UEFI/bootloader on ttyS0) to the given host file.
+    pub fn with_serial_console_log(mut self, path: &str) -> Self {
+        self.serial_console_log = Some(path.to_string());
         self
     }
 
@@ -441,13 +457,21 @@ impl DomainBuilder {
             }
         }
 
-        // Serial console, see https://libvirt.org/formatdomain.html#relationship-between-serial-ports-and-consoles
-        // We allocate a platform-specific default for early console stuff like bootloaders,
-        // and a platform-independent `hvc0` that can be referenced independently.
+        // Serial console (ttyS0) — platform firmware, bootloader, early kernel.
+        // Virtio console (hvc0) — platform-independent; OS and journald write here.
+        // Each chardev opens its logfile independently; giving both the same path
+        // causes QEMU to return EBUSY on the second open.
         writer.start_element("console", &[("type", "pty")])?;
+        if let Some(ref log_path) = self.serial_console_log {
+            writer.write_empty_element("log", &[("file", log_path.as_str()), ("append", "on")])?;
+        }
         writer.write_empty_element("target", &[("type", "serial")])?;
         writer.end_element("console")?;
+
         writer.start_element("console", &[("type", "pty")])?;
+        if let Some(ref log_path) = self.virtio_console_log {
+            writer.write_empty_element("log", &[("file", log_path.as_str()), ("append", "on")])?;
+        }
         writer.write_empty_element("target", &[("type", "virtio")])?;
         writer.end_element("console")?;
 
@@ -818,5 +842,46 @@ mod tests {
         assert!(xml_ro.contains("<readonly/>"));
         assert!(xml_ro.contains("source dir=\"/host/storage\""));
         assert!(xml_ro.contains("target dir=\"hoststorage\""));
+    }
+
+    #[test]
+    fn test_domain_xml_console_log() {
+        let xml = DomainBuilder::new()
+            .with_name("test-console-log")
+            .with_memory(2048)
+            .with_vcpus(2)
+            .with_disk("/tmp/disk.raw")
+            .with_virtio_console_log("/var/log/virtio.log")
+            .with_serial_console_log("/var/log/serial.log")
+            .build_xml()
+            .unwrap();
+
+        // Serial log appears before <target type="serial"
+        assert_eq!(
+            xml.matches(r#"<log file="/var/log/serial.log" append="on"/>"#)
+                .count(),
+            1,
+            "expected exactly one serial log element in:\n{xml}"
+        );
+        let serial_log_pos = xml.find(r#"<log file="/var/log/serial.log""#).unwrap();
+        let serial_target_pos = xml.find(r#"<target type="serial""#).unwrap();
+        assert!(
+            serial_log_pos < serial_target_pos,
+            "serial log must precede serial target"
+        );
+
+        // Virtio log appears before <target type="virtio"
+        assert_eq!(
+            xml.matches(r#"<log file="/var/log/virtio.log" append="on"/>"#)
+                .count(),
+            1,
+            "expected exactly one virtio log element in:\n{xml}"
+        );
+        let virtio_log_pos = xml.find(r#"<log file="/var/log/virtio.log""#).unwrap();
+        let virtio_target_pos = xml.find(r#"<target type="virtio""#).unwrap();
+        assert!(
+            virtio_log_pos < virtio_target_pos,
+            "virtio log must precede virtio target"
+        );
     }
 }

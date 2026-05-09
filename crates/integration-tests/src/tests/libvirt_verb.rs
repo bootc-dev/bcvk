@@ -1122,3 +1122,39 @@ fn test_libvirt_run_bind_mounts() -> TestResult {
     Ok(())
 }
 integration_test!(test_libvirt_run_bind_mounts);
+
+/// Test --console-log: boots a VM with a log path, then verifies the file is
+/// non-empty and the domain XML contains the expected <log> element.
+fn test_libvirt_run_console_log() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let test_image = get_test_image();
+    let label = LIBVIRT_INTEGRATION_TEST_LABEL;
+
+    let domain_name = format!("test-console-log-{}", random_suffix());
+    let log_file = tempfile::NamedTempFile::new()?;
+    let log_path = log_file.path().to_str().expect("log path is not UTF-8");
+
+    cleanup_domain(&domain_name);
+    defer! { cleanup_domain(&domain_name); }
+
+    cmd!(
+        sh,
+        "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 --ssh-wait --karg=console=hvc0 --karg=systemd.journald.forward_to_console=1 --console-log {log_path} {test_image}"
+    )
+    .run()?;
+
+    // console=hvc0 makes /dev/console point to hvc0; forward_to_console=1
+    // then routes journald output there. "systemd" appears in every boot.
+    let log_content = std::fs::read_to_string(log_file.path())?;
+    assert!(log_content.contains("systemd"));
+
+    // virsh dumpxml uses single-quoted attributes: append='on'
+    let sh = shell()?;
+    let domain_xml = cmd!(sh, "virsh dumpxml {domain_name}").read()?;
+    let expected_log = format!("<log file='{}' append='on'/>", log_path);
+    assert!(domain_xml.contains(&expected_log));
+
+    Ok(())
+}
+integration_test!(test_libvirt_run_console_log);
