@@ -115,6 +115,24 @@ The installation process:
 
     Generate SSH keypair and inject via systemd credentials
 
+**--virtiofsd**=*VIRTIOFSD_BINARY*
+
+    Path to virtiofsd binary (overrides auto-detection)
+
+**--output**=*OUTPUT*
+
+    Select how VM output is presented
+
+    Possible values:
+    - console
+    - journal
+
+    Default: console
+
+**--log-dir**=*STREAMS=DIR*
+
+    Write VM log streams to files in DIR
+
 **--install-log**=*INSTALL_LOG*
 
     Configure logging for `bootc install` by setting the `RUST_LOG` environment variable

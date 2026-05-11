@@ -12,7 +12,10 @@ use itest::TestResult;
 use scopeguard::defer;
 use xshell::cmd;
 
-use crate::{get_bck_command, get_test_image, shell, LIBVIRT_INTEGRATION_TEST_LABEL};
+use crate::{
+    check_journal_coverage, get_bck_command, get_test_image, poll_until, shell,
+    LIBVIRT_INTEGRATION_TEST_LABEL,
+};
 use bcvk::xml_utils::parse_xml_dom;
 
 /// Generate a random alphanumeric suffix for VM names to avoid collisions
@@ -1158,3 +1161,43 @@ fn test_libvirt_run_console_log() -> TestResult {
     Ok(())
 }
 integration_test!(test_libvirt_run_console_log);
+/// Test `--log-dir=journal=DIR` for libvirt VMs.
+///
+/// Boots a VM with `--log-dir=journal=DIR`, waits for SSH (proving the VM has reached
+/// multi-user.target), then polls `journal.json` until it contains early-boot entries,
+/// confirming initrd journal capture is working.
+fn test_libvirt_run_journal_output() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let test_image = get_test_image();
+    let label = LIBVIRT_INTEGRATION_TEST_LABEL;
+
+    let domain_name = format!("test-journal-out-{}", random_suffix());
+    let log_dir = tempfile::tempdir()?;
+    let log_dir_path = log_dir
+        .path()
+        .to_str()
+        .expect("log dir path is not UTF-8")
+        .to_owned();
+
+    cleanup_domain(&domain_name);
+    defer! { cleanup_domain(&domain_name); }
+
+    cmd!(
+        sh,
+        "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 --ssh-wait --log-dir=journal={log_dir_path} {test_image}"
+    )
+    .run()?;
+
+    // --ssh-wait guarantees multi-user.target was reached, but bcvk-journal-stream
+    // may still be flushing.  Poll until check_journal_coverage passes.
+    poll_until(
+        "journal coverage (journal.json + journal-initrd.json)",
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_millis(500),
+        || Ok(check_journal_coverage(log_dir.path()).is_ok()),
+    )?;
+
+    Ok(())
+}
+integration_test!(test_libvirt_run_journal_output);
