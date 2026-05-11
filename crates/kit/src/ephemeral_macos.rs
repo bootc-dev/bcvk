@@ -137,27 +137,54 @@ fn cmd_rm_all(force: bool) -> Result<()> {
 
     for vm in &vms {
         if vm.is_alive() {
-            if let Err(e) = Command::new("kill")
-                .args([&vm.pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-            {
+            if let Err(e) = rustix::process::kill_process(
+                rustix::process::Pid::from_raw(vm.pid as i32).unwrap(),
+                rustix::process::Signal::TERM,
+            ) {
                 tracing::warn!("failed to kill VM process {}: {}", vm.pid, e);
             }
             if vm.gvproxy_pid > 0 {
-                if let Err(e) = Command::new("kill")
-                    .args([&vm.gvproxy_pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                {
+                if let Err(e) = rustix::process::kill_process(
+                    rustix::process::Pid::from_raw(vm.gvproxy_pid as i32).unwrap(),
+                    rustix::process::Signal::TERM,
+                ) {
                     tracing::warn!("failed to kill gvproxy {}: {}", vm.gvproxy_pid, e);
                 }
             }
         }
+        if let Some(ref container) = vm.nbd_container {
+            crate::nbdkit_macos::stop_nbdkit_container(container);
+        }
         EphemeralVmMetadata::remove(&vm.name);
         println!("Removed {}", vm.name);
+    }
+
+    // Sweep orphaned resources inside podman machine
+    if let Ok(machine) = run_ephemeral_macos::detect_machine_name() {
+        // Remove orphaned nbdkit containers
+        let _ = Command::new("podman")
+            .args([
+                "machine",
+                "ssh",
+                &machine,
+                "--",
+                "podman",
+                "rm",
+                "-f",
+                "--filter",
+                "name=bcvk-nbd-",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        // Unmount any remaining container image overlays
+        let _ = Command::new("podman")
+            .args([
+                "machine", "ssh", &machine, "--", "podman", "image", "umount", "--all",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
     Ok(())
 }
@@ -170,7 +197,8 @@ fn cmd_ssh(name: &str, args: &[String]) -> Result<()> {
     }
 
     // Try to set up SSH port forwarding via VM-specific gvproxy socket
-    let svc_sock = format!("/private/tmp/bcvk/{}-gvproxy-svc.sock", name);
+    let base = run_ephemeral_macos::ephemeral_base_dir();
+    let svc_sock = format!("{}/{}-gvproxy-svc.sock", base.display(), name);
     if std::path::Path::new(&svc_sock).exists() {
         if let Err(e) =
             run_ephemeral_macos::expose_ssh_port(&svc_sock, "192.168.127.2", vm.ssh_port)

@@ -1,0 +1,13 @@
+[package]
+name = "nbdkit-erofs-plugin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "0.2"
+cpio = "0.4"
+crc32fast = "1.4"
