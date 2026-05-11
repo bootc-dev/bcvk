@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use clap::Subcommand;
 use color_eyre::Result;
@@ -169,18 +168,15 @@ impl VmMetadata {
         Ok(vms)
     }
 
-    /// Check if the VM process is still alive via kill -0.
+    /// Check if the VM process is still alive via kill(pid, 0).
     pub fn is_alive(&self) -> bool {
         if self.vfkit_pid == 0 {
             return false;
         }
-        Command::new("kill")
-            .args(["-0", &self.vfkit_pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        rustix::process::test_kill_process(
+            rustix::process::Pid::from_raw(self.vfkit_pid as i32).unwrap(),
+        )
+        .is_ok()
     }
 }
 
