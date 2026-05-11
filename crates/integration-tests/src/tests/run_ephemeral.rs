@@ -24,7 +24,10 @@ use tempfile::TempDir;
 use camino::Utf8Path;
 use tracing::debug;
 
-use crate::{get_bck_command, get_test_image, shell, INTEGRATION_TEST_LABEL};
+use crate::{
+    check_journal_coverage, get_bck_command, get_test_image, poll_until, shell,
+    INTEGRATION_TEST_LABEL,
+};
 
 pub fn get_container_kernel_version(image: &str) -> String {
     // Run container to get its kernel version
@@ -542,3 +545,65 @@ fn test_run_ephemeral_detect_ordering_cycle() -> TestResult {
     Ok(())
 }
 integration_test!(test_run_ephemeral_detect_ordering_cycle);
+
+/// Test that `--log-dir=journal=DIR` writes JSON journal lines to `journal.json`,
+/// including entries from the initrd (early boot).
+///
+/// Boots the VM detached, polls journal.json until multi-user.target is reached
+/// (proving the system fully booted), then terminates the VM and verifies coverage.
+fn test_run_ephemeral_journal_output() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+    let container_name = format!(
+        "bcvk-journal-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+
+    let log_dir = tempfile::tempdir_in("/var/tmp")?;
+    let log_dir_path = log_dir.path().to_str().unwrap().to_owned();
+
+    cmd!(
+        sh,
+        "{bck} ephemeral run --detach --name {container_name} --label {label} --log-dir=journal={log_dir_path} {image}"
+    )
+    .run()?;
+
+    let journal_path = log_dir.path().join("journal.json");
+
+    // Wait until multi-user.target is reached, then stop the VM.
+    let stop_result = poll_until(
+        "multi-user.target reached in journal",
+        std::time::Duration::from_secs(120),
+        std::time::Duration::from_millis(500),
+        || {
+            let content = std::fs::read_to_string(&journal_path).unwrap_or_default();
+            Ok(content.lines().any(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("MESSAGE")
+                            .and_then(|m| m.as_str())
+                            .map(|s| s.to_owned())
+                    })
+                    .map(|msg| msg.contains("multi-user.target") && msg.contains("Reached target"))
+                    .unwrap_or(false)
+            }))
+        },
+    );
+
+    // Always stop the container, even if polling failed.
+    let _ = cmd!(sh, "podman stop {container_name}")
+        .ignore_status()
+        .quiet()
+        .run();
+
+    stop_result?;
+    check_journal_coverage(log_dir.path())?;
+    Ok(())
+}
+integration_test!(test_run_ephemeral_journal_output);
