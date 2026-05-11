@@ -12,5 +12,14 @@ RemainAfterExit=yes
 # them to /run/systemd/system/ before switch-root. The /run tmpfs is preserved
 # across switch-root via MS_MOVE.
 #
-# Copy journal-stream unit and create dropin for sysinit.target
-ExecStart=/bin/sh -c 'mkdir -p /run/systemd/system/sysinit.target.wants && cp /usr/lib/systemd/system/bcvk-journal-stream.service /run/systemd/system/ && ln -s ../bcvk-journal-stream.service /run/systemd/system/sysinit.target.wants/'
+# Copy journal-stream unit and create dropin for sysinit.target, but only
+# when the host has requested journal streaming (indicated by the presence of
+# the SMBIOS credential that bcvk injects when --output=journal or
+# --log-dir=journal=… is used).
+ExecStart=/bin/sh -c 'test -e /run/credentials/@system/systemd.extra-unit.bcvk-journal-stream.service || exit 0; \
+  mkdir -p /run/systemd/system/sysinit.target.wants; \
+  cp /usr/lib/systemd/system/bcvk-journal-stream.service /run/systemd/system/; \
+  cp /usr/lib/systemd/system/bcvk-journal-stream-initrd.service /run/systemd/system/; \
+  ln -sf ../bcvk-journal-stream.service /run/systemd/system/sysinit.target.wants/; \
+  ln -sf ../bcvk-journal-stream-initrd.service /run/systemd/system/sysinit.target.wants/; \
+  systemctl --no-block start bcvk-journal-stream-initrd.service'

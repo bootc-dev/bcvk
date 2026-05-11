@@ -83,6 +83,89 @@ pub(crate) fn get_all_test_images() -> Vec<String> {
     }
 }
 
+/// Verify journal coverage for a `--log-dir` directory.
+///
+/// Checks that:
+/// - `journal.json` contains structured entries (with `MESSAGE_ID`), confirming
+///   the real-root journal stream ran and reached multi-user.target.
+/// - `journal-initrd.json` contains seqnum 1, confirming the initrd journal
+///   stream replayed from the very start of boot (kernel messages included).
+pub(crate) fn check_journal_coverage(log_dir: &std::path::Path) -> anyhow::Result<()> {
+    // Check journal.json for structured entries.
+    let journal_path = log_dir.join("journal.json");
+    let content = std::fs::read_to_string(&journal_path)
+        .with_context(|| format!("reading {journal_path:?}"))?;
+    anyhow::ensure!(!content.is_empty(), "journal.json is empty");
+
+    let mut found_message_id = false;
+    for line in content.lines() {
+        // Skip lines that don't parse — journalctl may leave a partial line at
+        // the end of the file if we read it while it is still being written.
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("MESSAGE_ID").is_some() {
+            found_message_id = true;
+            break;
+        }
+    }
+    anyhow::ensure!(
+        found_message_id,
+        "no MESSAGE_ID found in journal.json — structured journal entries missing"
+    );
+
+    // Check journal-initrd.json contains seqnum 1, confirming that
+    // journalctl --since=@0 successfully replayed from the very start of boot.
+    let initrd_path = log_dir.join("journal-initrd.json");
+    let initrd_content = std::fs::read_to_string(&initrd_path)
+        .with_context(|| format!("reading {initrd_path:?}"))?;
+    anyhow::ensure!(
+        !initrd_content.is_empty(),
+        "journal-initrd.json is empty — initrd journal stream did not produce output"
+    );
+    let has_seqnum_one = initrd_content
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .any(|v| {
+            v.get("__SEQNUM")
+                .and_then(|s| s.as_str())
+                .map(|s| s == "1")
+                .unwrap_or(false)
+        });
+    anyhow::ensure!(
+        has_seqnum_one,
+        "journal-initrd.json does not contain __SEQNUM=1 — early boot messages were not captured"
+    );
+
+    Ok(())
+}
+
+/// Poll `condition` every `interval` until it returns `true` or `timeout` elapses.
+///
+/// Returns `Ok(())` as soon as the condition holds, or an error describing what was
+/// being waited for if the deadline is reached.
+pub(crate) fn poll_until(
+    what: &str,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+    mut condition: impl FnMut() -> anyhow::Result<bool>,
+) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if condition()? {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "timed out after {}s waiting for: {}",
+                timeout.as_secs(),
+                what
+            ));
+        }
+        std::thread::sleep(interval);
+    }
+}
+
 fn test_images_list() -> itest::TestResult {
     println!("Running test: bcvk images list --json");
 

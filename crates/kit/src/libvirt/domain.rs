@@ -59,6 +59,8 @@ pub struct DomainBuilder {
     serial_console_log: Option<String>, // Serial console log file path (ttyS0 — UEFI/bootloader)
     fw_cfg_entries: Vec<(String, String)>, // fw_cfg entries (name, file_path)
     ignition_disk_path: Option<String>, // Path to Ignition config for virtio-blk injection
+    journal_channel_file: Option<String>, // virtserialport "org.bcvk.journal" → host file (append)
+    journal_initrd_channel_file: Option<String>, // virtserialport "org.bcvk.journal.initrd" → host file (append)
 }
 
 impl Default for DomainBuilder {
@@ -94,6 +96,8 @@ impl DomainBuilder {
             serial_console_log: None,
             fw_cfg_entries: Vec::new(),
             ignition_disk_path: None,
+            journal_channel_file: None,
+            journal_initrd_channel_file: None,
         }
     }
 
@@ -235,6 +239,22 @@ impl DomainBuilder {
     /// Set Ignition config disk path for virtio-blk injection (s390x/ppc64le)
     pub fn with_ignition_disk(mut self, disk_path: String) -> Self {
         self.ignition_disk_path = Some(disk_path);
+        self
+    }
+
+    /// Stream the guest's `org.bcvk.journal` virtserialport to a host file (append mode).
+    ///
+    /// Emits a `<channel type='file'>` element in the domain XML, which libvirt attaches
+    /// to the existing virtio-serial controller.  No extra QEMU args are needed.
+    pub fn with_journal_channel_file(mut self, path: &str) -> Self {
+        self.journal_channel_file = Some(path.to_string());
+        self
+    }
+
+    /// Stream the guest's `org.bcvk.journal.initrd` virtserialport to a host file (append mode).
+    /// Captures journal output from the initrd phase.
+    pub fn with_journal_initrd_channel_file(mut self, path: &str) -> Self {
+        self.journal_initrd_channel_file = Some(path.to_string());
         self
     }
 
@@ -473,6 +493,36 @@ impl DomainBuilder {
         }
         writer.write_empty_element("target", &[("type", "virtio")])?;
         writer.end_element("console")?;
+
+        // Journal streaming channel: virtserialport named "org.bcvk.journal" backed by a
+        // host-side file in append mode.  Libvirt attaches this to the existing
+        // virtio-serial controller that it creates for the virtio console above.
+        if let Some(ref journal_path) = self.journal_channel_file {
+            writer.start_element("channel", &[("type", "file")])?;
+            writer.write_empty_element(
+                "source",
+                &[("path", journal_path.as_str()), ("append", "on")],
+            )?;
+            writer.start_element(
+                "target",
+                &[("type", "virtio"), ("name", "org.bcvk.journal")],
+            )?;
+            writer.end_element("target")?;
+            writer.end_element("channel")?;
+        }
+        if let Some(ref journal_initrd_path) = self.journal_initrd_channel_file {
+            writer.start_element("channel", &[("type", "file")])?;
+            writer.write_empty_element(
+                "source",
+                &[("path", journal_initrd_path.as_str()), ("append", "on")],
+            )?;
+            writer.start_element(
+                "target",
+                &[("type", "virtio"), ("name", "org.bcvk.journal.initrd")],
+            )?;
+            writer.end_element("target")?;
+            writer.end_element("channel")?;
+        }
 
         // Firmware debug log via isa-debugcon (x86_64 only)
         // This captures OVMF/EDK2 DEBUG() output on IO port 0x402, useful for
