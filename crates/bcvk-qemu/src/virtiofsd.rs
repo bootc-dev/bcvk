@@ -69,7 +69,7 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
         if !path.exists() {
             return Err(eyre!("Explicit virtiofsd binary not found at: {}", path));
         }
-        path.to_string()
+        camino::absolute_utf8(path)?.to_string()
     } else {
         // Try common virtiofsd binary locations
         let virtiofsd_paths = [
