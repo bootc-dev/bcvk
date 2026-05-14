@@ -21,6 +21,8 @@ pub struct VirtiofsConfig {
     pub readonly: bool,
     /// Optional log file path for virtiofsd output.
     pub log_file: Option<Utf8PathBuf>,
+    /// Optional explicit path to virtiofsd binary (overrides auto-detection).
+    pub virtiofsd_binary: Option<Utf8PathBuf>,
 }
 
 impl Default for VirtiofsConfig {
@@ -32,6 +34,7 @@ impl Default for VirtiofsConfig {
             // We don't need to write to this, there's a transient overlay
             readonly: true,
             log_file: None,
+            virtiofsd_binary: None,
         }
     }
 }
@@ -61,32 +64,42 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
     // Validate configuration
     validate_virtiofsd_config(config)?;
 
-    // Try common virtiofsd binary locations
-    let virtiofsd_paths = [
-        "/usr/libexec/virtiofsd",
-        "/usr/bin/virtiofsd",
-        "/usr/local/bin/virtiofsd",
-        "/usr/lib/virtiofsd",
-    ];
+    // Resolve virtiofsd binary: explicit override or path search
+    let virtiofsd_binary: String = if let Some(ref path) = config.virtiofsd_binary {
+        if !path.exists() {
+            return Err(eyre!("Explicit virtiofsd binary not found at: {}", path));
+        }
+        path.to_string()
+    } else {
+        // Try common virtiofsd binary locations
+        let virtiofsd_paths = [
+            "/usr/libexec/virtiofsd",
+            "/usr/bin/virtiofsd",
+            "/usr/local/bin/virtiofsd",
+            "/usr/lib/virtiofsd",
+        ];
 
-    let virtiofsd_binary = virtiofsd_paths
-        .iter()
-        .find(|path| std::path::Path::new(path).exists())
-        .ok_or_else(|| {
-            eyre!(
-                "virtiofsd binary not found. Searched paths: {}. Please install virtiofsd.",
-                virtiofsd_paths.join(", ")
-            )
-        })?;
+        virtiofsd_paths
+            .iter()
+            .find(|path| std::path::Path::new(path).exists())
+            .ok_or_else(|| {
+                eyre!(
+                    "virtiofsd binary not found. Searched paths: {}. \
+                     Set --virtiofsd or VIRTIOFSD_BIN to specify the path explicitly.",
+                    virtiofsd_paths.join(", ")
+                )
+            })?
+            .to_string()
+    };
 
     // Check if virtiofsd supports --readonly flag
-    let supports_readonly = virtiofsd_supports_readonly(virtiofsd_binary).await;
+    let supports_readonly = virtiofsd_supports_readonly(&virtiofsd_binary).await;
     debug!(
         "virtiofsd at {} supports --readonly: {}",
         virtiofsd_binary, supports_readonly
     );
 
-    let mut cmd = tokio::process::Command::new(virtiofsd_binary);
+    let mut cmd = tokio::process::Command::new(&virtiofsd_binary);
     // SAFETY: This API is safe to call in a forked child.
     #[allow(unsafe_code)]
     unsafe {
@@ -148,13 +161,13 @@ pub async fn spawn_virtiofsd_async(config: &VirtiofsConfig) -> Result<tokio::pro
     let child = cmd.spawn().with_context(|| {
         format!(
             "Failed to spawn virtiofsd. Binary: {}, Socket: {}, Shared dir: {}",
-            virtiofsd_binary, config.socket_path, config.shared_dir
+            &virtiofsd_binary, config.socket_path, config.shared_dir
         )
     })?;
 
     debug!(
         "Spawned virtiofsd: binary={}, socket={}, shared_dir={}, debug={}, log_file={:?}",
-        virtiofsd_binary, config.socket_path, config.shared_dir, config.debug, config.log_file
+        &virtiofsd_binary, config.socket_path, config.shared_dir, config.debug, config.log_file
     );
 
     Ok(child)
