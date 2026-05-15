@@ -11,11 +11,11 @@
 #
 # Note: This requires ukify and systemd-boot packages in the base image.
 
-ARG BASE_IMAGE=ghcr.io/bootc-dev/dev-bootc:fedora-43-uki
+ARG BASE_IMAGE=ghcr.io/bootc-dev/dev-bootc:fedora-44-uki
 
 FROM ${BASE_IMAGE} AS builder
 
-# Install ukify if not present (should be in fedora-43-uki)
+# Install ukify if not present (should be in fedora-44-uki)
 RUN command -v ukify || dnf install -y systemd-ukify
 
 # Build UKI and place it in the standard /boot/EFI/Linux/ location
