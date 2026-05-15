@@ -1,7 +1,7 @@
 PRIMARY_IMAGE := "quay.io/centos-bootc/centos-bootc:stream10"
 # TODO: Readd quay.io/almalinuxorg/almalinux-bootc:9.6 here after debugging
 # <https://github.com/bootc-dev/bcvk/issues/153>
-ALL_BASE_IMAGES := "quay.io/fedora/fedora-bootc:42 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10 quay.io/almalinuxorg/almalinux-bootc:10.0"
+ALL_BASE_IMAGES := "quay.io/fedora/fedora-bootc:43 quay.io/fedora/fedora-bootc:44 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10 quay.io/almalinuxorg/almalinux-bootc:10.0"
 
 # Build the native binary
 build:
