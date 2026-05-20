@@ -1,0 +1,19 @@
+[Unit]
+Description=bcvk ephemeral virtiofs root mount
+Documentation=https://github.com/bootc-dev/bcvk
+DefaultDependencies=no
+# bcvk does not put root= on the kernel cmdline, so neither dracut nor
+# systemd-fstab-generator will generate a competing sysroot.mount unit.
+# This unit is the sole handler for the virtiofs root mount in all
+# initramfs types (dracut, bootc composefs initramfs, mkosi-initrd, …).
+#
+# The initrd-root-fs.target.d/bcvk-sysroot.conf drop-in wires this unit
+# into the dependency graph so initrd-root-fs.target waits for it.
+ConditionPathExists=/etc/initrd-release
+Before=initrd-root-fs.target
+
+[Mount]
+What=rootfs
+Where=/sysroot
+Type=virtiofs
+Options=ro
