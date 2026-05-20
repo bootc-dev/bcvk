@@ -880,8 +880,6 @@ fn parse_service_exit_code(status_content: &str) -> Result<i32> {
     Ok(0)
 }
 
-/// Check for required binaries in the privileged container
-///
 /// These binaries must be present in the privileged container that runs bcvk,
 /// not the guest bootc image that gets booted inside the VM.
 fn check_required_container_binaries() -> Result<()> {
@@ -1365,15 +1363,16 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         qemu_config.add_smbios_credential(credential);
     }
 
-    // Build kernel command line for direct boot
+    // Build kernel command line for direct boot.
+    //
+    // We deliberately omit root=, rootfstype=, and rootflags= from the
+    // cmdline.  When root= is absent dracut sets rootok=1 via its UNSET
+    // branch and defers entirely to systemd generators.  systemd-fstab-
+    // generator likewise produces nothing without a root= arg.  The
+    // virtiofs mount is handled solely by the sysroot.mount unit bcvk
+    // injects into every initramfs via the CPIO append, together with the
+    // initrd-root-fs.target.d/bcvk-sysroot.conf drop-in that wires it in.
     let mut kernel_cmdline = [
-        // At the core we boot from the mounted container's root,
-        "rootfstype=virtiofs",
-        "root=rootfs",
-        // But read-only. We set up /etc overlay and /var copyup via
-        // systemd credentials rather than systemd.volatile=overlay
-        // to have more control over individual directories.
-        "rootflags=ro",
         // This avoids having journald interact with the rootfs
         // at all, which lessens the I/O traffic for virtiofs
         "systemd.journald.storage=volatile",
