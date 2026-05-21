@@ -1337,7 +1337,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     main_virtiofsd_config.debug = std::env::var("DEBUG_MODE").is_ok();
     // Always log virtiofsd output for debugging
     main_virtiofsd_config.log_file = Some("/run/virtiofsd.log".into());
-    main_virtiofsd_config.virtiofsd_binary = opts.common.virtiofsd_binary.as_deref().map(Into::into);
+    main_virtiofsd_config.virtiofsd_binary =
+        opts.common.virtiofsd_binary.as_deref().map(Into::into);
 
     std::fs::create_dir_all(CONTAINER_STATEDIR)?;
 
