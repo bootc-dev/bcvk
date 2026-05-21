@@ -35,7 +35,7 @@ bcvk to-disk quay.io/centos-bootc/centos-bootc:stream10 /path/to/disk.img
 bcvk to-disk --format qcow2 quay.io/fedora/fedora-bootc:42 /path/to/fedora.qcow2
 
 # Custom size
-bcvk to-disk --size 20G quay.io/fedora/fedora-bootc:42 /path/to/large-disk.img
+bcvk to-disk --disk-size 20G quay.io/fedora/fedora-bootc:42 /path/to/large-disk.img
 ```
 
 ## Persistent VMs with libvirt
