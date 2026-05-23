@@ -218,6 +218,13 @@ pub struct CommonVmOpts {
         help = "Generate SSH keypair and inject via systemd credentials"
     )]
     pub ssh_keygen: bool,
+
+    #[clap(
+        long = "virtiofsd",
+        env = "VIRTIOFSD_BIN",
+        help = "Path to virtiofsd binary (overrides auto-detection)"
+    )]
+    pub virtiofsd_binary: Option<String>,
 }
 
 impl CommonVmOpts {
@@ -1171,6 +1178,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
                 debug: false,
                 readonly: is_readonly,
                 log_file: Some(format!("/run/virtiofsd-{}.log", mount_name_str).into()),
+                virtiofsd_binary: opts.common.virtiofsd_binary.as_deref().map(Into::into),
             };
             additional_mounts.push((virtiofsd_config, tag.clone()));
 
@@ -1329,6 +1337,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     main_virtiofsd_config.debug = std::env::var("DEBUG_MODE").is_ok();
     // Always log virtiofsd output for debugging
     main_virtiofsd_config.log_file = Some("/run/virtiofsd.log".into());
+    main_virtiofsd_config.virtiofsd_binary =
+        opts.common.virtiofsd_binary.as_deref().map(Into::into);
 
     std::fs::create_dir_all(CONTAINER_STATEDIR)?;
 
