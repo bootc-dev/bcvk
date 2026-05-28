@@ -39,6 +39,87 @@ pub struct SshOpts {
     pub args: Vec<String>,
 }
 
+/// Configuration options for SCP file transfer to/from an ephemeral VM
+#[derive(clap::Parser, Debug)]
+pub struct EphemeralScpOpts {
+    /// Name or ID of the container running the target VM
+    pub container_name: String,
+
+    /// Source path (use DOMAIN: prefix for remote paths, e.g. `/local/file` or `DOMAIN:/remote/file`)
+    pub source: String,
+
+    /// Destination path (use DOMAIN: prefix for remote paths, e.g. `/local/file` or `DOMAIN:/remote/file`)
+    pub destination: String,
+
+    /// Copy directories recursively
+    #[clap(short, long)]
+    pub recursive: bool,
+
+    /// Use strict host key checking
+    #[clap(long)]
+    pub strict_host_keys: bool,
+
+    /// SSH connection timeout in seconds
+    #[clap(long, default_value = "5")]
+    pub timeout: u32,
+
+    /// SSH log level
+    #[clap(long, default_value = "ERROR")]
+    pub log_level: String,
+
+    /// Extra SSH options in key=value format
+    #[clap(long)]
+    pub extra_options: Vec<String>,
+}
+
+impl EphemeralScpOpts {
+    /// Parse extra options into key-value pairs
+    fn parse_extra_options(&self) -> Result<Vec<(String, String)>> {
+        let mut parsed = Vec::new();
+        for option in &self.extra_options {
+            if let Some((key, value)) = option.split_once('=') {
+                parsed.push((key.to_string(), value.to_string()));
+            } else {
+                return Err(eyre!(
+                    "Invalid extra option format '{}'. Expected 'key=value'",
+                    option
+                ));
+            }
+        }
+        Ok(parsed)
+    }
+
+    /// Build a pre-configured `podman exec ... scp` command
+    fn build_podman_scp_command(&self, parsed_extra_options: &[(String, String)]) -> Command {
+        let mut scp_cmd = Command::new("podman");
+        scp_cmd.args([
+            "exec",
+            "--",
+            &self.container_name,
+            "scp",
+            "-i",
+            &crate::ssh::container_ssh_key_path(),
+            "-P",
+            &crate::ssh::CONTAINER_SSH_PORT.to_string(),
+        ]);
+
+        if self.recursive {
+            scp_cmd.arg("-r");
+        }
+
+        let common_opts = crate::ssh::CommonSshOptions {
+            strict_host_keys: self.strict_host_keys,
+            connect_timeout: self.timeout,
+            server_alive_interval: crate::libvirt::ssh::SSH_SERVER_ALIVE_INTERVAL,
+            log_level: self.log_level.clone(),
+            extra_options: parsed_extra_options.to_vec(),
+        };
+        common_opts.apply_to_command(&mut scp_cmd);
+
+        scp_cmd
+    }
+}
+
 /// Container list entry for ephemeral VMs
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -140,6 +221,10 @@ pub enum EphemeralCommands {
     #[clap(name = "ssh")]
     Ssh(SshOpts),
 
+    /// Copy files to/from an ephemeral VM via SCP
+    #[clap(name = "scp")]
+    Scp(EphemeralScpOpts),
+
     /// List ephemeral VM containers
     #[clap(name = "ps")]
     Ps {
@@ -170,6 +255,28 @@ impl EphemeralCommands {
                 run_ephemeral_ssh::wait_for_ssh_ready(&opts.container_name, None, progress_bar)?;
 
                 ssh::connect_via_container(&opts.container_name, opts.args)
+            }
+            EphemeralCommands::Scp(opts) => {
+                let source_is_remote = opts.source.starts_with("DOMAIN:");
+                let dest_is_remote = opts.destination.starts_with("DOMAIN:");
+
+                if source_is_remote == dest_is_remote {
+                    return Err(eyre!(
+                        "Exactly one of source or destination must use the DOMAIN: prefix to reference the remote VM.\n\
+                         Examples:\n  \
+                           bcvk ephemeral scp myvm DOMAIN:/etc/hostname ./hostname\n  \
+                           bcvk ephemeral scp myvm ./file.txt DOMAIN:/tmp/file.txt"
+                    ));
+                }
+
+                let progress_bar = crate::boot_progress::create_boot_progress_bar();
+                let (_, progress_bar) = run_ephemeral_ssh::wait_for_ssh_ready(
+                    &opts.container_name,
+                    None,
+                    progress_bar,
+                )?;
+                progress_bar.finish_and_clear();
+                run_ephemeral_scp(opts)
             }
             EphemeralCommands::Ps { json } => {
                 let containers = list_ephemeral_containers()?;
@@ -330,6 +437,164 @@ fn remove_all_ephemeral_containers(force: bool) -> Result<()> {
                 short_id,
                 result.error.as_deref().unwrap_or("unknown error")
             );
+        }
+    }
+
+    Ok(())
+}
+
+/// RAII cleanup guard for temporary directory inside container
+struct ContainerTempCleanup {
+    container_name: String,
+    temp_dir: String,
+}
+
+impl Drop for ContainerTempCleanup {
+    fn drop(&mut self) {
+        tracing::debug!("Cleaning up ephemeral SCP temp dir: {}", self.temp_dir);
+        let _ = Command::new("podman")
+            .args([
+                "exec",
+                "--",
+                &self.container_name,
+                "rm",
+                "-rf",
+                &self.temp_dir,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// Execute the ephemeral SCP command
+pub fn run_ephemeral_scp(opts: EphemeralScpOpts) -> Result<()> {
+    tracing::debug!(
+        "SCP file transfer for ephemeral container: {}",
+        opts.container_name
+    );
+
+    // Validate that exactly one of the source or destination starts with "DOMAIN:"
+    let source_is_remote = opts.source.starts_with("DOMAIN:");
+    let dest_is_remote = opts.destination.starts_with("DOMAIN:");
+
+    if source_is_remote == dest_is_remote {
+        return Err(eyre!(
+            "Exactly one of source or destination must use the DOMAIN: prefix to reference the remote VM.\n\
+             Examples:\n  \
+               bcvk ephemeral scp myvm DOMAIN:/etc/hostname ./hostname\n  \
+               bcvk ephemeral scp myvm ./file.txt DOMAIN:/tmp/file.txt"
+        ));
+    }
+
+    let parsed_extra_options = opts.parse_extra_options()?;
+
+    // Generate a unique temporary directory name inside the container
+    let temp_dir_name = format!("/tmp/bcvk-scp-{}", uuid::Uuid::new_v4());
+
+    // Make sure the parent directory exists inside the container
+    let mkdir_status = Command::new("podman")
+        .args([
+            "exec",
+            "--",
+            &opts.container_name,
+            "mkdir",
+            "-p",
+            &temp_dir_name,
+        ])
+        .status()
+        .map_err(|e| eyre!("Failed to execute podman exec mkdir: {}", e))?;
+
+    if !mkdir_status.success() {
+        return Err(eyre!(
+            "Failed to create temporary directory inside container"
+        ));
+    }
+
+    // Set up the RAII cleanup guard for the temporary directory
+    let _cleanup = ContainerTempCleanup {
+        container_name: opts.container_name.clone(),
+        temp_dir: temp_dir_name.clone(),
+    };
+
+    if dest_is_remote {
+        // Uploading
+        // Get the filename from the source path
+        let file_name = std::path::Path::new(&opts.source)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("transfer");
+
+        let temp_transfer_path = format!("{}/{}", temp_dir_name, file_name);
+
+        // Run podman cp <source> <container_name>:<temp_transfer_path> to copy from the host into the container.
+        let cp_status = Command::new("podman")
+            .args([
+                "cp",
+                &opts.source,
+                &format!("{}:{}", opts.container_name, temp_transfer_path),
+            ])
+            .status()
+            .map_err(|e| eyre!("Failed to execute podman cp: {}", e))?;
+
+        if !cp_status.success() {
+            return Err(eyre!("Failed to copy source file into container"));
+        }
+
+        // Run podman exec <container_name> scp -i <key> -P <port> ...
+        // to transfer from container temp directory to root@127.0.0.1:<dest_path>
+        let dest_path = opts.destination.strip_prefix("DOMAIN:").unwrap();
+        let remote_dest = format!("root@127.0.0.1:{}", dest_path);
+
+        let mut scp_cmd = opts.build_podman_scp_command(&parsed_extra_options);
+        scp_cmd.arg(&temp_transfer_path);
+        scp_cmd.arg(&remote_dest);
+
+        let scp_status = scp_cmd
+            .status()
+            .map_err(|e| eyre!("Failed to execute scp inside container: {}", e))?;
+
+        if !scp_status.success() {
+            return Err(eyre!("SCP upload inside container failed"));
+        }
+    } else {
+        // Downloading
+        // Get the filename from the remote source path
+        let remote_src_path = opts.source.strip_prefix("DOMAIN:").unwrap();
+        let file_name = std::path::Path::new(remote_src_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("transfer");
+
+        let temp_transfer_path = format!("{}/{}", temp_dir_name, file_name);
+        let remote_source = format!("root@127.0.0.1:{}", remote_src_path);
+
+        // Run podman exec <container_name> scp -i <key> -P <port> ...
+        // to transfer from root@127.0.0.1:<src_path> to temp_transfer_path
+        let mut scp_cmd = opts.build_podman_scp_command(&parsed_extra_options);
+        scp_cmd.arg(&remote_source);
+        scp_cmd.arg(&temp_transfer_path);
+
+        let scp_status = scp_cmd
+            .status()
+            .map_err(|e| eyre!("Failed to execute scp inside container: {}", e))?;
+
+        if !scp_status.success() {
+            return Err(eyre!("SCP download inside container failed"));
+        }
+
+        // Run podman cp <container_name>:<temp_transfer_path> <destination> to copy from the container to the host.
+        let cp_status = Command::new("podman")
+            .args([
+                "cp",
+                &format!("{}:{}", opts.container_name, temp_transfer_path),
+                &opts.destination,
+            ])
+            .status()
+            .map_err(|e| eyre!("Failed to execute podman cp: {}", e))?;
+
+        if !cp_status.success() {
+            return Err(eyre!("Failed to copy source file from container to host"));
         }
     }
 

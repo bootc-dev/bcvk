@@ -5,6 +5,7 @@
 //! - `bcvk libvirt list` - List bootc domains
 //! - `bcvk libvirt list-volumes` - List available bootc volumes
 //! - `bcvk libvirt ssh` - SSH into domains
+//! - `bcvk libvirt scp` - Copy files to/from domains
 //! - Domain lifecycle management (start/stop/rm/inspect)
 
 use integration_tests::integration_test;
@@ -142,6 +143,50 @@ fn test_libvirt_ssh_integration() -> TestResult {
     Ok(())
 }
 integration_test!(test_libvirt_ssh_integration);
+
+/// Test SCP integration with domains (syntax only, no running VM needed)
+fn test_libvirt_scp_integration() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+
+    // Test that SCP command fails gracefully with nonexistent domain
+    let output = cmd!(
+        sh,
+        "{bck} libvirt scp test-domain domain:/etc/hostname ./hostname"
+    )
+    .ignore_status()
+    .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Will fail since no domain exists, but should not crash
+    if !output.status.success() {
+        assert!(
+            stderr.contains("domain") || stderr.contains("not found"),
+            "SCP integration should fail gracefully with domain error: {}",
+            stderr
+        );
+    }
+
+    // Test that SCP requires exactly one domain: prefix
+    let output = cmd!(sh, "{bck} libvirt scp test-domain /local/a /local/b")
+        .ignore_status()
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "SCP with two local paths should fail"
+    );
+    assert!(
+        stderr.contains("domain:"),
+        "Error should mention domain: prefix: {}",
+        stderr
+    );
+
+    println!("libvirt SCP integration tested");
+    Ok(())
+}
+integration_test!(test_libvirt_scp_integration);
 
 /// Comprehensive workflow test: creates a VM and tests multiple features
 /// This consolidates several smaller tests to reduce expensive disk image creation
@@ -1158,3 +1203,107 @@ fn test_libvirt_run_console_log() -> TestResult {
     Ok(())
 }
 integration_test!(test_libvirt_run_console_log);
+
+/// End-to-end SCP test: creates a VM, copies files to and from it
+fn test_libvirt_scp_end_to_end() -> TestResult {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let test_image = get_test_image();
+    let label = LIBVIRT_INTEGRATION_TEST_LABEL;
+
+    let domain_name = format!("test-scp-{}", random_suffix());
+    println!("Testing SCP end-to-end with domain: {}", domain_name);
+
+    cleanup_domain(&domain_name);
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
+    // Create domain with --ssh-wait so SSH is ready when run returns
+    println!("Creating domain with --ssh-wait...");
+    cmd!(
+        sh,
+        "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 --ssh-wait {test_image}"
+    )
+    .run()?;
+    println!("✓ Domain created and SSH ready: {}", domain_name);
+
+    let sh = shell()?;
+
+    // --- Upload a file to the VM ---
+    let upload_dir = TempDir::new()?;
+    let upload_file = upload_dir.path().join("upload-test.txt");
+    fs::write(&upload_file, "hello from host")?;
+    let upload_path = upload_file.to_str().expect("non-UTF-8 temp path");
+
+    println!("Uploading file to VM...");
+    cmd!(
+        sh,
+        "{bck} libvirt scp {domain_name} {upload_path} domain:/tmp/upload-test.txt"
+    )
+    .run()?;
+    println!("✓ File uploaded");
+
+    // Verify it arrived
+    let cat_stdout = cmd!(
+        sh,
+        "{bck} libvirt ssh {domain_name} -- cat /tmp/upload-test.txt"
+    )
+    .read()?;
+    assert_eq!(
+        cat_stdout.trim(),
+        "hello from host",
+        "Uploaded file content mismatch"
+    );
+    println!("✓ Uploaded file content verified");
+
+    // --- Download a file from the VM ---
+    // Use /etc/os-release rather than /etc/hostname: the latter may not exist
+    // in a freshly-installed bootc VM whose hostname is managed by systemd.
+    let download_dir = TempDir::new()?;
+    let download_path = download_dir.path().join("os-release");
+    let download_str = download_path.to_str().expect("non-UTF-8 temp path");
+
+    println!("Downloading /etc/os-release from VM...");
+    cmd!(
+        sh,
+        "{bck} libvirt scp {domain_name} domain:/etc/os-release {download_str}"
+    )
+    .run()?;
+
+    let downloaded = fs::read_to_string(&download_path)?;
+    assert!(
+        downloaded.contains("NAME="),
+        "Downloaded os-release should contain NAME= field"
+    );
+    println!("✓ Downloaded /etc/os-release: {} bytes", downloaded.len());
+
+    // --- Recursive copy from the VM ---
+    let rec_dir = download_dir.path().join("etc-yum");
+    let rec_str = rec_dir.to_str().expect("non-UTF-8 temp path");
+
+    println!("Recursive download of /etc/yum.repos.d/ from VM...");
+    cmd!(
+        sh,
+        "{bck} libvirt scp {domain_name} -r domain:/etc/yum.repos.d {rec_str}"
+    )
+    .run()?;
+
+    assert!(
+        rec_dir.exists(),
+        "Recursive download directory should exist"
+    );
+    let entries: Vec<_> = fs::read_dir(&rec_dir)?.collect();
+    assert!(
+        !entries.is_empty(),
+        "Recursive download should have produced files"
+    );
+    println!("✓ Recursive download got {} entries", entries.len());
+
+    println!("✓ SCP end-to-end test passed");
+    Ok(())
+}
+integration_test!(test_libvirt_scp_end_to_end);

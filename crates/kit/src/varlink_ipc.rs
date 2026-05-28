@@ -317,7 +317,7 @@ impl BcvkService {
             key_path,
             user: "root".to_string(),
             host: "127.0.0.1".to_string(),
-            port: 2222,
+            port: crate::ssh::CONTAINER_SSH_PORT,
         })
     }
 

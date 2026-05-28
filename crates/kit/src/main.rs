@@ -117,6 +117,9 @@ pub enum StubEphemeralCommands {
     /// Connect to running VMs via SSH
     #[clap(name = "ssh")]
     Ssh,
+    /// Copy files to/from an ephemeral VM via SCP
+    #[clap(name = "scp")]
+    Scp,
     /// List ephemeral VM containers
     #[clap(name = "ps")]
     Ps,
@@ -317,6 +320,7 @@ fn main() -> Result<(), Report> {
             match command {
                 libvirt::LibvirtSubcommands::Run(opts) => libvirt::run::run(&options, opts)?,
                 libvirt::LibvirtSubcommands::Ssh(opts) => libvirt::ssh::run(&options, opts)?,
+                libvirt::LibvirtSubcommands::Scp(opts) => libvirt::scp::run(&options, opts)?,
                 libvirt::LibvirtSubcommands::List(opts) => libvirt::list::run(&options, opts)?,
                 libvirt::LibvirtSubcommands::ListVolumes(opts) => {
                     libvirt::list_volumes::run(&options, opts)?

@@ -82,6 +82,10 @@ For longer-running VMs where you need to reconnect multiple times, use
 
     Generate SSH keypair and inject via systemd credentials
 
+**--virtiofsd**=*VIRTIOFSD_BINARY*
+
+    Path to virtiofsd binary (overrides auto-detection)
+
 **-t**, **--tty**
 
     Allocate a pseudo-TTY for container

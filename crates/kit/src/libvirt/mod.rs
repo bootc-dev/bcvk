@@ -34,6 +34,7 @@ pub mod print_firmware;
 pub mod rm;
 pub mod rm_all;
 pub mod run;
+pub mod scp;
 pub mod secureboot;
 pub mod ssh;
 pub mod start;
@@ -187,6 +188,9 @@ pub enum LibvirtSubcommands {
 
     /// SSH to libvirt domain with embedded SSH key
     Ssh(ssh::LibvirtSshOpts),
+
+    /// Copy files to/from a libvirt domain via SCP
+    Scp(scp::LibvirtScpOpts),
 
     /// List bootc domains with metadata
     List(list::LibvirtListOpts),
