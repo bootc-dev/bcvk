@@ -1565,8 +1565,11 @@ Options=
     }
 
     if opts.common.ssh_keygen {
-        qemu_config.enable_ssh_access(None); // Use default port 2222
-        debug!("Enabled SSH port forwarding: host port 2222 -> guest port 22");
+        qemu_config.enable_ssh_access(Some(crate::ssh::CONTAINER_SSH_PORT));
+        debug!(
+            "Enabled SSH port forwarding: host port {} -> guest port 22",
+            crate::ssh::CONTAINER_SSH_PORT
+        );
 
         // We need to extract the public key from the SSH credential to inject it via SMBIOS
         // For now, the credential is already being passed via kernel cmdline

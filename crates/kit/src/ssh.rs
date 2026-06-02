@@ -9,6 +9,17 @@ use tracing::debug;
 
 use crate::CONTAINER_STATEDIR;
 
+/// Standard SSH port used by VMs inside containers
+pub const CONTAINER_SSH_PORT: u16 = 2222;
+
+/// Get the path to the SSH private key inside the container environment
+pub fn container_ssh_key_path() -> String {
+    Utf8Path::new("/run/tmproot")
+        .join(CONTAINER_STATEDIR.trim_start_matches('/'))
+        .join("ssh")
+        .into_string()
+}
+
 /// Combine multiple command arguments into a properly escaped shell command string
 ///
 /// This is necessary because SSH protocol sends commands as strings, not argument arrays.
@@ -129,10 +140,8 @@ fn build_podman_ssh_command(
         cmd.args(["exec", "--", container_name, "ssh"]);
     }
 
-    let keypath = Utf8Path::new("/run/tmproot")
-        .join(CONTAINER_STATEDIR.trim_start_matches('/'))
-        .join("ssh");
-    cmd.args(["-i", keypath.as_str()]);
+    let keypath = container_ssh_key_path();
+    cmd.args(["-i", &keypath]);
 
     options.common.apply_to_command(&mut cmd);
     cmd.args(["-o", "BatchMode=yes"]);
@@ -142,7 +151,7 @@ fn build_podman_ssh_command(
     }
 
     cmd.arg("root@127.0.0.1");
-    cmd.args(["-p", "2222"]);
+    cmd.args(["-p", &CONTAINER_SSH_PORT.to_string()]);
 
     let ssh_args = build_ssh_command(args)?;
     if !ssh_args.is_empty() {

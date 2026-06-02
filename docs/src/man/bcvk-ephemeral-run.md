@@ -84,6 +84,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Generate SSH keypair and inject via systemd credentials
 
+**--virtiofsd**=*VIRTIOFSD_BINARY*
+
+    Path to virtiofsd binary (overrides auto-detection)
+
 **-t**, **--tty**
 
     Allocate a pseudo-TTY for container

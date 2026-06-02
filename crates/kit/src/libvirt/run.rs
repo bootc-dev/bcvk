@@ -827,7 +827,7 @@ fn find_available_ssh_port() -> u16 {
 
     // Try random ports in the range 2222-3000 to avoid conflicts in concurrent scenarios
     let mut rng = rand::rng();
-    const PORT_RANGE_START: u16 = 2222;
+    const PORT_RANGE_START: u16 = crate::ssh::CONTAINER_SSH_PORT;
     const PORT_RANGE_END: u16 = 3000;
 
     // Try up to 100 random attempts

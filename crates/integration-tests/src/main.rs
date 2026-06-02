@@ -21,6 +21,7 @@ mod tests {
     pub mod mount_feature;
     pub mod run_ephemeral;
     pub mod run_ephemeral_ignition;
+    pub mod run_ephemeral_scp;
     pub mod run_ephemeral_ssh;
     pub mod to_disk;
     pub mod varlink;

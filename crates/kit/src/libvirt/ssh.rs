@@ -20,9 +20,66 @@ use tempfile;
 use tracing::debug;
 
 // SSH retry configuration
-const SSH_RETRY_TIMEOUT_SECS: u64 = 60; // Total time to retry SSH connections
-const SSH_POLL_DELAY_SECS: u64 = 1; // Delay between SSH attempts
-const SSH_SERVER_ALIVE_INTERVAL: u32 = 60; // Server alive interval in seconds
+pub(crate) const SSH_RETRY_TIMEOUT_SECS: u64 = 60; // Total time to retry SSH connections
+pub(crate) const SSH_POLL_DELAY_SECS: u64 = 1; // Delay between SSH attempts
+pub(crate) const SSH_SERVER_ALIVE_INTERVAL: u32 = 60; // Server alive interval in seconds
+
+/// Wait for SSH to become ready, retrying for up to [`SSH_RETRY_TIMEOUT_SECS`] seconds.
+///
+/// Runs `ssh -i <key> -p <port> <opts> user@127.0.0.1 -- true` in a loop,
+/// sleeping [`SSH_POLL_DELAY_SECS`] between attempts and showing a progress bar.
+pub(crate) fn wait_for_ssh_ready(
+    ssh_config: &DomainSshConfig,
+    temp_key_path: &std::path::Path,
+    user: &str,
+    common_opts: &crate::ssh::CommonSshOptions,
+    domain_name: &str,
+) -> Result<()> {
+    let start_time = Instant::now();
+    let timeout = Duration::from_secs(SSH_RETRY_TIMEOUT_SECS);
+
+    let pb = crate::boot_progress::create_boot_progress_bar();
+    pb.set_message("Waiting for SSH to be ready...");
+
+    loop {
+        let mut test_cmd = Command::new("ssh");
+        test_cmd
+            .arg("-i")
+            .arg(temp_key_path)
+            .arg("-p")
+            .arg(ssh_config.ssh_port.to_string());
+        common_opts.apply_to_command(&mut test_cmd);
+        test_cmd
+            .arg(format!("{}@127.0.0.1", user))
+            .arg("--")
+            .arg("true");
+
+        let output = test_cmd.output().context("Failed to spawn SSH command")?;
+
+        if output.status.success() {
+            debug!(
+                "SSH connectivity confirmed after {:.1}s",
+                start_time.elapsed().as_secs_f64()
+            );
+            pb.finish_and_clear();
+            return Ok(());
+        }
+
+        if start_time.elapsed() >= timeout {
+            pb.finish_and_clear();
+            let stderr_str = String::from_utf8_lossy(&output.stderr);
+            eprint!("{}", stderr_str);
+            eprintln!(
+                "\nSSH connection failed after {:.1}s. To see VM console output, run: virsh console {}",
+                start_time.elapsed().as_secs_f64(),
+                domain_name
+            );
+            return Err(eyre!("SSH connection failed after timeout"));
+        }
+
+        std::thread::sleep(Duration::from_secs(SSH_POLL_DELAY_SECS));
+    }
+}
 
 /// Configuration options for SSH connection to libvirt domain
 #[derive(Debug, Parser)]
@@ -60,15 +117,18 @@ pub struct LibvirtSshOpts {
 
 /// SSH configuration extracted from domain metadata
 #[derive(Debug)]
-struct DomainSshConfig {
-    private_key_content: String,
-    ssh_port: u16,
-    is_generated: bool,
+pub(crate) struct DomainSshConfig {
+    pub(crate) private_key_content: String,
+    pub(crate) ssh_port: u16,
+    pub(crate) is_generated: bool,
 }
 
 impl LibvirtSshOpts {
     /// Check if domain exists and is accessible
-    fn check_domain_exists(&self, global_opts: &crate::libvirt::LibvirtOptions) -> Result<bool> {
+    pub(crate) fn check_domain_exists(
+        &self,
+        global_opts: &crate::libvirt::LibvirtOptions,
+    ) -> Result<bool> {
         let output = global_opts
             .virsh_command()
             .args(&["dominfo", &self.domain_name])
@@ -78,7 +138,10 @@ impl LibvirtSshOpts {
     }
 
     /// Get domain state
-    fn get_domain_state(&self, global_opts: &crate::libvirt::LibvirtOptions) -> Result<String> {
+    pub(crate) fn get_domain_state(
+        &self,
+        global_opts: &crate::libvirt::LibvirtOptions,
+    ) -> Result<String> {
         let output = global_opts
             .virsh_command()
             .args(&["domstate", &self.domain_name])
@@ -93,7 +156,7 @@ impl LibvirtSshOpts {
     }
 
     /// Extract SSH configuration from domain XML metadata
-    fn extract_ssh_config(
+    pub(crate) fn extract_ssh_config(
         &self,
         global_opts: &crate::libvirt::LibvirtOptions,
     ) -> Result<DomainSshConfig> {
@@ -205,7 +268,10 @@ impl LibvirtSshOpts {
     }
 
     /// Create temporary SSH private key file and return its path
-    fn create_temp_ssh_key(&self, ssh_config: &DomainSshConfig) -> Result<tempfile::NamedTempFile> {
+    pub(crate) fn create_temp_ssh_key(
+        &self,
+        ssh_config: &DomainSshConfig,
+    ) -> Result<tempfile::NamedTempFile> {
         debug!(
             "Creating temporary SSH key file with {} bytes",
             ssh_config.private_key_content.len()
@@ -301,48 +367,24 @@ impl LibvirtSshOpts {
         }
 
         let start_time = Instant::now();
-        let timeout = Duration::from_secs(SSH_RETRY_TIMEOUT_SECS);
 
         // First, do connectivity check with retries (for both interactive and command)
         debug!("Testing SSH connectivity before session");
 
-        // Create progress bar for user feedback (only shown in terminals)
-        let pb = crate::boot_progress::create_boot_progress_bar();
-        pb.set_message("Waiting for SSH to be ready...");
-
-        loop {
-            let mut test_cmd =
-                self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options.clone());
-            test_cmd.arg("--").arg("true"); // Simple test command
-
-            let output = test_cmd.output().context("Failed to spawn SSH command")?;
-
-            if output.status.success() {
-                debug!(
-                    "SSH connectivity confirmed after {:.1}s",
-                    start_time.elapsed().as_secs_f64()
-                );
-                pb.finish_and_clear();
-                break;
-            }
-
-            // Check if we've exceeded timeout
-            if start_time.elapsed() >= timeout {
-                pb.finish_and_clear();
-                if !self.suppress_output {
-                    let stderr_str = String::from_utf8_lossy(&output.stderr);
-                    eprint!("{}", stderr_str);
-                    eprintln!(
-                        "\nSSH connection failed after {:.1}s. To see VM console output, run: virsh console {}",
-                        start_time.elapsed().as_secs_f64(),
-                        self.domain_name
-                    );
-                }
-                return Err(eyre!("SSH connection failed after timeout"));
-            }
-
-            std::thread::sleep(Duration::from_secs(SSH_POLL_DELAY_SECS));
-        }
+        let common_opts = crate::ssh::CommonSshOptions {
+            strict_host_keys: self.strict_host_keys,
+            connect_timeout: self.timeout,
+            server_alive_interval: SSH_SERVER_ALIVE_INTERVAL,
+            log_level: self.log_level.clone(),
+            extra_options: parsed_extra_options.clone(),
+        };
+        wait_for_ssh_ready(
+            ssh_config,
+            temp_key.path(),
+            &self.user,
+            &common_opts,
+            &self.domain_name,
+        )?;
 
         // SSH is ready - now do the actual operation (oneshot)
         if self.command.is_empty() {
