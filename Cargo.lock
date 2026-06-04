@@ -1846,6 +1846,7 @@ dependencies = [
 name = "nbdkit-erofs-plugin"
 version = "0.1.0"
 dependencies = [
+ "cpio",
  "crc32fast",
  "libc",
 ]

@@ -11,7 +11,7 @@ use crate::run_ephemeral_macos::{self, EphemeralVmMetadata};
 
 /// Options for `ephemeral run-ssh`, combining run options with optional SSH arguments.
 #[derive(Debug, clap::Parser)]
-pub struct RunSshOpts {
+pub struct RunEphemeralSshOpts {
     #[command(flatten)]
     pub run_opts: run_ephemeral_macos::RunEphemeralOpts,
 
@@ -28,7 +28,7 @@ pub enum EphemeralCommands {
 
     /// Run ephemeral VM and SSH into it
     #[clap(name = "run-ssh")]
-    RunSsh(RunSshOpts),
+    RunSsh(RunEphemeralSshOpts),
 
     /// Connect to a running ephemeral VM via SSH
     #[clap(name = "ssh")]
@@ -151,6 +151,12 @@ fn cmd_rm_all(force: bool) -> Result<()> {
                     tracing::warn!("failed to kill gvproxy {}: {}", vm.gvproxy_pid, e);
                 }
             }
+            // Wait for the VM process to exit so cleanup (VmCleanup::drop in
+            // the detached child) finishes before we proceed.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while vm.is_alive() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
         if let Some(ref container) = vm.nbd_container {
             crate::nbdkit_macos::stop_nbdkit_container(container);
@@ -201,7 +207,7 @@ fn cmd_ssh(name: &str, args: &[String]) -> Result<()> {
     let svc_sock = format!("{}/{}-gvproxy-svc.sock", base.display(), name);
     if std::path::Path::new(&svc_sock).exists() {
         if let Err(e) =
-            run_ephemeral_macos::expose_ssh_port(&svc_sock, "192.168.127.2", vm.ssh_port)
+            run_ephemeral_macos::expose_port(&svc_sock, "192.168.127.2", vm.ssh_port, 22)
         {
             tracing::debug!("SSH port forward re-expose: {}", e);
         }

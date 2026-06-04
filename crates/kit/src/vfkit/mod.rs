@@ -18,6 +18,20 @@ pub mod ssh;
 pub mod start;
 pub mod stop;
 
+/// Output format for inspect and list commands.
+#[derive(Debug, Clone, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum OutputFormat {
+    /// Table format (default for list)
+    Table,
+    /// JSON format
+    Json,
+    /// YAML-like key-value format (default for inspect)
+    Yaml,
+    /// XML format (not yet implemented)
+    Xml,
+}
+
 /// Subcommands for persistent VM management via vfkit.
 #[derive(Debug, Subcommand)]
 pub enum VmCommands {
@@ -26,20 +40,13 @@ pub enum VmCommands {
 
     /// List all persistent VMs
     #[clap(name = "list", alias = "ls")]
-    List {
-        /// Output in JSON format
-        #[clap(long)]
-        json: bool,
-    },
+    List(list::VmListOpts),
 
     /// SSH into a running VM
     Ssh(ssh::VmSshOpts),
 
     /// Stop a running VM
-    Stop {
-        /// VM name
-        name: String,
-    },
+    Stop(stop::VmStopOpts),
 
     /// Start a stopped VM
     Start(start::VmStartOpts),
@@ -50,20 +57,10 @@ pub enum VmCommands {
 
     /// Remove all VMs
     #[clap(name = "rm-all")]
-    RemoveAll {
-        /// Force removal without confirmation
-        #[clap(short, long)]
-        force: bool,
-    },
+    RemoveAll(rm_all::VmRmAllOpts),
 
     /// Show detailed VM information
-    Inspect {
-        /// VM name
-        name: String,
-        /// Output in JSON format
-        #[clap(long)]
-        json: bool,
-    },
+    Inspect(inspect::VmInspectOpts),
 }
 
 impl VmCommands {
@@ -71,13 +68,13 @@ impl VmCommands {
     pub fn run(self) -> Result<()> {
         match self {
             VmCommands::Run(opts) => run::run(opts),
-            VmCommands::List { json } => list::run(json),
+            VmCommands::List(opts) => list::run(opts),
             VmCommands::Ssh(opts) => ssh::run(opts),
-            VmCommands::Stop { name } => stop::run(&name),
+            VmCommands::Stop(opts) => stop::run(opts),
             VmCommands::Start(opts) => start::run(opts),
             VmCommands::Remove(opts) => rm::run(opts),
-            VmCommands::RemoveAll { force } => rm_all::run(force),
-            VmCommands::Inspect { name, json } => inspect::run(&name, json),
+            VmCommands::RemoveAll(opts) => rm_all::run(opts),
+            VmCommands::Inspect(opts) => inspect::run(opts),
         }
     }
 }
@@ -89,6 +86,9 @@ impl VmCommands {
 pub struct VmMetadata {
     /// VM name used as identifier.
     pub name: String,
+    /// Container image used to create this VM (None if created from disk directly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     /// Path to the disk image file.
     pub disk_image: String,
     /// PID of the vfkit process.
@@ -102,9 +102,9 @@ pub struct VmMetadata {
     /// SSH username for connecting to the VM.
     pub ssh_user: String,
     /// Number of vCPUs allocated.
-    pub cpus: u32,
+    pub vcpus: u32,
     /// Memory in megabytes.
-    pub memory: u32,
+    pub memory_mb: u32,
     /// Path to the EFI variable store file.
     pub efi_store: String,
     /// Path to the serial console log file.
@@ -115,6 +115,12 @@ pub struct VmMetadata {
     pub created: String,
     /// Current VM state (running, stopped).
     pub state: String,
+    /// User-defined labels for organizing VMs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Port mappings from host to VM (host_port, guest_port).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub port_mappings: Vec<(u16, u16)>,
 }
 
 impl VmMetadata {
@@ -187,19 +193,22 @@ mod tests {
     fn sample_vm_metadata(name: &str) -> VmMetadata {
         VmMetadata {
             name: name.to_string(),
+            image: None,
             disk_image: "/tmp/disk.raw".to_string(),
             vfkit_pid: 0,
             gvproxy_pid: 0,
             ssh_port: 2222,
             ssh_key: "/tmp/key".to_string(),
             ssh_user: "root".to_string(),
-            cpus: 2,
-            memory: 4096,
+            vcpus: 2,
+            memory_mb: 4096,
             efi_store: "/tmp/efi.fd".to_string(),
             serial_log: "/tmp/serial.log".to_string(),
             gui: false,
             created: "2026-01-01T00:00:00Z".to_string(),
             state: "running".to_string(),
+            labels: vec![],
+            port_mappings: vec![],
         }
     }
 
@@ -210,8 +219,8 @@ mod tests {
         let loaded: VmMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.name, "test-vm");
         assert_eq!(loaded.disk_image, "/tmp/disk.raw");
-        assert_eq!(loaded.cpus, 2);
-        assert_eq!(loaded.memory, 4096);
+        assert_eq!(loaded.vcpus, 2);
+        assert_eq!(loaded.memory_mb, 4096);
         assert_eq!(loaded.ssh_user, "root");
         assert_eq!(loaded.state, "running");
         assert!(!loaded.gui);

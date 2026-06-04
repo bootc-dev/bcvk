@@ -69,7 +69,7 @@ pub fn build_gpt_disk(
         &LINUX_TYPE_GUID,
         erofs_start_lba,
         erofs_start_lba + erofs_sectors - 1,
-        b"root",
+        b"bcvk-root",
     );
 
     let partition_table_crc = crc32fast::hash(&partition_table);

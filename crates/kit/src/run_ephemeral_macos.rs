@@ -1,9 +1,9 @@
-//! Ephemeral VM launch flow for macOS using vfkit + NBD EROFS plugin.
+//! Ephemeral VM launch flow for macOS using vfkit + NBD EROFS over TCP.
 //!
 //! Boot flow (fully diskless):
 //! 1. Mount container image overlay (`podman image mount`)
-//! 2. Start nbdkit with erofs plugin (dynamically generates GPT + ESP + EROFS)
-//! 3. Launch vfkit with EFI boot via NBD + virtio-net (gvproxy)
+//! 2. Start nbdkit with erofs plugin in TCP mode (port forwarded via gvproxy)
+//! 3. Launch vfkit with EFI boot via NBD TCP + virtio-net (gvproxy)
 //! 4. Wait for SSH and execute commands
 //!
 //! Common helpers (gvproxy, SSH, vfkit detection) are pub for reuse by vfkit/ module.
@@ -15,10 +15,15 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use color_eyre::{
-    eyre::{bail, eyre, Context},
+    eyre::{bail, Context},
     Result,
 };
 use tracing::{debug, info};
+
+pub use crate::vm_helpers::{
+    default_vcpus, detect_machine_name, ensure_image_and_get_digest, is_machine_rootful,
+    parse_memory_to_mb, run_ssh_command, run_ssh_interactive, wait_for_ssh,
+};
 
 /// Base directory for ephemeral VM state on macOS host.
 pub fn ephemeral_base_dir() -> std::path::PathBuf {
@@ -121,10 +126,13 @@ impl EphemeralVmMetadata {
 pub struct RunEphemeralOpts {
     /// Container image to boot
     pub image: String,
-    /// Number of vCPUs
+    /// Instance type (e.g., u1.nano, u1.small). Overrides vcpus/memory if specified.
+    #[clap(long)]
+    pub itype: Option<crate::instancetypes::InstanceType>,
+    /// Number of vCPUs (overridden by --itype if specified)
     #[clap(long)]
     pub vcpus: Option<u32>,
-    /// Memory size (e.g. "4G", "2048M", or plain number for MB)
+    /// Memory size (overridden by --itype if specified)
     #[clap(long, default_value = "4G")]
     pub memory: String,
     /// Generate a temporary SSH key pair for VM access
@@ -148,24 +156,6 @@ pub struct RunEphemeralOpts {
     /// Enable debug mode (reserved for future use)
     #[clap(long)]
     pub debug: bool,
-}
-
-fn default_vcpus() -> u32 {
-    std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(2)
-}
-
-/// Parse memory specification string (e.g. "4G", "2048M") to megabytes.
-pub fn parse_memory_to_mb(s: &str) -> Result<u32> {
-    let s = s.trim();
-    if let Some(n) = s.strip_suffix('G').or_else(|| s.strip_suffix('g')) {
-        Ok((n.parse::<f64>()? * 1024.0) as u32)
-    } else if let Some(n) = s.strip_suffix('M').or_else(|| s.strip_suffix('m')) {
-        Ok(n.parse::<f64>()? as u32)
-    } else {
-        Ok(s.parse::<u32>()?)
-    }
 }
 
 // --- RAII cleanup guard ---
@@ -219,18 +209,23 @@ impl Drop for VmCleanup {
 
 // --- Main entry point ---
 
-/// Run an ephemeral VM from a container image using vfkit + EROFS over NBD.
+/// Run an ephemeral VM from a container image.
+///
 pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     if opts.gui && opts.detach {
         bail!("--gui and --detach cannot be used together (GUI requires foreground process)");
     }
+    run_vfkit(opts)
+}
 
+/// Run an ephemeral VM using vfkit + EROFS over NBD (TCP transport).
+fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     if opts.detach {
         return run_detached(&opts);
     }
 
     let vfkit_bin = find_vfkit()?;
-    info!(image = %opts.image, "starting ephemeral VM on macOS (vfkit + EROFS)");
+    info!(image = %opts.image, "starting ephemeral VM on macOS (vfkit + NBD TCP)");
 
     let cache_base = ephemeral_base_dir();
     fs::create_dir_all(&cache_base)?;
@@ -294,12 +289,15 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     cmdline_parts.extend(&user_args);
     let cmdline = cmdline_parts.join(" ");
 
+    // Ensure nbdkit container image is ready (auto-build on first run)
+    crate::nbdkit_macos::ensure_nbdkit_ready(&machine)?;
+
     // Get container image merged overlay path
     let merged_path = crate::nbdkit_macos::get_merged_path(&machine, rootful, &opts.image)?;
     info!("overlay merged: {}", merged_path);
 
-    // Start nbdkit with erofs plugin (dynamic EROFS + ESP + GPT from overlay dir)
     let nbd_port = crate::nbdkit_macos::find_available_nbd_port();
+    info!("NBD transport: TCP (port {})", nbd_port);
     let nbd_container_name = crate::nbdkit_macos::start_nbdkit_erofs_plugin(
         &machine,
         &merged_path,
@@ -308,8 +306,6 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         nbd_port,
         &vm_name,
     )?;
-    std::thread::sleep(Duration::from_millis(500));
-    info!("nbdkit ready on port {}", nbd_port);
 
     // gvproxy + vfkit (EFI boot)
     let gvproxy_sock = cache_base.join(format!("{}-gvproxy.sock", vm_name));
@@ -328,8 +324,16 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     let efi_var_store = cache_base.join(format!("{}-efi-vars", vm_name));
     let bootloader_arg = format!("efi,variable-store={},create", efi_var_store.display());
 
-    let vcpus = opts.vcpus.unwrap_or_else(default_vcpus);
-    let memory_mb = parse_memory_to_mb(&opts.memory)?;
+    let vcpus = opts
+        .itype
+        .map(|t| t.vcpus())
+        .or(opts.vcpus)
+        .unwrap_or_else(default_vcpus);
+    let memory_mb = opts
+        .itype
+        .map(|t| t.memory_mb())
+        .map(Ok)
+        .unwrap_or_else(|| parse_memory_to_mb(&opts.memory))?;
 
     let mut vfkit_args = vec![
         "--cpus".to_string(),
@@ -350,7 +354,19 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         ),
         "--device".to_string(),
         "virtio-rng".to_string(),
+        "--device".to_string(),
+        format!(
+            "virtio-vsock,port=9000,socketURL={},connect",
+            cache_base.join(format!("{}-vsock.sock", vm_name)).display()
+        ),
     ];
+
+    if let Ok(bench_nbd) = std::env::var("BCVK_BENCH_NBD") {
+        vfkit_args.extend([
+            "--device".to_string(),
+            format!("nbd,uri={},readonly,timeout=5000,deviceId=bench", bench_nbd),
+        ]);
+    }
 
     let serial_log = cache_base.join(format!("{}-serial.log", vm_name));
     vfkit_args.extend([
@@ -401,7 +417,7 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
     if opts.ssh_keygen || !opts.execute.is_empty() {
         info!("setting up SSH port forwarding...");
         for attempt in 0..15u32 {
-            match expose_ssh_port(&services_sock_str, "192.168.127.2", ssh_port) {
+            match expose_port(&services_sock_str, "192.168.127.2", ssh_port, 22) {
                 Ok(_) => {
                     info!("SSH port {} forwarded", ssh_port);
                     break;
@@ -523,50 +539,7 @@ fn run_detached(opts: &RunEphemeralOpts) -> Result<()> {
     Ok(())
 }
 
-// --- Shared helpers (pub for vfkit/ module) ---
-
-/// Detect the name of the running podman machine.
-pub fn detect_machine_name() -> Result<String> {
-    let output = Command::new("podman")
-        .args(["machine", "info", "--format", "{{.Host.CurrentMachine}}"])
-        .output()?;
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() {
-        bail!("no podman machine is running");
-    }
-    Ok(name)
-}
-
-fn ensure_image_and_get_digest(image: &str) -> Result<String> {
-    let status = Command::new("podman")
-        .args(["image", "exists", image])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !status.success() {
-        info!("pulling image {}...", image);
-        if !Command::new("podman")
-            .args(["pull", image])
-            .status()?
-            .success()
-        {
-            bail!("failed to pull image: {}", image);
-        }
-    }
-    let output = Command::new("podman")
-        .args(["image", "inspect", "--format", "{{.Digest}}", image])
-        .output()?;
-    let digest = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(digest.trim_start_matches("sha256:").to_string())
-}
-
-fn is_machine_rootful(machine: &str) -> bool {
-    Command::new("podman")
-        .args(["machine", "ssh", machine, "id", "-u"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
-        .unwrap_or(false)
-}
+// --- macOS-specific helpers (pub for vfkit/ module) ---
 
 /// Clear extended attributes from a file.
 ///
@@ -647,11 +620,16 @@ pub fn start_gvproxy(gvproxy_sock: &str, services_sock: &str) -> Result<std::pro
     Ok(child)
 }
 
-/// Expose SSH port forwarding via gvproxy's HTTP API.
-pub fn expose_ssh_port(services_sock: &str, vm_ip: &str, host_port: u16) -> Result<()> {
+/// Expose a TCP port forwarding rule via gvproxy's HTTP API.
+pub fn expose_port(
+    services_sock: &str,
+    vm_ip: &str,
+    host_port: u16,
+    guest_port: u16,
+) -> Result<()> {
     let body = format!(
-        r#"{{"local":":{}","remote":"{}:22","protocol":"tcp"}}"#,
-        host_port, vm_ip
+        r#"{{"local":":{}","remote":"{}:{}","protocol":"tcp"}}"#,
+        host_port, vm_ip, guest_port
     );
     let mut stream = UnixStream::connect(services_sock)?;
     let request = format!(
@@ -674,8 +652,6 @@ pub fn expose_ssh_port(services_sock: &str, vm_ip: &str, host_port: u16) -> Resu
     Ok(())
 }
 
-const SSH_TIMEOUT: Duration = Duration::from_secs(240);
-
 /// Find an available TCP port for SSH forwarding in range 2222-3000.
 pub fn find_available_ssh_port() -> u16 {
     use rand::Rng;
@@ -696,128 +672,14 @@ pub fn find_available_ssh_port() -> u16 {
     PORT_RANGE_START
 }
 
-/// Wait for SSH connectivity with exponential backoff (240s timeout).
-pub fn wait_for_ssh(port: u16, key_path: &Path, user: &str) -> Result<()> {
-    use crate::ssh_options::CommonSshOptions;
-    let ssh_opts = CommonSshOptions::default();
-    let user_host = format!("{}@localhost", user);
-    info!("waiting for SSH on port {} ({}@localhost)...", port, user);
-    let start = std::time::Instant::now();
-    let mut attempt = 0u32;
-    loop {
-        if start.elapsed() > SSH_TIMEOUT {
-            bail!("SSH connection timeout ({}s)", SSH_TIMEOUT.as_secs());
-        }
-        let mut cmd = Command::new("ssh");
-        cmd.args(["-p", &port.to_string(), "-i", &key_path.to_string_lossy()]);
-        ssh_opts.apply_to_command(&mut cmd);
-        cmd.args(["-o", "BatchMode=yes", &user_host, "true"]);
-        let status = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status();
-        if let Ok(s) = status {
-            if s.success() {
-                info!("SSH connected after {}s", start.elapsed().as_secs());
-                return Ok(());
-            }
-        }
-        let backoff = if attempt < 2 {
-            500
-        } else if attempt < 4 {
-            1000
-        } else {
-            2000
-        };
-        std::thread::sleep(Duration::from_millis(backoff));
-        attempt += 1;
-    }
-}
-
-/// Execute a command via SSH and return the exit status.
-pub fn run_ssh_command(
-    port: u16,
-    key_path: &Path,
-    user: &str,
-    command: &str,
-) -> Result<std::process::ExitStatus> {
-    use crate::ssh_options::CommonSshOptions;
-    let ssh_opts = CommonSshOptions::default();
-    let user_host = format!("{}@localhost", user);
-    let mut cmd = Command::new("ssh");
-    cmd.args(["-p", &port.to_string(), "-i", &key_path.to_string_lossy()]);
-    ssh_opts.apply_to_command(&mut cmd);
-    cmd.args(["-o", "BatchMode=yes", &user_host, command]);
-    cmd.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|e| eyre!("ssh failed: {}", e))
-}
-
-/// Start an interactive SSH session with TTY allocation.
-pub fn run_ssh_interactive(
-    port: u16,
-    key_path: &Path,
-    user: &str,
-) -> Result<std::process::ExitStatus> {
-    use crate::ssh_options::CommonSshOptions;
-    let ssh_opts = CommonSshOptions::default();
-    let user_host = format!("{}@localhost", user);
-    let mut cmd = Command::new("ssh");
-    cmd.args(["-p", &port.to_string(), "-i", &key_path.to_string_lossy()]);
-    ssh_opts.apply_to_command(&mut cmd);
-    cmd.args(["-t", &user_host]);
-    cmd.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|e| eyre!("ssh failed: {}", e))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_memory_to_mb() {
-        let cases = [
-            ("4G", 4096),
-            ("4g", 4096),
-            ("2048M", 2048),
-            ("2048m", 2048),
-            ("512", 512),
-            ("1G", 1024),
-        ];
-        for (input, expected) in &cases {
-            assert_eq!(
-                parse_memory_to_mb(input).unwrap(),
-                *expected,
-                "parse_memory_to_mb({:?})",
-                input
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse_memory_to_mb_errors() {
-        assert!(parse_memory_to_mb("").is_err());
-        assert!(parse_memory_to_mb("abc").is_err());
-    }
-
-    #[test]
     fn test_generate_mac() {
         let mac = generate_mac();
         assert_eq!(mac, GVPROXY_STATIC_MAC);
-    }
-
-    #[test]
-    fn test_default_vcpus() {
-        let vcpus = default_vcpus();
-        assert!(vcpus >= 1);
-        assert_eq!(
-            vcpus,
-            std::thread::available_parallelism()
-                .map(|n| n.get() as u32)
-                .unwrap_or(2)
-        );
     }
 
     #[test]

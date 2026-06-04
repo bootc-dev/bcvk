@@ -5,6 +5,7 @@ pub mod qemu_img;
 pub mod xml_utils;
 
 // Cross-platform modules
+pub mod install_options;
 pub mod ssh_options;
 
 // Linux-only modules
@@ -18,4 +19,9 @@ pub mod nbdkit_macos;
 pub mod run_ephemeral_macos;
 
 #[cfg(target_os = "macos")]
+pub mod instancetypes;
+#[cfg(target_os = "macos")]
+pub mod to_disk_macos;
+#[cfg(target_os = "macos")]
 pub mod vfkit;
+pub mod vm_helpers;

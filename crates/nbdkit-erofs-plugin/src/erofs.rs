@@ -458,7 +458,10 @@ pub fn build_erofs_regions(layout: &ErofsLayout, walk: &WalkResult) -> Vec<Regio
                 start: fr.offset_in_erofs,
                 len: fr.size,
                 region_type: RegionType::File {
-                    path: files[fr.file_index].host_path.clone(),
+                    file: std::sync::Arc::new(
+                        std::fs::File::open(&files[fr.file_index].host_path)
+                            .expect("failed to open file for region"),
+                    ),
                 },
             });
         } else {
