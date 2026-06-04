@@ -1,7 +1,7 @@
 //! vm ssh — SSH into a running persistent VM.
 
 use super::VmMetadata;
-use crate::run_ephemeral_macos::run_ssh_interactive;
+use crate::vm_helpers::{run_ssh_command, run_ssh_interactive};
 use clap::Parser;
 use color_eyre::{eyre::bail, Result};
 
@@ -10,15 +10,25 @@ use color_eyre::{eyre::bail, Result};
 pub struct VmSshOpts {
     /// VM name
     pub name: String,
+    /// Additional SSH arguments
+    #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
 }
 
-/// Open an interactive SSH session to a running persistent VM.
+/// Open an SSH session to a running persistent VM.
 pub fn run(opts: VmSshOpts) -> Result<()> {
     let vm = VmMetadata::load(&opts.name)?;
     if !vm.is_alive() {
         bail!("VM '{}' is not running", opts.name);
     }
     let key_path = std::path::Path::new(&vm.ssh_key);
-    run_ssh_interactive(vm.ssh_port, key_path, &vm.ssh_user)?;
+    if opts.args.is_empty() {
+        run_ssh_interactive(vm.ssh_port, key_path, &vm.ssh_user)?;
+    } else {
+        let cmd = shlex::try_join(opts.args.iter().map(|s| s.as_str()))
+            .map_err(|e| color_eyre::eyre::eyre!("failed to escape SSH args: {}", e))?;
+        let status = run_ssh_command(vm.ssh_port, key_path, &vm.ssh_user, &cmd)?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
     Ok(())
 }

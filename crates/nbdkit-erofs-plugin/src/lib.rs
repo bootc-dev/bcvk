@@ -7,11 +7,11 @@ mod regions;
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 use regions::Region;
 
-static PLUGIN_STATE: Mutex<Option<PluginState>> = Mutex::new(None);
+static PLUGIN_STATE: RwLock<Option<PluginState>> = RwLock::new(None);
 
 struct PluginState {
     dir: PathBuf,
@@ -39,7 +39,7 @@ pub extern "C" fn plugin_config(key: *const c_char, value: *const c_char) -> c_i
     let key = unsafe { CStr::from_ptr(key) }.to_str().unwrap_or("");
     let value = unsafe { CStr::from_ptr(value) }.to_str().unwrap_or("");
 
-    let mut state = PLUGIN_STATE.lock().unwrap();
+    let mut state = PLUGIN_STATE.write().unwrap();
     let state = state.get_or_insert_with(|| PluginState {
         dir: PathBuf::new(),
         cmdline: None,
@@ -62,7 +62,7 @@ pub extern "C" fn plugin_config(key: *const c_char, value: *const c_char) -> c_i
 
 #[no_mangle]
 pub extern "C" fn plugin_config_complete() -> c_int {
-    let state = PLUGIN_STATE.lock().unwrap();
+    let state = PLUGIN_STATE.read().unwrap();
     let state = match state.as_ref() {
         Some(s) => s,
         None => {
@@ -116,12 +116,12 @@ fn find_grub(dir: &std::path::Path) -> Option<PathBuf> {
         }
         None
     }
-    walk(&dir.join("usr/lib"), "grubaa64.efi")
+    walk(&dir.join("usr/lib"), "grubaa64.efi").or_else(|| walk(&dir.join("usr/lib"), "grubx64.efi"))
 }
 
 #[no_mangle]
 pub extern "C" fn plugin_get_ready() -> c_int {
-    let mut state_guard = PLUGIN_STATE.lock().unwrap();
+    let mut state_guard = PLUGIN_STATE.write().unwrap();
     let state = match state_guard.as_mut() {
         Some(s) => s,
         None => return -1,
@@ -144,7 +144,8 @@ pub extern "C" fn plugin_get_ready() -> c_int {
         }
     };
 
-    let erofs_regions = erofs::build_erofs_regions(&erofs_layout, &walk);
+    let erofs_regions =
+        regions::consolidate_regions(erofs::build_erofs_regions(&erofs_layout, &walk));
 
     // Discover boot files from dir
     let (kernel_path, initrd_path) = match find_kernel_dir(&state.dir) {
@@ -240,7 +241,7 @@ pub extern "C" fn plugin_close(_handle: *mut c_void) {}
 
 #[no_mangle]
 pub extern "C" fn plugin_get_size(_handle: *mut c_void) -> i64 {
-    let state = PLUGIN_STATE.lock().unwrap();
+    let state = PLUGIN_STATE.read().unwrap();
     state.as_ref().map(|s| s.total_size as i64).unwrap_or(-1)
 }
 
@@ -257,7 +258,7 @@ pub extern "C" fn plugin_pread(
     offset: u64,
     _flags: u32,
 ) -> c_int {
-    let state = PLUGIN_STATE.lock().unwrap();
+    let state = PLUGIN_STATE.read().unwrap();
     let state = match state.as_ref() {
         Some(s) => s,
         None => return -1,
@@ -339,7 +340,7 @@ static PLUGIN_MAGIC_KEY: &[u8] = b"dir\0";
 static PLUGIN: NbdkitPlugin = NbdkitPlugin {
     _struct_size: std::mem::size_of::<NbdkitPlugin>() as u64,
     _api_version: 2,
-    _thread_model: 0,
+    _thread_model: 3, // NBDKIT_THREAD_MODEL_PARALLEL
     name: PLUGIN_NAME.as_ptr() as *const c_char,
     longname: PLUGIN_LONGNAME.as_ptr() as *const c_char,
     version: PLUGIN_VERSION.as_ptr() as *const c_char,

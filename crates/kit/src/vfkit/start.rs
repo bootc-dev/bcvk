@@ -8,8 +8,9 @@ use tracing::info;
 
 use super::VmMetadata;
 use crate::run_ephemeral_macos::{
-    clear_xattr, expose_ssh_port, find_vfkit, generate_mac, start_gvproxy, wait_for_ssh,
+    clear_xattr, expose_port, find_vfkit, generate_mac, start_gvproxy,
 };
+use crate::vm_helpers::{run_ssh_interactive, wait_for_ssh};
 
 /// Options for `vm start`.
 #[derive(Parser, Debug)]
@@ -19,6 +20,9 @@ pub struct VmStartOpts {
     /// Display VM console in GUI window
     #[clap(long)]
     pub gui: bool,
+    /// Automatically SSH into the VM after starting
+    #[clap(long)]
+    pub ssh: bool,
 }
 
 /// Restart a stopped persistent VM by re-launching vfkit.
@@ -53,9 +57,9 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
     let gui = opts.gui || meta.gui;
     let mut vfkit_args = vec![
         "--cpus".to_string(),
-        meta.cpus.to_string(),
+        meta.vcpus.to_string(),
         "--memory".to_string(),
-        meta.memory.to_string(),
+        meta.memory_mb.to_string(),
         "--bootloader".to_string(),
         format!("efi,variable-store={},create", meta.efi_store),
         "--device".to_string(),
@@ -83,7 +87,7 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
 
     info!("setting up SSH port forwarding...");
     for attempt in 0..15u32 {
-        match expose_ssh_port(&services_sock_str, "192.168.127.2", meta.ssh_port) {
+        match expose_port(&services_sock_str, "192.168.127.2", meta.ssh_port, 22) {
             Ok(_) => {
                 info!("SSH port {} forwarded", meta.ssh_port);
                 break;
@@ -95,6 +99,11 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
             }
             Err(e) => bail!("SSH port forward failed: {}", e),
         }
+    }
+
+    for &(host_port, guest_port) in &meta.port_mappings {
+        expose_port(&services_sock_str, "192.168.127.2", host_port, guest_port)?;
+        info!("port {}:{} forwarded", host_port, guest_port);
     }
 
     let key_path = std::path::Path::new(&meta.ssh_key);
@@ -111,5 +120,11 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
         "  ssh -p {} -i {} {}@localhost",
         meta.ssh_port, meta.ssh_key, meta.ssh_user
     );
+
+    if opts.ssh {
+        let status = run_ssh_interactive(meta.ssh_port, key_path, &meta.ssh_user)?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
     Ok(())
 }

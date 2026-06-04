@@ -69,7 +69,11 @@ mod nbdkit_macos;
 #[cfg(target_os = "macos")]
 mod run_ephemeral_macos;
 #[cfg(target_os = "macos")]
+mod to_disk_macos;
+#[cfg(target_os = "macos")]
 mod vfkit;
+#[cfg(target_os = "macos")]
+mod vm_helpers;
 
 /// Default state directory for bcvk container data
 #[cfg(target_os = "linux")]
@@ -159,8 +163,14 @@ enum Commands {
     // macOS: vfkit-based persistent VMs
     #[cfg(target_os = "macos")]
     /// Manage persistent VMs (vfkit backend)
-    #[clap(subcommand)]
+    #[clap(subcommand, alias = "vfkit")]
     Vm(vfkit::VmCommands),
+
+    // macOS: to-disk
+    #[cfg(target_os = "macos")]
+    /// Install bootc images to persistent disk images
+    #[clap(name = "to-disk")]
+    ToDisk(to_disk_macos::ToDiskMacosOpts),
 
     // Other platforms: stub
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -312,6 +322,11 @@ fn main() -> Result<(), Report> {
 
         #[cfg(target_os = "macos")]
         Commands::Vm(cmd) => cmd.run()?,
+
+        #[cfg(target_os = "macos")]
+        Commands::ToDisk(opts) => {
+            to_disk_macos::run(opts)?;
+        }
 
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         Commands::Ephemeral(_) => {

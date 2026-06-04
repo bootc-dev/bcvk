@@ -8,10 +8,14 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use tracing::info;
 
-use crate::run_ephemeral_macos::detect_machine_name;
+use crate::vm_helpers::detect_machine_name;
 
-/// Path to the nbdkit EROFS plugin shared library inside podman machine.
-const NBDKIT_EROFS_PLUGIN_PATH: &str = "/var/tmp/bcvk/libnbdkit_erofs_plugin.so";
+/// EROFS plugin shared library, embedded at compile time.
+const EROFS_PLUGIN_SO: &[u8] = include_bytes!("../nbdkit-erofs-plugin.so");
+
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 
 /// Get the merged overlay path from podman image mount.
 pub(crate) fn get_merged_path(machine: &str, rootful: bool, image: &str) -> Result<String> {
@@ -38,7 +42,33 @@ pub(crate) fn get_merged_path(machine: &str, rootful: bool, image: &str) -> Resu
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Start nbdkit with the erofs plugin for dynamic EROFS + ESP + GPT generation.
+/// Ensure the nbdkit container image exists in podman machine.
+/// On first run, transfers embedded .so and builds container image.
+pub(crate) fn ensure_nbdkit_ready(machine: &str) -> Result<()> {
+    let script = crate::vm_helpers::nbdkit_setup_script(EROFS_PLUGIN_SO);
+    info!("checking nbdkit container image...");
+    let mut child = Command::new("podman")
+        .args(["machine", "ssh", machine, "--", "bash", "-s"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("nbdkit setup in podman machine")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(script.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        bail!(
+            "nbdkit setup failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(crate) fn start_nbdkit_erofs_plugin(
     machine: &str,
     merged_path: &str,
@@ -64,10 +94,6 @@ pub(crate) fn start_nbdkit_erofs_plugin(
         .stderr(Stdio::null())
         .status();
 
-    fn shell_escape(s: &str) -> String {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
-
     let cmdline_esc = shell_escape(&format!("cmdline={}", cmdline));
     let dir_esc = shell_escape(&format!("dir={}", merged_path));
 
@@ -80,16 +106,13 @@ pub(crate) fn start_nbdkit_erofs_plugin(
         "podman run -d --name {name} --security-opt label=disable \
          -p {port}:10809 \
          -v {merged}:{merged}:ro \
-         -v {plugin}:/plugin.so:ro \
-         -v /usr/bin/nbdkit:/usr/bin/nbdkit:ro \
-         -v /usr/lib64/nbdkit:/usr/lib64/nbdkit:ro \
-         quay.io/fedora/fedora:latest \
-         nbdkit -f -p 10809 -r /plugin.so \
+         {image} \
+         nbdkit -f --threads 4 -p 10809 -r /plugin.so \
          {dir} {cmdline}{ssh}",
         name = container_name,
         port = nbd_port,
         merged = merged_path,
-        plugin = NBDKIT_EROFS_PLUGIN_PATH,
+        image = crate::vm_helpers::NBDKIT_IMAGE,
         dir = dir_esc,
         cmdline = cmdline_esc,
         ssh = ssh_param,
@@ -106,7 +129,6 @@ pub(crate) fn start_nbdkit_erofs_plugin(
     }
 
     info!("waiting for nbdkit on port {}...", nbd_port);
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], nbd_port)),
@@ -119,25 +141,47 @@ pub(crate) fn start_nbdkit_erofs_plugin(
                 break;
             }
         }
-        if std::time::Instant::now() > deadline {
-            let _ = Command::new("podman")
-                .args([
-                    "machine",
-                    "ssh",
-                    machine,
-                    "--",
-                    "podman",
-                    "rm",
-                    "-f",
-                    &container_name,
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            bail!(
-                "nbdkit erofs plugin did not become ready on port {}",
-                nbd_port
-            );
+        // Check if container is still alive (no fixed timeout — wait as long
+        // as plugin_get_ready() is running, which scans the entire overlay
+        // directory and scales with image size)
+        let ps_output = Command::new("podman")
+            .args([
+                "machine",
+                "ssh",
+                machine,
+                "--",
+                "podman",
+                "ps",
+                "-a",
+                "--filter",
+                &format!("name=^{}$", container_name),
+                "--format",
+                "{{.Status}}",
+            ])
+            .output();
+        if let Ok(out) = &ps_output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.contains("Exited") {
+                let _ = Command::new("podman")
+                    .args([
+                        "machine",
+                        "ssh",
+                        machine,
+                        "--",
+                        "podman",
+                        "rm",
+                        "-f",
+                        &container_name,
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                bail!(
+                    "nbdkit container '{}' exited before becoming ready on port {}",
+                    container_name,
+                    nbd_port
+                );
+            }
         }
         std::thread::sleep(Duration::from_millis(500));
     }
