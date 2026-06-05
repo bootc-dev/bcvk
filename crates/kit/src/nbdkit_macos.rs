@@ -11,7 +11,7 @@ use tracing::info;
 use crate::vm_helpers::detect_machine_name;
 
 /// EROFS plugin shared library, embedded at compile time.
-const EROFS_PLUGIN_SO: &[u8] = include_bytes!("../nbdkit-erofs-plugin.so");
+const EROFS_PLUGIN_SO: &[u8] = include_bytes!("../nbdkit-erofs-plugin-aarch64.so");
 
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))

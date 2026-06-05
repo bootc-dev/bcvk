@@ -44,56 +44,19 @@ pub fn build_units_cpio() -> Vec<u8> {
     write_file(
         &mut out,
         "usr/lib/systemd/system/bcvk-var-ephemeral.service",
-        b"[Unit]\n\
-          Description=Setup ephemeral /var from image content\n\
-          DefaultDependencies=no\n\
-          ConditionPathExists=/etc/initrd-release\n\
-          Before=initrd-fs.target\n\
-          After=sysroot.mount initrd-parse-etc.service\n\
-          Requires=sysroot.mount\n\
-          \n\
-          [Service]\n\
-          Type=oneshot\n\
-          RemainAfterExit=yes\n\
-          TimeoutStartSec=60\n\
-          ExecStart=/usr/bin/mkdir -p /run/var-ephemeral\n\
-          ExecStart=/usr/bin/cp -a /sysroot/var/. /run/var-ephemeral/\n\
-          ExecStart=/usr/bin/mount --bind /run/var-ephemeral /sysroot/var\n",
+        include_bytes!("../../kit/src/units/bcvk-var-ephemeral.service"),
     );
 
     write_file(
         &mut out,
         "usr/lib/systemd/system/bcvk-etc-overlay.service",
-        b"[Unit]\n\
-          Description=Setup ephemeral /etc overlay\n\
-          DefaultDependencies=no\n\
-          ConditionPathExists=/etc/initrd-release\n\
-          Before=initrd-fs.target\n\
-          After=sysroot.mount initrd-parse-etc.service\n\
-          Requires=sysroot.mount\n\
-          \n\
-          [Service]\n\
-          Type=oneshot\n\
-          RemainAfterExit=yes\n\
-          TimeoutStartSec=30\n\
-          ExecStart=/usr/bin/mkdir -p /run/etc-lower /run/etc-upper /run/etc-work\n\
-          ExecStart=/usr/bin/mount --bind /sysroot/etc /run/etc-lower\n\
-          ExecStart=/usr/bin/mount -t overlay overlay -o lowerdir=/run/etc-lower,upperdir=/run/etc-upper,workdir=/run/etc-work,index=off,metacopy=off /sysroot/etc\n",
+        include_bytes!("../../kit/src/units/bcvk-etc-overlay.service"),
     );
 
     write_file(
         &mut out,
         "usr/lib/systemd/system/bcvk-copy-units.service",
-        b"[Unit]\n\
-          Description=Copy bcvk units for post-switch-root on systemd <256\n\
-          DefaultDependencies=no\n\
-          ConditionPathExists=/etc/initrd-release\n\
-          Before=initrd-fs.target\n\
-          \n\
-          [Service]\n\
-          Type=oneshot\n\
-          RemainAfterExit=yes\n\
-          ExecStart=/bin/sh -c 'mkdir -p /run/systemd/system/sysinit.target.wants && cp /usr/lib/systemd/system/bcvk-journal-stream.service /run/systemd/system/ && ln -s ../bcvk-journal-stream.service /run/systemd/system/sysinit.target.wants/'\n",
+        include_bytes!("../../kit/src/units/bcvk-copy-units.service"),
     );
 
     write_file(

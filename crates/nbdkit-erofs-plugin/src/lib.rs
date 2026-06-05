@@ -128,7 +128,15 @@ pub extern "C" fn plugin_get_ready() -> c_int {
     };
 
     // Walk directory for EROFS
-    let walk = match dir_walk::walk_directory(&state.dir) {
+    let root_dir =
+        match cap_std::fs::Dir::open_ambient_dir(&state.dir, cap_std::ambient_authority()) {
+            Ok(d) => d,
+            Err(e) => {
+                log_error(&format!("failed to open directory {:?}: {}", state.dir, e));
+                return -1;
+            }
+        };
+    let walk = match dir_walk::walk_directory(&root_dir, &state.dir) {
         Ok(w) => w,
         Err(e) => {
             log_error(&format!("failed to walk directory: {}", e));
