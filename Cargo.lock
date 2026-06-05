@@ -1846,9 +1846,11 @@ dependencies = [
 name = "nbdkit-erofs-plugin"
 version = "0.1.0"
 dependencies = [
+ "cap-std",
  "cpio",
  "crc32fast",
  "libc",
+ "rustix",
 ]
 
 [[package]]

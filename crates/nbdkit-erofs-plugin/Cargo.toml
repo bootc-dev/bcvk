@@ -11,3 +11,5 @@ crate-type = ["cdylib"]
 libc = "0.2"
 cpio = "0.4"
 crc32fast = "1.4"
+cap-std = "4"
+rustix = { version = "1", features = ["fs"] }
