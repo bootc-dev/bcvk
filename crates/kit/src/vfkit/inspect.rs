@@ -63,13 +63,12 @@ pub fn run(opts: VmInspectOpts) -> Result<()> {
     println!();
     println!("SSH:");
     println!("  Port:     {}", meta.ssh_port);
-    println!("  User:     {}", meta.ssh_user);
     println!("  Key:      {}", meta.ssh_key);
     if state == "running" {
         println!();
         println!(
-            "  ssh -p {} -i {} {}@localhost",
-            meta.ssh_port, meta.ssh_key, meta.ssh_user
+            "  ssh -p {} -i {} root@localhost",
+            meta.ssh_port, meta.ssh_key
         );
     }
     if !meta.labels.is_empty() {

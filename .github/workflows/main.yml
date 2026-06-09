@@ -32,6 +32,9 @@ jobs:
       - name: Build nbdkit EROFS plugin (.so)
         run: make plugin-so-aarch64
 
+      - name: Build NBD server binary
+        run: make nbd-server-aarch64
+
       - name: Check build
         run: cargo check --all-targets
 

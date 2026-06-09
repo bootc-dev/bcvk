@@ -71,9 +71,6 @@ pub struct VmRunOpts {
     /// Path to an existing SSH private key
     #[clap(long)]
     pub ssh_key: Option<String>,
-    /// SSH username (default: root)
-    #[clap(long, default_value = "root")]
-    pub ssh_user: String,
     /// SSH port (default: auto-allocate)
     #[clap(long)]
     pub ssh_port: Option<u16>,
@@ -327,7 +324,7 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
     }
 
     let key_path = std::path::Path::new(&ssh_key_path);
-    wait_for_ssh(ssh_port, key_path, &opts.ssh_user)?;
+    wait_for_ssh(ssh_port, key_path, "root")?;
 
     let metadata = VmMetadata {
         name: vm_name.clone(),
@@ -337,7 +334,6 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
         gvproxy_pid: gvproxy_child.id(),
         ssh_port,
         ssh_key: ssh_key_path.clone(),
-        ssh_user: opts.ssh_user.clone(),
         vcpus,
         memory_mb,
         efi_store: efi_store.to_string_lossy().to_string(),
@@ -357,7 +353,7 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
     println!("VM '{}' is running", vm_name);
     println!(
         "  ssh -p {} -i {} {}@localhost",
-        ssh_port, ssh_key_path, opts.ssh_user
+        ssh_port, ssh_key_path, "root"
     );
     println!();
     println!("To connect:  bcvk vm ssh {}", vm_name);
@@ -368,7 +364,7 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
         return Ok(());
     }
     if opts.ssh {
-        let status = run_ssh_interactive(ssh_port, key_path, &opts.ssh_user)?;
+        let status = run_ssh_interactive(ssh_port, key_path, "root")?;
         std::process::exit(status.code().unwrap_or(1));
     }
 

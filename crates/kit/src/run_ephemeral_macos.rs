@@ -83,7 +83,7 @@ impl EphemeralVmMetadata {
     /// Remove metadata file for the named VM.
     pub fn remove(name: &str) {
         let path = Self::vms_dir().join(format!("{}.json", name));
-        let _ = fs::remove_file(path);
+        crate::vm_helpers::remove_file_if_exists(&path);
     }
 
     /// Load metadata for the named VM from its JSON file.
@@ -164,6 +164,7 @@ struct VmCleanup {
     vfkit_pid: u32,
     gvproxy_pid: u32,
     nbd_container: Option<String>,
+    nbd_port: Option<u16>,
     image: String,
     vm_name: String,
 }
@@ -172,7 +173,7 @@ impl Drop for VmCleanup {
     fn drop(&mut self) {
         tracing::debug!("cleaning up VM processes...");
         if let Some(ref name) = self.nbd_container {
-            crate::nbdkit_macos::stop_nbdkit_container(name);
+            crate::nbd_macos::stop_nbd_server(name, self.nbd_port);
         }
         if let Err(e) = rustix::process::kill_process(
             rustix::process::Pid::from_raw(self.vfkit_pid as i32).unwrap(),
@@ -188,7 +189,7 @@ impl Drop for VmCleanup {
         }
         // Release container image overlay mount
         if let Ok(machine) = detect_machine_name() {
-            let _ = Command::new("podman")
+            if let Err(e) = Command::new("podman")
                 .args([
                     "machine",
                     "ssh",
@@ -201,7 +202,10 @@ impl Drop for VmCleanup {
                 ])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status();
+                .status()
+            {
+                tracing::debug!("failed to umount image {}: {}", self.image, e);
+            }
         }
         EphemeralVmMetadata::remove(&self.vm_name);
     }
@@ -253,8 +257,8 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     let mut ssh_pubkey = String::new();
     if opts.ssh_keygen || !opts.execute.is_empty() {
         info!("generating SSH keypair...");
-        let _ = fs::remove_file(&ssh_key_path);
-        let _ = fs::remove_file(ssh_key_path.with_extension("pub"));
+        crate::vm_helpers::remove_file_if_exists(&ssh_key_path);
+        crate::vm_helpers::remove_file_if_exists(&ssh_key_path.with_extension("pub"));
         let status = Command::new("ssh-keygen")
             .args([
                 "-t",
@@ -289,16 +293,16 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     cmdline_parts.extend(&user_args);
     let cmdline = cmdline_parts.join(" ");
 
-    // Ensure nbdkit container image is ready (auto-build on first run)
-    crate::nbdkit_macos::ensure_nbdkit_ready(&machine)?;
+    // Deploy NBD server binary to podman machine (hash-checked, idempotent)
+    crate::nbd_macos::deploy_nbd_server(&machine)?;
 
     // Get container image merged overlay path
-    let merged_path = crate::nbdkit_macos::get_merged_path(&machine, rootful, &opts.image)?;
+    let merged_path = crate::nbd_macos::get_merged_path(&machine, rootful, &opts.image)?;
     info!("overlay merged: {}", merged_path);
 
-    let nbd_port = crate::nbdkit_macos::find_available_nbd_port();
+    let nbd_port = crate::nbd_macos::find_available_nbd_port();
     info!("NBD transport: TCP (port {})", nbd_port);
-    let nbd_container_name = crate::nbdkit_macos::start_nbdkit_erofs_plugin(
+    let nbd_container_name = crate::nbd_macos::start_nbd_server(
         &machine,
         &merged_path,
         &cmdline,
@@ -410,6 +414,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
         vfkit_pid: vfkit_child.id(),
         gvproxy_pid: gvproxy_child.id(),
         nbd_container: Some(nbd_container_name.clone()),
+        nbd_port: Some(nbd_port),
         image: opts.image.clone(),
         vm_name: vm_name.clone(),
     };
@@ -463,12 +468,12 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     std::mem::forget(_cleanup);
     let status = vfkit_child.wait()?;
     info!("vfkit exited: {}", status);
-    crate::nbdkit_macos::stop_nbdkit_container(&nbd_container_name);
+    crate::nbd_macos::stop_nbd_server(&nbd_container_name, Some(nbd_port));
     if let Err(e) = gvproxy_child.kill() {
         tracing::debug!("failed to kill gvproxy: {}", e);
     }
     // Release container image overlay mount
-    let _ = Command::new("podman")
+    if let Err(e) = Command::new("podman")
         .args([
             "machine",
             "ssh",
@@ -481,7 +486,10 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+    {
+        tracing::debug!("failed to umount image {}: {}", opts.image, e);
+    }
     EphemeralVmMetadata::remove(&vm_name);
     Ok(())
 }
@@ -547,11 +555,14 @@ fn run_detached(opts: &RunEphemeralOpts) -> Result<()> {
 /// `security.selinux` or `user.containers.override_stat` that are added
 /// by podman/buildah when creating images inside containers.
 pub fn clear_xattr(path: &Path) {
-    let _ = Command::new("xattr")
+    if let Err(e) = Command::new("xattr")
         .args(["-c", &path.to_string_lossy()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+    {
+        tracing::debug!("failed to clear xattr on {}: {}", path.display(), e);
+    }
 }
 
 /// Find the vfkit binary, checking PATH and Podman PKG location.
@@ -593,8 +604,8 @@ fn find_gvproxy() -> Result<String> {
 /// Start a gvproxy instance with the given socket paths.
 pub fn start_gvproxy(gvproxy_sock: &str, services_sock: &str) -> Result<std::process::Child> {
     let gvproxy_bin = find_gvproxy()?;
-    let _ = fs::remove_file(gvproxy_sock);
-    let _ = fs::remove_file(services_sock);
+    crate::vm_helpers::remove_file_if_exists(std::path::Path::new(gvproxy_sock));
+    crate::vm_helpers::remove_file_if_exists(std::path::Path::new(services_sock));
     let child = Command::new(&gvproxy_bin)
         .args([
             "-listen-vfkit",
@@ -641,7 +652,9 @@ pub fn expose_port(
     std::io::Write::write_all(&mut stream, request.as_bytes())?;
     std::io::Write::flush(&mut stream)?;
     let mut response = vec![0u8; 1024];
-    let _ = std::io::Read::read(&mut stream, &mut response);
+    if let Err(e) = std::io::Read::read(&mut stream, &mut response) {
+        tracing::debug!("failed to read gvproxy response: {}", e);
+    }
     let response_str = String::from_utf8_lossy(&response);
     if !response_str.contains("200") {
         bail!(

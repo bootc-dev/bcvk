@@ -56,8 +56,8 @@ pub fn run(opts: VmListOpts) -> Result<()> {
             for vm in &vms {
                 let state = if vm.is_alive() { "running" } else { "stopped" };
                 println!(
-                    "{:<20} {:<10} {:<30} ssh -p {} -i {} {}@localhost",
-                    vm.name, state, vm.disk_image, vm.ssh_port, vm.ssh_key, vm.ssh_user
+                    "{:<20} {:<10} {:<30} :{}",
+                    vm.name, state, vm.disk_image, vm.ssh_port
                 );
             }
         }
