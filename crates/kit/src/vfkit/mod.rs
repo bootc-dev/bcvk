@@ -99,8 +99,6 @@ pub struct VmMetadata {
     pub ssh_port: u16,
     /// Path to the SSH private key.
     pub ssh_key: String,
-    /// SSH username for connecting to the VM.
-    pub ssh_user: String,
     /// Number of vCPUs allocated.
     pub vcpus: u32,
     /// Memory in megabytes.
@@ -150,7 +148,7 @@ impl VmMetadata {
     /// Remove metadata file for the named VM.
     pub fn remove(name: &str) {
         let path = Self::vms_dir().join(format!("{}.json", name));
-        let _ = fs::remove_file(path);
+        crate::vm_helpers::remove_file_if_exists(&path);
     }
 
     /// List all persistent VM metadata from the VMs directory.
@@ -199,7 +197,6 @@ mod tests {
             gvproxy_pid: 0,
             ssh_port: 2222,
             ssh_key: "/tmp/key".to_string(),
-            ssh_user: "root".to_string(),
             vcpus: 2,
             memory_mb: 4096,
             efi_store: "/tmp/efi.fd".to_string(),
@@ -221,7 +218,6 @@ mod tests {
         assert_eq!(loaded.disk_image, "/tmp/disk.raw");
         assert_eq!(loaded.vcpus, 2);
         assert_eq!(loaded.memory_mb, 4096);
-        assert_eq!(loaded.ssh_user, "root");
         assert_eq!(loaded.state, "running");
         assert!(!loaded.gui);
     }

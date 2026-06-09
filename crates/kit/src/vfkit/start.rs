@@ -107,7 +107,7 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
     }
 
     let key_path = std::path::Path::new(&meta.ssh_key);
-    wait_for_ssh(meta.ssh_port, key_path, &meta.ssh_user)?;
+    wait_for_ssh(meta.ssh_port, key_path, &"root")?;
 
     meta.vfkit_pid = vfkit_child.id();
     meta.gvproxy_pid = gvproxy_child.id();
@@ -118,11 +118,11 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
     println!("Started '{}'", meta.name);
     println!(
         "  ssh -p {} -i {} {}@localhost",
-        meta.ssh_port, meta.ssh_key, meta.ssh_user
+        meta.ssh_port, meta.ssh_key, "root"
     );
 
     if opts.ssh {
-        let status = run_ssh_interactive(meta.ssh_port, key_path, &meta.ssh_user)?;
+        let status = run_ssh_interactive(meta.ssh_port, key_path, &"root")?;
         std::process::exit(status.code().unwrap_or(1));
     }
 

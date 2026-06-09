@@ -10,6 +10,9 @@ use color_eyre::{eyre::bail, Result};
 pub struct VmSshOpts {
     /// VM name
     pub name: String,
+    /// SSH username to use for connection (defaults to 'root')
+    #[clap(long, default_value = "root")]
+    pub user: String,
     /// Additional SSH arguments
     #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -23,11 +26,11 @@ pub fn run(opts: VmSshOpts) -> Result<()> {
     }
     let key_path = std::path::Path::new(&vm.ssh_key);
     if opts.args.is_empty() {
-        run_ssh_interactive(vm.ssh_port, key_path, &vm.ssh_user)?;
+        run_ssh_interactive(vm.ssh_port, key_path, &opts.user)?;
     } else {
         let cmd = shlex::try_join(opts.args.iter().map(|s| s.as_str()))
             .map_err(|e| color_eyre::eyre::eyre!("failed to escape SSH args: {}", e))?;
-        let status = run_ssh_command(vm.ssh_port, key_path, &vm.ssh_user, &cmd)?;
+        let status = run_ssh_command(vm.ssh_port, key_path, &opts.user, &cmd)?;
         std::process::exit(status.code().unwrap_or(1));
     }
     Ok(())

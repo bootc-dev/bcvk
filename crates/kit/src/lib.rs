@@ -15,7 +15,7 @@ pub mod kernel;
 
 // macOS-only modules (vfkit backend)
 #[cfg(target_os = "macos")]
-pub mod nbdkit_macos;
+pub mod nbd_macos;
 #[cfg(target_os = "macos")]
 pub mod run_ephemeral_macos;
 

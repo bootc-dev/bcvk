@@ -123,11 +123,11 @@ pub fn wait_for_ssh(port: u16, key_path: &Path, user: &str) -> Result<()> {
             }
         }
         let backoff = if attempt < 2 {
-            500
+            100
         } else if attempt < 4 {
-            1000
+            200
         } else {
-            2000
+            500
         };
         std::thread::sleep(Duration::from_millis(backoff));
         attempt += 1;
@@ -263,32 +263,182 @@ pub fn parse_size(size_str: &str) -> Result<u64> {
     Ok(num * multiplier)
 }
 
-/// Container image name for the nbdkit EROFS plugin.
-pub const NBDKIT_IMAGE: &str = "localhost/bcvk-nbdkit:latest";
+// --- NBD server helpers (shared by macOS/Windows) ---
 
-/// Generate a shell script that checks for and builds the nbdkit container image.
-///
-/// The caller provides the plugin `.so` binary via `plugin_so` (typically from
-/// `include_bytes!` in a platform-specific module). The script:
-/// 1. Checks if the image already exists (early exit if so)
-/// 2. Writes the `.so` to a temp path via base64
-/// 3. Builds a container image with nbdkit + the plugin baked in
-/// 4. Cleans up the temp file
-pub fn nbdkit_setup_script(plugin_so: &[u8]) -> String {
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(plugin_so);
-    format!(
-        "set -e; \
-         if podman image exists {image}; then exit 0; fi; \
-         mkdir -p /var/tmp/bcvk; \
-         printf '%s' '{b64}' | base64 -d > /var/tmp/bcvk/plugin.so; \
-         printf 'FROM quay.io/fedora/fedora:latest\\nRUN dnf install -y nbdkit nbdkit-basic-plugins && dnf clean all\\nCOPY plugin.so /plugin.so\\n' | \
-         podman build -t {image} -f - /var/tmp/bcvk; \
-         rm -f /var/tmp/bcvk/plugin.so",
-        image = NBDKIT_IMAGE,
-        b64 = b64,
-    )
+/// Shell-escape a string for safe embedding in shell commands.
+pub fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
+
+/// Compute a fast hash of binary data for deployment change detection.
+pub fn binary_hash(data: &[u8]) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    data.hash(&mut h);
+    let hash1 = h.finish();
+    data.len().hash(&mut h);
+    let hash2 = h.finish();
+    format!("{:016x}{:016x}", hash1, hash2)
+}
+
+/// Run a command inside the podman machine via SSH (best-effort, no output).
+pub fn machine_ssh(machine: &str, cmd: &str) -> Result<()> {
+    let status = Command::new("podman")
+        .args(["machine", "ssh", machine, "--", cmd])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("podman machine ssh")?;
+    if !status.success() {
+        bail!("machine ssh command failed");
+    }
+    Ok(())
+}
+
+/// Run a command inside the podman machine via SSH and capture output.
+pub fn machine_ssh_output(machine: &str, cmd: &str) -> Result<std::process::Output> {
+    Command::new("podman")
+        .args(["machine", "ssh", machine, "--", cmd])
+        .output()
+        .context("podman machine ssh")
+}
+
+/// Get the merged overlay path from podman image mount.
+pub fn get_merged_path(machine: &str, rootful: bool, image: &str) -> Result<String> {
+    let output = if rootful {
+        Command::new("podman")
+            .args([
+                "machine", "ssh", machine, "--", "podman", "image", "mount", image,
+            ])
+            .output()
+            .context("podman image mount")?
+    } else {
+        Command::new("podman")
+            .args([
+                "machine", "ssh", machine, "--", "podman", "unshare", "podman", "image", "mount",
+                image,
+            ])
+            .output()
+            .context("podman image mount")?
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("podman image mount failed: {}", stderr.trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Deploy the NBD server binary to the podman machine (idempotent, hash-checked).
+pub fn deploy_nbd_server(machine: &str, binary: &[u8]) -> Result<()> {
+    use base64::Engine;
+    let hash = binary_hash(binary);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(binary);
+    let script = format!(
+        "set -e; \
+         mkdir -p /var/tmp/bcvk; \
+         H=/var/tmp/bcvk/bcvk-nbd.sha256; \
+         if [ -f \"$H\" ] && [ \"$(cat \"$H\")\" = '{hash}' ]; then exit 0; fi; \
+         printf '%s' '{b64}' | base64 -d > /var/tmp/bcvk/bcvk-nbd; \
+         chmod +x /var/tmp/bcvk/bcvk-nbd; \
+         chcon -t bin_t /var/tmp/bcvk/bcvk-nbd 2>/dev/null || true; \
+         printf '{hash}' > \"$H\"",
+        hash = hash,
+        b64 = b64,
+    );
+    info!("deploying nbd server to podman machine...");
+    let mut child = Command::new("podman")
+        .args(["machine", "ssh", machine, "--", "bash", "-s"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("nbd server deploy to podman machine")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(script.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        bail!(
+            "nbd server deploy failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Start the NBD server as a systemd-run unit inside the podman machine.
+///
+/// `listen_arg` controls the transport: `"--port {nbd_port}"` for TCP (macOS)
+/// or `"--vsock --port {vsock_port}"` for vsock (Windows).
+pub fn start_nbd_unit(
+    machine: &str,
+    unit_name: &str,
+    merged_path: &str,
+    cmdline: &str,
+    ssh_pubkey: &str,
+    listen_arg: &str,
+) -> Result<()> {
+    if let Err(e) = machine_ssh(
+        machine,
+        &format!(
+            "systemctl stop {u} 2>/dev/null; systemctl reset-failed {u} 2>/dev/null",
+            u = unit_name
+        ),
+    ) {
+        tracing::debug!("pre-cleanup of unit {} failed: {}", unit_name, e);
+    }
+
+    let cmdline_esc = shell_escape(cmdline);
+    let mut ssh_args = String::new();
+    if !ssh_pubkey.is_empty() {
+        ssh_args = format!(" --ssh-pubkey {}", shell_escape(ssh_pubkey));
+    }
+
+    let start_cmd = format!(
+        "systemd-run --unit={unit} --service-type=simple --quiet \
+         --property=LimitNOFILE=524288 \
+         /var/tmp/bcvk/bcvk-nbd {listen} --dir {merged} \
+         --cmdline {cmdline}{ssh}",
+        unit = unit_name,
+        listen = listen_arg,
+        merged = merged_path,
+        cmdline = cmdline_esc,
+        ssh = ssh_args,
+    );
+    let output = machine_ssh_output(machine, &start_cmd)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("failed to start nbd server: {}", stderr.trim());
+    }
+    Ok(())
+}
+
+/// Stop an NBD server systemd-run unit (best-effort).
+pub fn stop_nbd_unit(machine: &str, unit_name: &str) {
+    if let Err(e) = machine_ssh(
+        machine,
+        &format!(
+            "systemctl stop {u} 2>/dev/null; systemctl reset-failed {u} 2>/dev/null",
+            u = unit_name
+        ),
+    ) {
+        tracing::debug!("stop_nbd_unit failed for {}: {}", unit_name, e);
+    }
+}
+
+/// Check if a systemd-run unit has died.
+pub fn is_nbd_unit_dead(machine: &str, unit_name: &str) -> bool {
+    if let Ok(out) = machine_ssh_output(machine, &format!("systemctl is-active {}", unit_name)) {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let state = stdout.trim();
+        state == "inactive" || state == "failed"
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
