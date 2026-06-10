@@ -9,6 +9,8 @@ use tracing::debug;
 
 use crate::CONTAINER_STATEDIR;
 
+pub use crate::ssh_options::{CommonSshOptions, SshConnectionOptions};
+
 /// Combine multiple command arguments into a properly escaped shell command string
 ///
 /// This is necessary because SSH protocol sends commands as strings, not argument arrays.
@@ -227,101 +229,6 @@ pub fn connect_via_container(container_name: &str, args: Vec<String>) -> Result<
     Ok(())
 }
 
-/// SSH connection configuration options
-#[derive(Debug, Clone)]
-pub struct SshConnectionOptions {
-    /// Common SSH options shared across implementations
-    pub common: CommonSshOptions,
-    /// Enable/disable TTY allocation (default: true)
-    pub allocate_tty: bool,
-    /// Suppress output to stdout/stderr (default: false)
-    pub suppress_output: bool,
-}
-
-/// Common SSH options that can be shared between different SSH implementations
-#[derive(Debug, Clone)]
-pub struct CommonSshOptions {
-    /// Use strict host key checking
-    pub strict_host_keys: bool,
-    /// SSH connection timeout in seconds
-    pub connect_timeout: u32,
-    /// Server alive interval in seconds
-    pub server_alive_interval: u32,
-    /// SSH log level
-    pub log_level: String,
-    /// Additional SSH options as key-value pairs
-    pub extra_options: Vec<(String, String)>,
-}
-
-impl Default for CommonSshOptions {
-    fn default() -> Self {
-        Self {
-            strict_host_keys: false,
-            connect_timeout: 1,
-            server_alive_interval: 60,
-            log_level: "ERROR".to_string(),
-            extra_options: vec![],
-        }
-    }
-}
-
-impl CommonSshOptions {
-    /// Apply these options to an SSH command
-    pub fn apply_to_command(&self, cmd: &mut std::process::Command) {
-        // Basic security options
-        cmd.args(["-o", "IdentitiesOnly=yes"]);
-        cmd.args(["-o", "PasswordAuthentication=no"]);
-        cmd.args(["-o", "KbdInteractiveAuthentication=no"]);
-        cmd.args(["-o", "GSSAPIAuthentication=no"]);
-
-        // Connection options
-        cmd.args(["-o", &format!("ConnectTimeout={}", self.connect_timeout)]);
-        cmd.args([
-            "-o",
-            &format!("ServerAliveInterval={}", self.server_alive_interval),
-        ]);
-        cmd.args(["-o", &format!("LogLevel={}", self.log_level)]);
-
-        // Host key checking
-        if !self.strict_host_keys {
-            cmd.args(["-o", "StrictHostKeyChecking=no"]);
-            cmd.args(["-o", "UserKnownHostsFile=/dev/null"]);
-        }
-
-        // Add extra SSH options
-        for (key, value) in &self.extra_options {
-            cmd.args(["-o", &format!("{}={}", key, value)]);
-        }
-    }
-}
-
-impl Default for SshConnectionOptions {
-    fn default() -> Self {
-        Self {
-            common: CommonSshOptions::default(),
-            allocate_tty: true,
-            suppress_output: false,
-        }
-    }
-}
-
-impl SshConnectionOptions {
-    /// Create options suitable for quick connectivity tests (short timeout, no TTY)
-    pub fn for_connectivity_test() -> Self {
-        Self {
-            common: CommonSshOptions {
-                strict_host_keys: false,
-                connect_timeout: 2,
-                server_alive_interval: 60,
-                log_level: "ERROR".to_string(),
-                extra_options: vec![],
-            },
-            allocate_tty: false,
-            suppress_output: true,
-        }
-    }
-}
-
 /// Verify that a container exists and is running
 fn verify_container_running(container_name: &str) -> Result<()> {
     let status = Command::new("podman")
@@ -400,44 +307,6 @@ mod tests {
         let metadata = std::fs::metadata(key_pair.private_key_path.as_std_path()).unwrap();
         let permissions = metadata.permissions();
         assert_eq!(permissions.mode() & 0o777, 0o600);
-    }
-
-    #[test]
-    fn test_ssh_connection_options() {
-        // Test default options
-        let default_opts = SshConnectionOptions::default();
-        assert_eq!(default_opts.common.connect_timeout, 1);
-        assert!(default_opts.allocate_tty);
-        assert_eq!(default_opts.common.log_level, "ERROR");
-        assert!(default_opts.common.extra_options.is_empty());
-        assert!(!default_opts.suppress_output);
-
-        // Test connectivity test options
-        let test_opts = SshConnectionOptions::for_connectivity_test();
-        assert_eq!(test_opts.common.connect_timeout, 2);
-        assert!(!test_opts.allocate_tty);
-        assert_eq!(test_opts.common.log_level, "ERROR");
-        assert!(test_opts.common.extra_options.is_empty());
-        assert!(test_opts.suppress_output);
-
-        // Test custom options
-        let mut custom_opts = SshConnectionOptions::default();
-        custom_opts.common.connect_timeout = 10;
-        custom_opts.allocate_tty = false;
-        custom_opts.common.log_level = "DEBUG".to_string();
-        custom_opts
-            .common
-            .extra_options
-            .push(("ServerAliveInterval".to_string(), "30".to_string()));
-
-        assert_eq!(custom_opts.common.connect_timeout, 10);
-        assert!(!custom_opts.allocate_tty);
-        assert_eq!(custom_opts.common.log_level, "DEBUG");
-        assert_eq!(custom_opts.common.extra_options.len(), 1);
-        assert_eq!(
-            custom_opts.common.extra_options[0],
-            ("ServerAliveInterval".to_string(), "30".to_string())
-        );
     }
 
     #[test]
