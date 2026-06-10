@@ -11,6 +11,7 @@ mod cpio;
 mod install_options;
 mod instancetypes;
 mod qemu_img;
+mod ssh_options;
 mod xml_utils;
 
 // Linux-only modules
