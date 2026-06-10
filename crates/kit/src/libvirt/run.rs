@@ -359,9 +359,10 @@ impl LibvirtRunOpts {
     }
 }
 
-/// Wait for SSH to become available on a libvirt domain
+/// Wait for SSH to become available on a libvirt domain.
 ///
-/// Polls SSH connectivity by attempting simple commands until successful or timeout.
+/// Uses the same `wait_for_readiness` polling loop as the ephemeral path
+/// and `run_ssh_impl`, just with a longer timeout for initial VM boot.
 fn wait_for_ssh_ready(
     global_opts: &crate::libvirt::LibvirtOptions,
     domain_name: &str,
@@ -374,39 +375,36 @@ fn wait_for_ssh_ready(
         domain_name, timeout_secs
     );
 
-    // Create progress bar
+    // Do expensive setup once: verify domain, extract SSH config, create temp key.
+    let ssh_opts = crate::libvirt::ssh::LibvirtSshOpts {
+        domain_name: domain_name.to_string(),
+        user: "root".to_string(),
+        command: vec![],
+        strict_host_keys: false,
+        timeout: 5,
+        log_level: "ERROR".to_string(),
+        extra_options: vec![],
+        suppress_output: true,
+    };
+    ssh_opts.verify_domain_running(global_opts)?;
+    let ssh_config = ssh_opts.extract_ssh_config(global_opts)?;
+    let (temp_key, parsed_extra_options) = ssh_opts.prepare_ssh_session(&ssh_config)?;
+
     let pb = crate::boot_progress::create_boot_progress_bar();
-    pb.set_message("Waiting for SSH to become available...");
-
-    // Clone values for closure
-    let global_opts_clone = global_opts.clone();
-    let domain_name_clone = domain_name.to_string();
-
-    // Use shared polling function with libvirt-specific test
     let (_elapsed, pb) = crate::utils::wait_for_readiness(
         pb,
         "Waiting for SSH",
         || {
-            // Create a test SSH connection with short timeout
-            let ssh_opts = crate::libvirt::ssh::LibvirtSshOpts {
-                domain_name: domain_name_clone.clone(),
-                user: "root".to_string(),
-                command: vec!["true".to_string()], // Simple command to test connectivity
-                strict_host_keys: false,
-                timeout: 5, // Short timeout for each attempt
-                log_level: "ERROR".to_string(),
-                extra_options: vec![],
-                suppress_output: true, // Suppress error messages during connectivity testing
-            };
-
-            // Try to connect
-            match crate::libvirt::ssh::run_ssh_impl(&global_opts_clone, ssh_opts) {
-                Ok(_) => Ok(true),
-                Err(_) => Ok(false),
+            let mut test_cmd =
+                ssh_opts.build_ssh_command(&ssh_config, &temp_key, parsed_extra_options.clone());
+            test_cmd.arg("--").arg("true");
+            match test_cmd.output() {
+                Ok(output) if output.status.success() => Ok(true),
+                _ => Ok(false),
             }
         },
         Duration::from_secs(timeout_secs),
-        Duration::from_secs(2), // Poll every 2 seconds
+        Duration::from_secs(2),
     )?;
 
     pb.finish_and_clear();

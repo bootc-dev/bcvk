@@ -15,7 +15,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile;
 use tracing::debug;
 
@@ -60,7 +60,7 @@ pub struct LibvirtSshOpts {
 
 /// SSH configuration extracted from domain metadata
 #[derive(Debug)]
-struct DomainSshConfig {
+pub(crate) struct DomainSshConfig {
     private_key_content: String,
     ssh_port: u16,
     is_generated: bool,
@@ -93,7 +93,7 @@ impl LibvirtSshOpts {
     }
 
     /// Extract SSH configuration from domain XML metadata
-    fn extract_ssh_config(
+    pub(crate) fn extract_ssh_config(
         &self,
         global_opts: &crate::libvirt::LibvirtOptions,
     ) -> Result<DomainSshConfig> {
@@ -243,7 +243,7 @@ impl LibvirtSshOpts {
     }
 
     /// Build SSH command with configured options
-    fn build_ssh_command(
+    pub(crate) fn build_ssh_command(
         &self,
         ssh_config: &DomainSshConfig,
         temp_key: &tempfile::NamedTempFile,
@@ -269,25 +269,34 @@ impl LibvirtSshOpts {
         ssh_cmd
     }
 
-    /// Execute SSH connection to domain with retries
-    fn connect_ssh(
+    /// Verify the domain exists and is running.
+    pub(crate) fn verify_domain_running(
         &self,
-        _global_opts: &crate::libvirt::LibvirtOptions,
-        ssh_config: &DomainSshConfig,
+        global_opts: &crate::libvirt::LibvirtOptions,
     ) -> Result<()> {
-        debug!(
-            "Connecting to domain '{}' via SSH on port {} (user: {})",
-            self.domain_name, ssh_config.ssh_port, self.user
-        );
-
-        if ssh_config.is_generated {
-            debug!("Using ephemeral SSH key from domain metadata");
+        if !self.check_domain_exists(global_opts)? {
+            return Err(eyre!("Domain '{}' not found", self.domain_name));
         }
+        let state = self.get_domain_state(global_opts)?;
+        if state != "running" {
+            return Err(eyre!(
+                "Domain '{}' is not running (current state: {}). Start it first with: virsh start {}",
+                self.domain_name,
+                state,
+                self.domain_name
+            ));
+        }
+        Ok(())
+    }
 
-        // Create temporary SSH key file
+    /// Create temp key file and parse extra SSH options — shared setup for
+    /// both the retry path and single-attempt tests.
+    pub(crate) fn prepare_ssh_session(
+        &self,
+        ssh_config: &DomainSshConfig,
+    ) -> Result<(tempfile::NamedTempFile, Vec<(String, String)>)> {
         let temp_key = self.create_temp_ssh_key(ssh_config)?;
 
-        // Parse extra options
         let mut parsed_extra_options = Vec::new();
         for option in &self.extra_options {
             if let Some((key, value)) = option.split_once('=') {
@@ -299,65 +308,29 @@ impl LibvirtSshOpts {
                 ));
             }
         }
+        Ok((temp_key, parsed_extra_options))
+    }
 
-        let start_time = Instant::now();
-        let timeout = Duration::from_secs(SSH_RETRY_TIMEOUT_SECS);
-
-        // First, do connectivity check with retries (for both interactive and command)
-        debug!("Testing SSH connectivity before session");
-
-        // Create progress bar for user feedback (only shown in terminals)
-        let pb = crate::boot_progress::create_boot_progress_bar();
-        pb.set_message("Waiting for SSH to be ready...");
-
-        loop {
-            let mut test_cmd =
-                self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options.clone());
-            test_cmd.arg("--").arg("true"); // Simple test command
-
-            let output = test_cmd.output().context("Failed to spawn SSH command")?;
-
-            if output.status.success() {
-                debug!(
-                    "SSH connectivity confirmed after {:.1}s",
-                    start_time.elapsed().as_secs_f64()
-                );
-                pb.finish_and_clear();
-                break;
-            }
-
-            // Check if we've exceeded timeout
-            if start_time.elapsed() >= timeout {
-                pb.finish_and_clear();
-                if !self.suppress_output {
-                    let stderr_str = String::from_utf8_lossy(&output.stderr);
-                    eprint!("{}", stderr_str);
-                    eprintln!(
-                        "\nSSH connection failed after {:.1}s. To see VM console output, run: virsh console {}",
-                        start_time.elapsed().as_secs_f64(),
-                        self.domain_name
-                    );
-                }
-                return Err(eyre!("SSH connection failed after timeout"));
-            }
-
-            std::thread::sleep(Duration::from_secs(SSH_POLL_DELAY_SECS));
-        }
-
-        // SSH is ready - now do the actual operation (oneshot)
+    /// Execute the SSH session (interactive or command) after connectivity
+    /// has already been confirmed by the caller.
+    fn exec_ssh_session(
+        &self,
+        ssh_config: &DomainSshConfig,
+        temp_key: &tempfile::NamedTempFile,
+        parsed_extra_options: Vec<(String, String)>,
+    ) -> Result<()> {
         if self.command.is_empty() {
-            // Interactive: exec directly
-            debug!("SSH ready, launching interactive session");
-            let mut ssh_cmd = self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options);
+            // Interactive: exec directly (replaces current process)
+            debug!("Launching interactive SSH session");
+            let mut ssh_cmd = self.build_ssh_command(ssh_config, temp_key, parsed_extra_options);
             let error = ssh_cmd.exec();
             return Err(eyre!("Failed to exec SSH command: {}", error));
         }
 
-        // Command execution: single attempt since we already confirmed connectivity
-        debug!("SSH ready, executing command");
-        let mut ssh_cmd = self.build_ssh_command(ssh_config, &temp_key, parsed_extra_options);
+        // Command execution
+        debug!("Executing SSH command");
+        let mut ssh_cmd = self.build_ssh_command(ssh_config, temp_key, parsed_extra_options);
 
-        // Add command
         ssh_cmd.arg("--");
         if self.command.len() > 1 {
             let combined_command = crate::ssh::shell_escape_command(&self.command)
@@ -367,7 +340,6 @@ impl LibvirtSshOpts {
             ssh_cmd.args(&self.command);
         }
 
-        // Execute command
         let output = ssh_cmd
             .output()
             .map_err(|e| eyre!("Failed to execute SSH command: {}", e))?;
@@ -376,14 +348,9 @@ impl LibvirtSshOpts {
             if !output.stdout.is_empty() && !self.suppress_output {
                 print!("{}", String::from_utf8_lossy(&output.stdout));
             }
-            debug!(
-                "Command completed successfully after {:.1}s total",
-                start_time.elapsed().as_secs_f64()
-            );
             return Ok(());
         }
 
-        // Command failed
         if !self.suppress_output {
             let stderr_str = String::from_utf8_lossy(&output.stderr);
             eprint!("{}", stderr_str);
@@ -400,36 +367,63 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtSshOpts) -
     run_ssh_impl(global_opts, opts)
 }
 
-/// SSH implementation
+/// SSH implementation — waits for connectivity then runs the session.
 pub fn run_ssh_impl(
     global_opts: &crate::libvirt::LibvirtOptions,
     opts: LibvirtSshOpts,
 ) -> Result<()> {
     debug!("Connecting to libvirt domain: {}", opts.domain_name);
 
-    // Check if domain exists
-    if !opts.check_domain_exists(global_opts)? {
-        return Err(eyre!("Domain '{}' not found", opts.domain_name));
-    }
+    opts.verify_domain_running(global_opts)?;
 
-    // Check if domain is running
-    let state = opts.get_domain_state(global_opts)?;
-    if state != "running" {
-        return Err(eyre!(
-            "Domain '{}' is not running (current state: {}). Start it first with: virsh start {}",
-            opts.domain_name,
-            state,
-            opts.domain_name
-        ));
-    }
-
-    // Extract SSH configuration from domain metadata
     let ssh_config = opts.extract_ssh_config(global_opts)?;
 
-    // Connect via SSH with retries
-    opts.connect_ssh(global_opts, &ssh_config)?;
+    if ssh_config.is_generated {
+        debug!("Using ephemeral SSH key from domain metadata");
+    }
 
-    Ok(())
+    let (temp_key, parsed_extra_options) = opts.prepare_ssh_session(&ssh_config)?;
+
+    // Wait for SSH connectivity using the shared polling loop — same
+    // pattern as the ephemeral path in run_ephemeral_ssh::wait_for_ssh_ready.
+    let mut last_stderr = String::new();
+    let pb = crate::boot_progress::create_boot_progress_bar();
+    let (_elapsed, pb) = crate::utils::wait_for_readiness(
+        pb,
+        "Waiting for SSH",
+        || {
+            let mut test_cmd =
+                opts.build_ssh_command(&ssh_config, &temp_key, parsed_extra_options.clone());
+            test_cmd.arg("--").arg("true");
+
+            match test_cmd.output() {
+                Ok(output) if output.status.success() => Ok(true),
+                Ok(output) => {
+                    last_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                    Ok(false)
+                }
+                Err(_) => Ok(false),
+            }
+        },
+        Duration::from_secs(SSH_RETRY_TIMEOUT_SECS),
+        Duration::from_secs(SSH_POLL_DELAY_SECS),
+    )
+    .map_err(|_| {
+        if !opts.suppress_output {
+            if !last_stderr.is_empty() {
+                eprint!("{}", last_stderr);
+            }
+            eprintln!(
+                "\nSSH connection failed. To see VM console output, run: virsh console {}",
+                opts.domain_name
+            );
+        }
+        eyre!("SSH connection failed after timeout")
+    })?;
+    pb.finish_and_clear();
+
+    // Connectivity confirmed — run the actual session
+    opts.exec_ssh_session(&ssh_config, &temp_key, parsed_extra_options)
 }
 
 #[cfg(test)]
