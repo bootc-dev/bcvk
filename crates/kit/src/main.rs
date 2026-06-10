@@ -10,6 +10,7 @@ mod common_opts;
 mod cpio;
 mod install_options;
 mod instancetypes;
+mod kernel_cmdline;
 mod qemu_img;
 mod ssh_options;
 mod xml_utils;
@@ -56,7 +57,6 @@ mod supervisor_status;
 pub(crate) mod systemd;
 #[cfg(target_os = "linux")]
 mod to_disk;
-#[cfg(target_os = "linux")]
 mod utils;
 #[cfg(target_os = "linux")]
 mod varlink_ipc;

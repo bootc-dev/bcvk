@@ -4,9 +4,11 @@
 //! Common logic (deploy, systemd-run, stop) lives in vm_helpers.rs.
 
 use color_eyre::{eyre::bail, Result};
+use indicatif::ProgressBar;
 use std::time::Duration;
 use tracing::info;
 
+use crate::utils::wait_for_readiness;
 use crate::vm_helpers;
 
 /// NBD server binary (aarch64 ELF), embedded at compile time.
@@ -39,66 +41,66 @@ pub(crate) fn start_nbd_server(
     )?;
 
     // macOS-specific: unexpose stale entry then expose via gvproxy's in-VM API
+    let gw = vm_helpers::GVPROXY_GATEWAY;
+    let vm_ip = vm_helpers::GVPROXY_VM_IP;
     let unexpose_cmd = format!(
-        "curl -s -X POST http://192.168.127.1:80/services/forwarder/unexpose \
+        "curl -s -X POST http://{gw}:80/services/forwarder/unexpose \
          -H 'Content-Type: application/json' \
          -d '{{\"local\":\":{nbd_port}\",\"protocol\":\"tcp\"}}' >/dev/null 2>&1; true",
-        nbd_port = nbd_port,
     );
     if let Err(e) = vm_helpers::machine_ssh(machine, &unexpose_cmd) {
         tracing::debug!("failed to unexpose port {}: {}", nbd_port, e);
     }
 
     let expose_cmd = format!(
-        "curl -s -X POST http://192.168.127.1:80/services/forwarder/expose \
+        "curl -s -X POST http://{gw}:80/services/forwarder/expose \
          -H 'Content-Type: application/json' \
-         -d '{{\"local\":\":{nbd_port}\",\"remote\":\"192.168.127.2:{nbd_port}\",\"protocol\":\"tcp\"}}'",
-        nbd_port = nbd_port,
+         -d '{{\"local\":\":{nbd_port}\",\"remote\":\"{vm_ip}:{nbd_port}\",\"protocol\":\"tcp\"}}'",
     );
-    let mut exposed = false;
-    for i in 0..5 {
-        if let Ok(output) = vm_helpers::machine_ssh_output(machine, &expose_cmd) {
-            if output.status.success() {
-                exposed = true;
-                break;
-            }
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            tracing::debug!(
-                "gvproxy expose attempt {}: {}{}",
-                i + 1,
-                stdout.trim(),
-                stderr.trim()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    if !exposed {
-        bail!("gvproxy expose failed for port {}", nbd_port);
-    }
+    let expose_cmd_clone = expose_cmd.clone();
+    let machine_clone = machine.to_string();
+    wait_for_readiness(
+        ProgressBar::hidden(),
+        &format!("Exposing NBD port {}", nbd_port),
+        move || match vm_helpers::machine_ssh_output(&machine_clone, &expose_cmd_clone) {
+            Ok(output) if output.status.success() => Ok(true),
+            _ => Ok(false),
+        },
+        Duration::from_secs(5),
+        Duration::from_millis(500),
+    )
+    .map_err(|_| color_eyre::eyre::eyre!("gvproxy expose failed for port {}", nbd_port))?;
 
     info!("waiting for nbd server on port {}...", nbd_port);
-    loop {
-        if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([127, 0, 0, 1], nbd_port)),
-            Duration::from_millis(500),
-        ) {
-            use std::io::Read;
-            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-            let mut buf = [0u8; 8];
-            if stream.read_exact(&mut buf).is_ok() && &buf == b"NBDMAGIC" {
-                break;
+    let machine_clone = machine.to_string();
+    let unit_name_clone = unit_name.clone();
+    wait_for_readiness(
+        ProgressBar::hidden(),
+        &format!("Waiting for NBD server on port {}", nbd_port),
+        move || {
+            if vm_helpers::is_nbd_unit_dead(&machine_clone, &unit_name_clone) {
+                bail!(
+                    "nbd server '{}' died before becoming ready on port {}",
+                    unit_name_clone,
+                    nbd_port
+                );
             }
-        }
-        if vm_helpers::is_nbd_unit_dead(machine, &unit_name) {
-            bail!(
-                "nbd server '{}' died before becoming ready on port {}",
-                unit_name,
-                nbd_port
-            );
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
+            if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], nbd_port)),
+                Duration::from_millis(500),
+            ) {
+                use std::io::Read;
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = [0u8; 8];
+                if stream.read_exact(&mut buf).is_ok() && &buf == b"NBDMAGIC" {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        },
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+    )?;
 
     Ok(unit_name)
 }
@@ -132,9 +134,10 @@ pub fn stop_nbd_server(unit_name: &str, nbd_port: Option<u16>) {
             if let Err(e) = vm_helpers::machine_ssh(
                 &machine,
                 &format!(
-                    "curl -sf -X POST http://192.168.127.1:80/services/forwarder/unexpose \
+                    "curl -sf -X POST http://{}:80/services/forwarder/unexpose \
                      -H 'Content-Type: application/json' \
                      -d '{{\"local\":\":{}\",\"protocol\":\"tcp\"}}'",
+                    vm_helpers::GVPROXY_GATEWAY,
                     port
                 ),
             ) {

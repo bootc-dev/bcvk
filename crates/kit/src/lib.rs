@@ -6,22 +6,9 @@ pub mod xml_utils;
 
 // Cross-platform modules
 pub mod install_options;
+pub mod kernel_cmdline;
 pub mod ssh_options;
 
 // Linux-only modules
 #[cfg(target_os = "linux")]
 pub mod kernel;
-
-// macOS-only modules (vfkit backend)
-#[cfg(target_os = "macos")]
-pub mod nbd_macos;
-#[cfg(target_os = "macos")]
-pub mod run_ephemeral_macos;
-
-#[cfg(target_os = "macos")]
-pub mod instancetypes;
-#[cfg(target_os = "macos")]
-pub mod to_disk_macos;
-#[cfg(target_os = "macos")]
-pub mod vfkit;
-pub mod vm_helpers;

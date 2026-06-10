@@ -12,6 +12,12 @@ use tracing::info;
 
 use crate::ssh_options::CommonSshOptions;
 
+/// gvproxy default gateway IP (from `-subnet 192.168.127.0/24`).
+pub(crate) const GVPROXY_GATEWAY: &str = "192.168.127.1";
+
+/// VM device IP assigned by gvproxy DHCP static lease.
+pub(crate) const GVPROXY_VM_IP: &str = "192.168.127.2";
+
 /// SSH connection timeout (shared by wait_for_ssh).
 pub const SSH_TIMEOUT: Duration = Duration::from_secs(240);
 
