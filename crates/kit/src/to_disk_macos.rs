@@ -137,37 +137,14 @@ fn generate_bootc_install_script(
         format!("  {} \\\n", label_args)
     };
 
-    format!(
-        r#"set -euo pipefail
-{rust_log}
-LOOP=$({sudo}losetup -fP --show {disk_path})
-echo "Loop device: $LOOP"
-trap '{sudo}losetup -d $LOOP 2>/dev/null' EXIT
-
-printf '%s' '{b64}' | base64 -d > /dev/shm/bcvk-ssh-key.pub
-
-echo "Running bootc install to-disk..."
-podman run --rm --privileged --pid=host --net=none \
-  -v /dev:/dev \
-  -v /dev/shm:/dev/shm \
-  -v /var/lib/containers:/var/lib/containers \
-{label_line}  {image} bootc install to-disk \
-  --generic-image --skip-fetch-check --wipe \
-  --root-ssh-authorized-keys /dev/shm/bcvk-ssh-key.pub \
-  {bootc_args} $LOOP
-
-rm -f /dev/shm/bcvk-ssh-key.pub
-
-echo "Installation complete!"
-"#,
-        rust_log = rust_log_line,
-        sudo = sudo,
-        disk_path = disk_path_in_machine,
-        b64 = pub_key_b64,
-        image = image_quoted,
-        bootc_args = bootc_args,
-        label_line = label_line,
-    )
+    include_str!("../scripts/bootc-install-to-disk.sh")
+        .replace("@@RUST_LOG@@", &rust_log_line)
+        .replace("@@SUDO@@", sudo)
+        .replace("@@DISK_PATH@@", disk_path_in_machine)
+        .replace("@@SSH_PUBKEY_B64@@", &pub_key_b64)
+        .replace("@@LABEL_LINE@@", &label_line)
+        .replace("@@IMAGE@@", &image_quoted)
+        .replace("@@BOOTC_ARGS@@", &bootc_args)
 }
 
 const CACHE_HASH_XATTR: &str = "user.bcvk.cache_hash";
@@ -388,6 +365,7 @@ pub fn run(opts: ToDiskMacosOpts) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -87,7 +87,12 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
 
     info!("setting up SSH port forwarding...");
     for attempt in 0..15u32 {
-        match expose_port(&services_sock_str, "192.168.127.2", meta.ssh_port, 22) {
+        match expose_port(
+            &services_sock_str,
+            crate::vm_helpers::GVPROXY_VM_IP,
+            meta.ssh_port,
+            22,
+        ) {
             Ok(_) => {
                 info!("SSH port {} forwarded", meta.ssh_port);
                 break;
@@ -102,7 +107,12 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
     }
 
     for &(host_port, guest_port) in &meta.port_mappings {
-        expose_port(&services_sock_str, "192.168.127.2", host_port, guest_port)?;
+        expose_port(
+            &services_sock_str,
+            crate::vm_helpers::GVPROXY_VM_IP,
+            host_port,
+            guest_port,
+        )?;
         info!("port {}:{} forwarded", host_port, guest_port);
     }
 
