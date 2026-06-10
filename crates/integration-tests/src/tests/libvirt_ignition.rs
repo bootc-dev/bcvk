@@ -25,11 +25,23 @@ fn random_suffix() -> String {
 /// Fedora CoreOS image that supports Ignition
 const FCOS_IMAGE: &str = "quay.io/fedora/fedora-coreos:stable";
 
-/// Test that Ignition config injection mechanism works for libvirt
+/// Test that Ignition config injection mechanism works end-to-end for libvirt.
 ///
-/// This test verifies that the Ignition config injection mechanism is working
-/// by checking that the VM can be created with --ignition flag and that the
-/// config file is properly stored.
+/// DISABLED: FCOS installed via `bootc install` drops into emergency mode
+/// because the partition layout (BIOS boot + EFI + root) lacks the separate
+/// "boot"-labeled partition that FCOS's `coreos-boot-mount-generator` expects.
+/// The 90-second device wait for `/dev/disk/by-label/boot` times out, SSHD
+/// never starts, and the root account is locked.  Additionally, Ignition
+/// itself is skipped — `bootc install` marks the disk as already provisioned,
+/// so FCOS treats every boot as "subsequent."
+///
+/// The upstream fix (extending `coreos-boot-mount-generator` to tolerate
+/// missing boot partitions for the `bootc install` case, analogous to the
+/// virtiofs fix in <https://github.com/coreos/fedora-coreos-config/pull/3859>)
+/// has not landed yet.  Re-enable this test once it does.
+///
+/// See also: <https://github.com/coreos/fedora-coreos-config/issues/400>
+#[allow(dead_code)]
 fn test_libvirt_ignition_works() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
@@ -86,7 +98,8 @@ fn test_libvirt_ignition_works() -> TestResult {
     println!("Ignition config injection test passed");
     Ok(())
 }
-integration_test!(test_libvirt_ignition_works);
+// DISABLED: see doc comment above for rationale and upstream links.
+// integration_test!(test_libvirt_ignition_works);
 
 /// Test that Ignition config validation rejects nonexistent files
 fn test_libvirt_ignition_invalid_path() -> TestResult {
