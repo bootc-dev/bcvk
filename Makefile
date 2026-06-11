@@ -67,4 +67,28 @@ update-manpages:
 
 update-generated: sync-manpages manpages
 
-.PHONY: all bin install manpages update-generated makesudoinstall sync-manpages update-manpages sync-cli-options
+.PHONY: all bin install manpages update-generated makesudoinstall sync-manpages update-manpages sync-cli-options plugin-so-aarch64 plugin-so-x86_64 nbd-server-aarch64 nbd-server-x86_64
+
+.PHONY: plugin-so-aarch64
+plugin-so-aarch64:
+	cargo zigbuild --target aarch64-unknown-linux-gnu --release -p nbdkit-erofs-plugin
+	cp target/aarch64-unknown-linux-gnu/release/libnbdkit_erofs_plugin.so \
+	   crates/kit/nbdkit-erofs-plugin-aarch64.so
+
+.PHONY: plugin-so-x86_64
+plugin-so-x86_64:
+	cargo zigbuild --target x86_64-unknown-linux-gnu --release -p nbdkit-erofs-plugin
+	cp target/x86_64-unknown-linux-gnu/release/libnbdkit_erofs_plugin.so \
+	   crates/kit/nbdkit-erofs-plugin-x86_64.so
+
+.PHONY: nbd-server-aarch64
+nbd-server-aarch64:
+	cargo zigbuild --target aarch64-unknown-linux-gnu --release -p bcvk-nbd
+	cp target/aarch64-unknown-linux-gnu/release/bcvk-nbd \
+	   crates/kit/bcvk-nbd-aarch64
+
+.PHONY: nbd-server-x86_64
+nbd-server-x86_64:
+	cargo zigbuild --target x86_64-unknown-linux-gnu --release -p bcvk-nbd
+	cp target/x86_64-unknown-linux-gnu/release/bcvk-nbd \
+	   crates/kit/bcvk-nbd-x86_64

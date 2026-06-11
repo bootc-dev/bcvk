@@ -21,6 +21,19 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install zig and cargo-zigbuild
+        run: |
+          brew install zig
+          cargo install cargo-zigbuild
+
+      - name: Build nbdkit EROFS plugin (.so)
+        run: make plugin-so-aarch64
+
+      - name: Build NBD server binary
+        run: make nbd-server-aarch64
 
       - name: Check build
         run: cargo check --all-targets

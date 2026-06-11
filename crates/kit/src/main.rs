@@ -10,7 +10,9 @@ mod common_opts;
 mod cpio;
 mod install_options;
 mod instancetypes;
+mod kernel_cmdline;
 mod qemu_img;
+mod ssh_options;
 mod xml_utils;
 
 // Linux-only modules
@@ -55,10 +57,23 @@ mod supervisor_status;
 pub(crate) mod systemd;
 #[cfg(target_os = "linux")]
 mod to_disk;
-#[cfg(target_os = "linux")]
 mod utils;
 #[cfg(target_os = "linux")]
 mod varlink_ipc;
+
+// macOS-only modules (vfkit backend)
+#[cfg(target_os = "macos")]
+mod ephemeral_macos;
+#[cfg(target_os = "macos")]
+mod nbd_macos;
+#[cfg(target_os = "macos")]
+mod run_ephemeral_macos;
+#[cfg(target_os = "macos")]
+mod to_disk_macos;
+#[cfg(target_os = "macos")]
+mod vfkit;
+#[cfg(target_os = "macos")]
+mod vm_helpers;
 
 /// Default state directory for bcvk container data
 #[cfg(target_os = "linux")]
@@ -104,8 +119,8 @@ enum InternalsCmds {
     DumpCliJson,
 }
 
-/// Stub subcommands for macOS (shows error message when run)
-#[cfg(not(target_os = "linux"))]
+/// Stub subcommands for unsupported platforms
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[derive(Debug, Subcommand)]
 pub enum StubEphemeralCommands {
     /// Run bootc containers as ephemeral VMs
@@ -139,9 +154,27 @@ enum Commands {
     #[clap(subcommand)]
     Ephemeral(ephemeral::EphemeralCommands),
 
-    // macOS stub: ephemeral command exists but errors out
-    #[cfg(not(target_os = "linux"))]
-    /// Run bootc images as stateless VMs via QEMU+Podman (not available on this platform)
+    // macOS: vfkit-based ephemeral VMs
+    #[cfg(target_os = "macos")]
+    /// Manage ephemeral VMs for bootc containers (vfkit backend)
+    #[clap(subcommand)]
+    Ephemeral(ephemeral_macos::EphemeralCommands),
+
+    // macOS: vfkit-based persistent VMs
+    #[cfg(target_os = "macos")]
+    /// Manage persistent VMs (vfkit backend)
+    #[clap(subcommand, alias = "vfkit")]
+    Vm(vfkit::VmCommands),
+
+    // macOS: to-disk
+    #[cfg(target_os = "macos")]
+    /// Install bootc images to persistent disk images
+    #[clap(name = "to-disk")]
+    ToDisk(to_disk_macos::ToDiskMacosOpts),
+
+    // Other platforms: stub
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    /// Manage ephemeral VMs for bootc containers (not available on this platform)
     #[clap(subcommand)]
     Ephemeral(StubEphemeralCommands),
 
@@ -284,13 +317,22 @@ fn main() -> Result<(), Report> {
         #[cfg(target_os = "linux")]
         Commands::Ephemeral(cmd) => cmd.run()?,
 
-        // macOS stub: ephemeral command exists but errors out
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        Commands::Ephemeral(cmd) => cmd.run()?,
+
+        #[cfg(target_os = "macos")]
+        Commands::Vm(cmd) => cmd.run()?,
+
+        #[cfg(target_os = "macos")]
+        Commands::ToDisk(opts) => {
+            to_disk_macos::run(opts)?;
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         Commands::Ephemeral(_) => {
             return Err(color_eyre::eyre::eyre!(
-                "The 'ephemeral' command is not available on macOS.\n\
-                 bcvk requires Linux with KVM/QEMU for VM operations.\n\
-                 See https://github.com/bootc-dev/bcvk/issues/21 for more information."
+                "The 'ephemeral' command is not available on this platform.\n\
+                 bcvk requires Linux with KVM/QEMU or macOS with vfkit for VM operations."
             ));
         }
 

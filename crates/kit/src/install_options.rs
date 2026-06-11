@@ -5,7 +5,7 @@
 //! and other installation-related commands.
 
 // On non-Linux, this module is unused as it's for installation operations
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 
 use camino::Utf8PathBuf;
 use clap::Parser;
@@ -52,6 +52,10 @@ pub struct InstallOptions {
     /// backend
     #[clap(long, requires = "composefs_backend")]
     pub allow_missing_fsverity: bool,
+
+    /// Path to an authorized_keys file to inject into the root account
+    #[clap(long)]
+    pub root_ssh_authorized_keys: Option<Utf8PathBuf>,
 }
 
 impl InstallOptions {
@@ -89,6 +93,11 @@ impl InstallOptions {
 
         if self.allow_missing_fsverity {
             args.push("--allow-missing-fsverity".into());
+        }
+
+        if let Some(ref key_path) = self.root_ssh_authorized_keys {
+            args.push("--root-ssh-authorized-keys".to_string());
+            args.push(key_path.to_string());
         }
 
         args
