@@ -77,6 +77,7 @@ pub fn run_create(
         &image_digest,
         &opts.install_options,
         connect_uri,
+        None,
     )?;
     println!("Created base disk: {path}");
 

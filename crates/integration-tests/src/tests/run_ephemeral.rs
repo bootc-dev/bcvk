@@ -406,7 +406,7 @@ integration_test!(test_run_ephemeral_virtiofs_mmap);
 /// Test that ephemeral VMs have the expected mount layout:
 /// - / is read-only virtiofs
 /// - /etc is overlayfs with tmpfs upper (writable)
-/// - /var is tmpfs (not overlayfs, so podman can use overlayfs inside)
+/// - /var is overlayfs with tmpfs upper (writable, instant setup for large /var trees)
 fn test_run_ephemeral_mount_layout() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
@@ -446,7 +446,8 @@ fn test_run_ephemeral_mount_layout() -> TestResult {
         etc_fstype
     );
 
-    // Check /var mount - should be tmpfs, NOT overlay
+    // Check /var mount - should be overlay (using overlayfs for instant setup,
+    // avoiding slow/failing cp -a of large /var trees on virtiofs)
     let var_fstype = cmd!(
         sh,
         "{bck} ephemeral run --rm --label {label} --execute 'findmnt -n -o FSTYPE /var' {image}"
@@ -454,8 +455,8 @@ fn test_run_ephemeral_mount_layout() -> TestResult {
     .read()?;
     assert_eq!(
         var_fstype.trim(),
-        "tmpfs",
-        "/var should be tmpfs (not overlay), got: {}",
+        "overlay",
+        "/var should be overlay, got: {}",
         var_fstype
     );
 

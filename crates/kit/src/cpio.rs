@@ -94,7 +94,7 @@ pub fn create_initramfs_units_cpio() -> io::Result<Vec<u8>> {
         ),
         File(
             "usr/lib/systemd/system/initrd-fs.target.d/bcvk-var-ephemeral.conf",
-            b"[Unit]\nWants=bcvk-var-ephemeral.service\n",
+            b"[Unit]\nRequires=bcvk-var-ephemeral.service\n",
         ),
         File(
             "usr/lib/systemd/system/initrd-fs.target.d/bcvk-copy-units.conf",

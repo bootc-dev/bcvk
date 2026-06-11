@@ -10,6 +10,10 @@ Requires=sysroot.mount
 Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=60
-ExecStart=/usr/bin/mkdir -p /run/var-ephemeral
-ExecStart=/usr/bin/cp -a /sysroot/var/. /run/var-ephemeral/
-ExecStart=/usr/bin/mount --bind /run/var-ephemeral /sysroot/var
+# Use overlayfs like /etc to avoid copying large files
+# from virtiofs to tmpfs. The cp -a approach fails on virtiofs due to xattr issues
+# and is prohibitively slow for large /var trees.
+# Bind-mount /sysroot/var to a separate location first (same technique as /etc overlay).
+ExecStart=/usr/bin/mkdir -p /run/var-lower /run/var-upper /run/var-work
+ExecStart=/usr/bin/mount --bind /sysroot/var /run/var-lower
+ExecStart=/usr/bin/mount -t overlay overlay -o lowerdir=/run/var-lower,upperdir=/run/var-upper,workdir=/run/var-work,index=off,metacopy=off /sysroot/var
