@@ -18,6 +18,7 @@ pub fn find_or_create_base_disk(
     image_digest: &str,
     install_options: &InstallOptions,
     connect_uri: Option<&str>,
+    virtiofsd_binary: Option<String>,
 ) -> Result<Utf8PathBuf> {
     let metadata = DiskImageMetadata::from(install_options, image_digest, source_image);
     let cache_hash = metadata.compute_cache_hash();
@@ -67,6 +68,7 @@ pub fn find_or_create_base_disk(
         image_digest,
         install_options,
         connect_uri,
+        virtiofsd_binary,
     )?;
 
     Ok(base_disk_path)
@@ -79,6 +81,7 @@ fn create_base_disk(
     image_digest: &str,
     install_options: &InstallOptions,
     connect_uri: Option<&str>,
+    virtiofsd_binary: Option<String>,
 ) -> Result<()> {
     use crate::run_ephemeral::CommonVmOpts;
     use crate::to_disk::{Format, ToDiskAdditionalOpts, ToDiskOpts};
@@ -116,6 +119,7 @@ fn create_base_disk(
                 memory: crate::common_opts::MemoryOpts {
                     memory: super::LIBVIRT_DEFAULT_MEMORY.to_string(),
                 },
+                virtiofsd_binary,
                 ..Default::default()
             },
             ..Default::default()
