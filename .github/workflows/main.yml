@@ -6,12 +6,16 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  merge_group:
 
 env:
   # Something seems to be setting this in the default GHA runners, which breaks bcvk
   # as the default runner user doesn't have access
   LIBVIRT_DEFAULT_URI: "qemu:///session"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-macos:
@@ -192,14 +196,20 @@ jobs:
           path: target/nextest/integration/junit.xml
           retention-days: 7
 
-  # Sentinel job for required checks - configure this job name in repository settings
+  # Sentinel job for required checks - configure this job name in repository settings.
+  # Accepts 'skipped' as success so that merge_group-only jobs don't block PRs.
   required-checks:
     if: always()
     needs: [build-macos, build, integration-tests]
     runs-on: ubuntu-latest
     steps:
-      - run: exit 1
-        if: >-
-          needs.build-macos.result != 'success' ||
-          needs.build.result != 'success' ||
-          needs.integration-tests.result != 'success'
+      - name: Check all jobs
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          FAILED=$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result | IN("success","skipped") | not) | .key')
+          if [ -n "$FAILED" ]; then
+            echo "The following jobs did not succeed: $FAILED"
+            exit 1
+          fi
+          echo "All jobs succeeded or were skipped."
