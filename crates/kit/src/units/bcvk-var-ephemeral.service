@@ -11,8 +11,8 @@ Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=60
 # Use overlayfs like /etc to avoid copying large files
-# from virtiofs to tmpfs. The cp -a approach fails on virtiofs due to xattr issues
-# and is prohibitively slow for large /var trees.
+# from virtiofs to tmpfs. The cp -a approach hangs and systemd continues to progress
+# stages which causes issues if /var never becomes read/write.
 # Bind-mount /sysroot/var to a separate location first (same technique as /etc overlay).
 ExecStart=/usr/bin/mkdir -p /run/var-lower /run/var-upper /run/var-work
 ExecStart=/usr/bin/mount --bind /sysroot/var /run/var-lower
