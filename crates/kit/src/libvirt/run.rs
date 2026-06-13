@@ -324,6 +324,17 @@ pub struct LibvirtRunOpts {
     /// Additional SMBIOS credentials to inject (used internally, not exposed via CLI)
     #[clap(skip)]
     pub extra_smbios_credentials: Vec<String>,
+
+    /// Write VM log streams to files in DIR.
+    ///
+    /// STREAMS is a comma-separated list of: `journal`, `console`
+    /// - `journal` → `journal.json` (systemd journal as JSON via virtio-serial channel)
+    /// - `console` → `console.txt` (VM virtio console output, i.e. hvc0)
+    ///
+    /// Examples: `--log-dir=journal,console=/tmp/run-001/`
+    ///           `--log-dir=journal=/tmp/logs/`
+    #[clap(long, value_name = "STREAMS=DIR")]
+    pub log_dir: Option<crate::run_ephemeral::LogDir>,
 }
 
 impl LibvirtRunOpts {
@@ -417,6 +428,16 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
 
     // Validate labels don't contain commas
     opts.validate_labels()?;
+
+    // Validate --log-dir early (before any expensive work).
+    if let Some(ref ld) = opts.log_dir {
+        if !ld.path.is_absolute() {
+            return Err(color_eyre::eyre::eyre!(
+                "--log-dir PATH must be absolute: {:?}",
+                ld.path
+            ));
+        }
+    }
 
     let connect_uri = global_opts.connect.as_deref();
     let lister = match global_opts.connect.as_ref() {
@@ -1426,6 +1447,44 @@ fn create_libvirt_domain_from_disk(
         smbios_creds.push(dropin_cred);
     }
 
+    // Validate and record the journal log file path if requested via --log-dir.
+    // For libvirt we only support target=file:, not stdout (there is no persistent
+    // bcvk process to relay the stream; QEMU writes directly to the file via chardev).
+    // Journal output is always JSON when writing to a file (libvirt only supports file).
+    let journal_file_path: Option<std::path::PathBuf> = if let Some(path) =
+        opts.log_dir.as_ref().and_then(|d| d.journal_path())
+    {
+        // Validate parent directory exists before handing off to libvirt.
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                return Err(color_eyre::eyre::eyre!(
+                    "--log-dir journal parent directory does not exist: {parent:?}"
+                ));
+            }
+        }
+        // Inject SMBIOS credentials for both streaming units (real-root + initrd).
+        let encoded_unit =
+            data_encoding::BASE64.encode(crate::run_ephemeral::JOURNAL_STREAM_UNIT.as_bytes());
+        smbios_creds.push(format!(
+            "io.systemd.credential.binary:systemd.extra-unit.bcvk-journal-stream.service={encoded_unit}"
+        ));
+        let encoded_unit_initrd = data_encoding::BASE64
+            .encode(crate::run_ephemeral::JOURNAL_STREAM_INITRD_UNIT.as_bytes());
+        smbios_creds.push(format!(
+            "io.systemd.credential.binary:systemd.extra-unit.bcvk-journal-stream-initrd.service={encoded_unit_initrd}"
+        ));
+        let journal_dropin =
+            "[Unit]\nWants=bcvk-journal-stream.service bcvk-journal-stream-initrd.service\n";
+        let encoded_dropin = data_encoding::BASE64.encode(journal_dropin.as_bytes());
+        smbios_creds.push(format!(
+            "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-journal={encoded_dropin}"
+        ));
+        debug!("Injected journal streaming unit credentials (file={path:?})");
+        Some(path)
+    } else {
+        None
+    };
+
     let mut qemu_args = Vec::new();
 
     // Build QEMU args with all SMBIOS credentials
@@ -1448,6 +1507,30 @@ fn create_libvirt_domain_from_disk(
     for extra_cred in &opts.extra_smbios_credentials {
         qemu_args.push("-smbios".to_string());
         qemu_args.push(format!("type=11,value={}", extra_cred));
+    }
+
+    // If journal output was requested, configure the DomainBuilder to emit a
+    // <channel type='file'> element.  Libvirt attaches it to the existing
+    // virtio-serial controller (created implicitly for the virtio console), so
+    // no extra QEMU args are needed.
+    if let Some(ref jpath) = journal_file_path {
+        let path_str = jpath
+            .to_str()
+            .ok_or_else(|| color_eyre::eyre::eyre!("journal file path is not valid UTF-8"))?;
+        domain_builder = domain_builder.with_journal_channel_file(path_str);
+        debug!("Added journal channel file → {path_str}");
+
+        // Also wire up the initrd journal channel (journal-initrd.json).
+        let initrd_path = opts
+            .log_dir
+            .as_ref()
+            .and_then(|d| d.journal_initrd_path())
+            .expect("journal_initrd_path always Some when journal_path is Some");
+        let initrd_path_str = initrd_path
+            .to_str()
+            .ok_or_else(|| color_eyre::eyre::eyre!("journal-initrd path is not valid UTF-8"))?;
+        domain_builder = domain_builder.with_journal_initrd_channel_file(initrd_path_str);
+        debug!("Added journal-initrd channel file → {initrd_path_str}");
     }
 
     // Build netdev user mode networking with port forwarding
@@ -1500,10 +1583,21 @@ fn create_libvirt_domain_from_disk(
         Ok(abs)
     };
 
-    let virtio_log = opts
-        .console_log
+    // --log-dir=console=DIR takes precedence over the legacy --console-log flag if
+    // both are somehow set; in practice only one will be provided.
+    let virtio_log_path: Option<Utf8PathBuf> = opts
+        .log_dir
+        .as_ref()
+        .and_then(|d| d.console_path())
+        .map(|p| {
+            Utf8PathBuf::try_from(p).map_err(|e| eyre!("console log path is not valid UTF-8: {e}"))
+        })
+        .transpose()?
+        .or_else(|| opts.console_log.clone());
+
+    let virtio_log = virtio_log_path
         .as_deref()
-        .map(|p| resolve_log_path(p, "--console-log"))
+        .map(|p| resolve_log_path(p, "--log-dir/--console-log"))
         .transpose()?;
 
     let serial_log = opts

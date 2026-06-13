@@ -94,9 +94,11 @@ use std::process::{Command, Stdio};
 
 use bootc_utils::CommandRunExt;
 use camino::{Utf8Path, Utf8PathBuf};
+use cap_std_ext::cmdext::CapStdExtCommandExt as _;
 use clap::Parser;
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
+use rustix::fd::FromRawFd as _;
 use rustix::path::Arg;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
@@ -128,6 +130,222 @@ const IGNITION_SERIAL_NAME: &str = "ignition";
 
 /// Mount path for Ignition config inside the container
 const IGNITION_CONFIG_MOUNT_PATH: &str = "/run/ignition-config.json";
+
+// ---------------------------------------------------------------------------
+// Journal / output mode types
+// ---------------------------------------------------------------------------
+
+/// Parsed value of `--log-dir=STREAMS=PATH`.
+///
+/// `STREAMS` is a comma-separated subset of `journal` and `console`; `PATH` is
+/// a directory to write log files into.  Files written:
+/// - `journal.json` when the `journal` stream is requested
+/// - `console.txt`  when the `console` stream is requested
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogDir {
+    pub path: std::path::PathBuf,
+    pub journal: bool,
+    pub console: bool,
+}
+
+impl LogDir {
+    /// Returns the path for `journal.json` if the journal stream was requested.
+    pub fn journal_path(&self) -> Option<std::path::PathBuf> {
+        self.journal.then(|| self.path.join("journal.json"))
+    }
+
+    /// Returns the path for `journal-initrd.json` if the journal stream was requested.
+    pub fn journal_initrd_path(&self) -> Option<std::path::PathBuf> {
+        self.journal.then(|| self.path.join("journal-initrd.json"))
+    }
+
+    /// Returns the path for `console.txt` if the console stream was requested.
+    pub fn console_path(&self) -> Option<std::path::PathBuf> {
+        self.console.then(|| self.path.join("console.txt"))
+    }
+}
+
+impl std::str::FromStr for LogDir {
+    type Err = color_eyre::eyre::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        // Split on the LAST `=` to support paths containing `=`.
+        let eq = s.rfind('=').ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "--log-dir value must have the form STREAMS=PATH (no `=` found): {s:?}"
+            )
+        })?;
+        let streams_str = &s[..eq];
+        let path_str = &s[eq + 1..];
+
+        if path_str.is_empty() {
+            return Err(color_eyre::eyre::eyre!(
+                "--log-dir PATH must not be empty: {s:?}"
+            ));
+        }
+        let path = std::path::PathBuf::from(path_str);
+
+        let mut journal = false;
+        let mut console = false;
+        for part in streams_str.split(',') {
+            match part.trim() {
+                "journal" => journal = true,
+                "console" => console = true,
+                "" => {}
+                other => {
+                    return Err(color_eyre::eyre::eyre!(
+                        "--log-dir unknown stream name {other:?}; expected `journal` or `console`"
+                    ))
+                }
+            }
+        }
+        if !journal && !console {
+            return Err(color_eyre::eyre::eyre!(
+                "--log-dir STREAMS must contain at least one of `journal`, `console`; got: {streams_str:?}"
+            ));
+        }
+
+        Ok(LogDir {
+            path,
+            journal,
+            console,
+        })
+    }
+}
+
+#[cfg(test)]
+mod logdir_tests {
+    use super::*;
+    use std::str::FromStr as _;
+
+    #[test]
+    fn test_log_dir_journal_only() {
+        let ld = LogDir::from_str("journal=/tmp/logs").unwrap();
+        assert!(ld.journal);
+        assert!(!ld.console);
+        assert_eq!(ld.path, std::path::PathBuf::from("/tmp/logs"));
+        assert_eq!(
+            ld.journal_path(),
+            Some(std::path::PathBuf::from("/tmp/logs/journal.json"))
+        );
+        assert_eq!(ld.console_path(), None);
+    }
+
+    #[test]
+    fn test_log_dir_console_only() {
+        let ld = LogDir::from_str("console=/tmp/logs").unwrap();
+        assert!(!ld.journal);
+        assert!(ld.console);
+        assert_eq!(
+            ld.console_path(),
+            Some(std::path::PathBuf::from("/tmp/logs/console.txt"))
+        );
+        assert_eq!(ld.journal_path(), None);
+    }
+
+    #[test]
+    fn test_log_dir_both() {
+        let ld = LogDir::from_str("journal,console=/tmp/run-001/").unwrap();
+        assert!(ld.journal);
+        assert!(ld.console);
+        assert_eq!(ld.path, std::path::PathBuf::from("/tmp/run-001/"));
+    }
+
+    #[test]
+    fn test_log_dir_path_no_trailing_slash() {
+        let ld = LogDir::from_str("journal=/var/tmp/run-001").unwrap();
+        assert_eq!(ld.path, std::path::PathBuf::from("/var/tmp/run-001"));
+        assert_eq!(
+            ld.journal_path(),
+            Some(std::path::PathBuf::from("/var/tmp/run-001/journal.json"))
+        );
+    }
+
+    #[test]
+    fn test_log_dir_error_no_equals() {
+        assert!(LogDir::from_str("journal/tmp/logs").is_err());
+    }
+
+    #[test]
+    fn test_log_dir_error_empty_path() {
+        assert!(LogDir::from_str("journal=").is_err());
+    }
+
+    #[test]
+    fn test_log_dir_error_unknown_stream() {
+        assert!(LogDir::from_str("foo=/tmp/logs").is_err());
+    }
+
+    #[test]
+    fn test_log_dir_error_no_streams() {
+        // Empty streams string before `=`
+        assert!(LogDir::from_str("=/tmp/logs").is_err());
+    }
+}
+
+/// Controls where the VM's systemd journal is streamed.
+///
+/// - `Console` (default): no journal capture; the VM's hvc0 console is connected
+///   to the container's stdio as usual.
+/// - `Journal`: stream the journal as plain text to stdout.
+///
+/// To capture the journal as JSON to a file, use `--log-dir=journal=PATH`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputMode {
+    #[default]
+    Console,
+    Journal,
+}
+
+/// The guest-side systemd unit that streams the journal as JSON over virtio-serial.
+/// Always uses JSON format; the host converts to plain text for stdout as needed.
+pub(crate) const JOURNAL_STREAM_UNIT: &str = include_str!("units/bcvk-journal-stream.service");
+pub(crate) const JOURNAL_STREAM_INITRD_UNIT: &str =
+    include_str!("units/bcvk-journal-stream-initrd.service");
+
+/// Convert a single JSON journal line (as produced by `journalctl -o json`) into
+/// a human-readable text line suitable for printing to stdout.
+///
+/// Returns `None` if the JSON has no `MESSAGE` field or if parsing fails.
+///
+/// The prefix mirrors systemd's `with-unit` output mode (`journalctl -o with-unit`):
+/// - Unit: `_SYSTEMD_UNIT[/_SYSTEMD_USER_UNIT]`, falling back to
+///   `SYSLOG_IDENTIFIER` → `_COMM` → `"unknown"`
+/// - PID: `[_PID]` or `[SYSLOG_PID]` if present
+/// - Then `: MESSAGE`
+pub(crate) fn journal_json_to_text(line: &str) -> Option<String> {
+    let obj = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let message = obj.get("MESSAGE").and_then(|v| v.as_str())?;
+
+    let str_field = |key: &str| obj.get(key).and_then(|v| v.as_str());
+
+    // Build the unit/identifier prefix, matching systemd's OUTPUT_WITH_UNIT logic.
+    let unit = str_field("_SYSTEMD_UNIT");
+    let user_unit = str_field("_SYSTEMD_USER_UNIT");
+    let prefix = if unit.is_some() || user_unit.is_some() {
+        match (unit, user_unit) {
+            (Some(u), Some(uu)) => format!("{u}/{uu}"),
+            (Some(u), None) => u.to_owned(),
+            (None, Some(uu)) => uu.to_owned(),
+            (None, None) => unreachable!(),
+        }
+    } else if let Some(id) = str_field("SYSLOG_IDENTIFIER") {
+        id.to_owned()
+    } else if let Some(comm) = str_field("_COMM") {
+        comm.to_owned()
+    } else {
+        "unknown".to_owned()
+    };
+
+    // Append [PID] when available, preferring the trusted _PID field.
+    let pid_suffix = str_field("_PID")
+        .or_else(|| str_field("SYSLOG_PID"))
+        .map(|p| format!("[{p}]"))
+        .unwrap_or_default();
+
+    Some(format!("{prefix}{pid_suffix}: {message}\n"))
+}
 
 /// Common container lifecycle options for podman commands.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
@@ -225,6 +443,26 @@ pub struct CommonVmOpts {
         help = "Path to virtiofsd binary (overrides auto-detection)"
     )]
     pub virtiofsd_binary: Option<String>,
+
+    /// Select how VM output is presented.
+    ///
+    /// `console` (default): the VM's hvc0 console is forwarded to stdio.
+    /// `journal`: the systemd journal is streamed as plain text to stdout.
+    ///
+    /// To capture streams to files, use `--log-dir`.
+    #[clap(long, value_enum, default_value = "console")]
+    pub output: OutputMode,
+
+    /// Write VM log streams to files in DIR.
+    ///
+    /// STREAMS is a comma-separated list of: `journal`, `console`
+    /// - `journal` → `journal.json` (systemd journal as JSON)
+    /// - `console` → `console.txt` (VM serial console output)
+    ///
+    /// Examples: `--log-dir=journal,console=/tmp/run-001/`
+    ///           `--log-dir=journal=/tmp/logs/`
+    #[clap(long, value_name = "STREAMS=DIR")]
+    pub log_dir: Option<LogDir>,
 }
 
 impl CommonVmOpts {
@@ -392,9 +630,9 @@ fn read_host_dns_servers() -> Option<Vec<String>> {
 /// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
 /// Returns the container ID instead of executing the command.
 pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
-    let (mut cmd, temp_dir) = prepare_run_command_with_temp(opts)?;
+    let (mut cmd, temp_dir, _journal_fds) = prepare_run_command_with_temp(opts)?;
 
-    // Leak the tempdir to keep it alive for the entire container lifetime
+    // Leak the tempdir to keep it alive for the entire container lifetime.
     std::mem::forget(temp_dir);
 
     debug!("Podman command: {:?}", cmd);
@@ -423,16 +661,25 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         }
     }
 
-    let (mut cmd, _temp_dir) = prepare_run_command_with_temp(opts)?;
-    // Keep _temp_dir alive until exec replaces our process
-    // At this point our process is replaced by `podman`, we are just a wrapper for creating
-    // a container image and nothing else lives past that event.
+    let (mut cmd, _temp_dir, _journal_fds) = prepare_run_command_with_temp(opts)?;
+
+    // Keep _temp_dir and _journal_fds alive until exec replaces our process.
+    // The journal fds (if any) are inherited across execve and reach podman
+    // via --preserve-fd; podman in turn passes them into the container.
     return Err(cmd.exec()).context("execve");
 }
 
+/// Returns `(cmd, tempdir, journal_fds)` where `journal_fds` holds open file
+/// descriptors for `journal.json` and `journal-initrd.json` (when
+/// `--log-dir=journal=…` was requested).  The caller must keep them alive until
+/// podman exits so the fds are not closed prematurely.
 fn prepare_run_command_with_temp(
     opts: RunEphemeralOpts,
-) -> Result<(std::process::Command, tempfile::TempDir)> {
+) -> Result<(
+    std::process::Command,
+    tempfile::TempDir,
+    Vec<std::sync::Arc<rustix::fd::OwnedFd>>,
+)> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
 
     // Check Ignition support early (before launching container) if --ignition is specified
@@ -673,6 +920,74 @@ fn prepare_run_command_with_temp(
     let config = serde_json::to_string(&opts_with_dns).unwrap();
     cmd.args(["-e", &format!("BCK_CONFIG={config}")]);
 
+    // Open journal log files (from --log-dir) on the host and pass their fds into
+    // the container via --preserve-fd / BCVK_JOURNAL_FDS=fd1,fd2 where fd1 is
+    // journal.json (real-root) and fd2 is journal-initrd.json (initrd).
+    // We use cap-std-ext's CmdFds / take_fds to handle fd duplication and
+    // O_CLOEXEC clearing in a pre_exec hook; flatpak-spawn --forward-fd (in our
+    // podman wrapper) ensures the fds also reach the real host podman from inside
+    // a toolbox.
+    let mut journal_fds: Vec<std::sync::Arc<rustix::fd::OwnedFd>> = Vec::new();
+    if opts.common.log_dir.as_ref().map_or(false, |d| d.journal) {
+        let mut fds = cap_std_ext::cmdext::CmdFds::new();
+        let mut fd_nums = Vec::new();
+        for dest in [
+            opts.common.log_dir.as_ref().and_then(|d| d.journal_path()),
+            opts.common
+                .log_dir
+                .as_ref()
+                .and_then(|d| d.journal_initrd_path()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            use std::os::unix::io::IntoRawFd as _;
+            let f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&dest)
+                .with_context(|| format!("Opening journal log file {dest:?}"))?;
+            // SAFETY: we just opened this file and are transferring ownership into OwnedFd.
+            #[allow(unsafe_code)]
+            let owned = unsafe { rustix::fd::OwnedFd::from_raw_fd(f.into_raw_fd()) };
+            let owned = std::sync::Arc::new(owned);
+            let fd_n = fds.take_fd(owned.clone());
+            cmd.args(["--preserve-fd", &fd_n.to_string()]);
+            fd_nums.push(fd_n.to_string());
+            journal_fds.push(owned);
+        }
+        cmd.take_fds(fds);
+        cmd.args(["-e", &format!("BCVK_JOURNAL_FDS={}", fd_nums.join(","))]);
+    }
+
+    // If a console log path was requested via --log-dir, bind-mount its parent
+    // directory into the container and tell run_impl the in-container path via
+    // BCVK_CONSOLE_PATH.  QEMU writes the serial console output there directly
+    // (no fd-passing needed — QEMU uses `-serial file:<path>`).
+    if let Some(console_path) = opts.common.log_dir.as_ref().and_then(|d| d.console_path()) {
+        // Resolve the parent to an absolute path so the bind mount is unambiguous.
+        let parent = console_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let abs_parent = parent
+            .canonicalize()
+            .with_context(|| format!("--log-dir console parent directory not found: {parent:?}"))?;
+        let file_name = console_path
+            .file_name()
+            .ok_or_else(|| eyre!("--log-dir console path has no file name: {console_path:?}"))?;
+        // Fixed in-container mount point for the console log's parent directory.
+        let container_log_dir = "/run/bcvk-console-log";
+        cmd.args([
+            "-v",
+            &format!("{}:{}:rw", abs_parent.display(), container_log_dir),
+        ]);
+        let in_container_path = format!("{}/{}", container_log_dir, file_name.to_string_lossy());
+        cmd.args(["-e", &format!("BCVK_CONSOLE_PATH={in_container_path}")]);
+        debug!("Bind-mounting console log dir {abs_parent:?} → {container_log_dir}");
+    }
+
     // Handle --execute output files and virtio-serial devices
     let mut all_serial_devices = opts.common.virtio_serial_out.clone();
     if !opts.common.execute.is_empty() {
@@ -702,7 +1017,7 @@ fn prepare_run_command_with_temp(
     let entrypoint = opts.debug_entrypoint.as_deref().unwrap_or(ENTRYPOINT);
     cmd.args(["--", &opts.image, entrypoint]);
 
-    Ok((cmd, td))
+    Ok((cmd, td, journal_fds))
 }
 
 /// Process --mount-disk-file specs: parse file:name format, create sparse files if needed (2x image size),
@@ -1228,39 +1543,31 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     // Handle --execute: pipes will be created when adding to qemu_config later
     // No need to create files anymore as we're using pipes
 
-    // Create systemd unit to stream journal to virtio-serial device via SMBIOS credential
-    let journal_stream_unit = r#"[Unit]
-Description=Stream systemd journal to host via virtio-serial
-DefaultDependencies=no
-After=systemd-journald.service dev-virtio\x2dports-org.bcvk.journal.device
-Requires=systemd-journald.service dev-virtio\x2dports-org.bcvk.journal.device
+    // Inject the journal streaming unit when either --output=journal or
+    // --log-dir with journal stream is requested.  The guest always streams JSON;
+    // the host converts JSON→plain-text for stdout as needed.
+    let wants_journal_stream = opts.common.output == OutputMode::Journal
+        || opts.common.log_dir.as_ref().map_or(false, |d| d.journal);
+    if wants_journal_stream {
+        let encoded_journal = data_encoding::BASE64.encode(JOURNAL_STREAM_UNIT.as_bytes());
+        mount_unit_smbios_creds.push(format!(
+            "io.systemd.credential.binary:systemd.extra-unit.bcvk-journal-stream.service={encoded_journal}"
+        ));
+        let encoded_journal_initrd =
+            data_encoding::BASE64.encode(JOURNAL_STREAM_INITRD_UNIT.as_bytes());
+        mount_unit_smbios_creds.push(format!(
+            "io.systemd.credential.binary:systemd.extra-unit.bcvk-journal-stream-initrd.service={encoded_journal_initrd}"
+        ));
+        debug!("Injected SMBIOS credentials for journal streaming units (real-root + initrd)");
 
-[Service]
-Type=simple
-ExecStart=/usr/bin/journalctl -f -o short-precise --no-pager
-StandardOutput=file:/dev/virtio-ports/org.bcvk.journal
-StandardError=file:/dev/virtio-ports/org.bcvk.journal
-Restart=always
-RestartSec=1s
-
-[Install]
-WantedBy=sysinit.target
-"#;
-    let encoded_journal = data_encoding::BASE64.encode(journal_stream_unit.as_bytes());
-    let journal_cred = format!(
-        "io.systemd.credential.binary:systemd.extra-unit.bcvk-journal-stream.service={encoded_journal}"
-    );
-    mount_unit_smbios_creds.push(journal_cred);
-    debug!("Generated SMBIOS credential for journal streaming unit");
-
-    // Create dropin for sysinit.target to enable journal streaming
-    let journal_dropin = "[Unit]\nWants=bcvk-journal-stream.service\n";
-    let encoded_dropin = data_encoding::BASE64.encode(journal_dropin.as_bytes());
-    let dropin_cred = format!(
-        "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-journal={encoded_dropin}"
-    );
-    mount_unit_smbios_creds.push(dropin_cred);
-    debug!("Created sysinit.target dropin to enable journal streaming unit");
+        let journal_dropin =
+            "[Unit]\nWants=bcvk-journal-stream.service bcvk-journal-stream-initrd.service\n";
+        let encoded_dropin = data_encoding::BASE64.encode(journal_dropin.as_bytes());
+        mount_unit_smbios_creds.push(format!(
+            "io.systemd.credential.binary:systemd.unit-dropin.sysinit.target~bcvk-journal={encoded_dropin}"
+        ));
+        debug!("Created sysinit.target dropin to enable journal streaming units");
+    }
 
     // Create execute units via SMBIOS credentials if needed
     match opts.common.execute.as_slice() {
@@ -1550,9 +1857,136 @@ Options=
 
     qemu_config.set_console(opts.common.console);
 
-    // Add virtio-serial device for journal streaming
-    qemu_config.add_virtio_serial_out("org.bcvk.journal", "/run/journal.log".to_string(), false);
-    debug!("Added virtio-serial device for journal streaming to /run/journal.log");
+    // Set serial console log path if provided via --log-dir=console=...
+    // The host bound-mounted the parent directory; BCVK_CONSOLE_PATH is the
+    // in-container path that QEMU can write to directly.
+    if let Ok(console_path) = std::env::var("BCVK_CONSOLE_PATH") {
+        if !console_path.is_empty() {
+            qemu_config.serial_log = Some(console_path);
+        }
+    }
+
+    // Set up virtio-serial pipes for journal streaming when requested.
+    // add_virtio_serial_pipe() creates a pipe, passes the write end to QEMU via
+    // --add-fd/fdset, and returns the read end.  We spawn async tasks to drain
+    // them; they are awaited after QEMU exits to flush all data.
+    //
+    // Two ports are used:
+    //   org.bcvk.journal        → journal.json
+    //   org.bcvk.journal.initrd → journal-initrd.json
+    //
+    // The host files were opened before execve and their fds passed in via
+    // BCVK_JOURNAL_FDS=fd1,fd2 (fd1=journal.json, fd2=journal-initrd.json).
+    let mut worker_tasks = tokio::task::JoinSet::new();
+    if wants_journal_stream {
+        let read_file: std::fs::File = qemu_config
+            .add_virtio_serial_pipe("org.bcvk.journal")?
+            .into();
+        let initrd_read_file: std::fs::File = qemu_config
+            .add_virtio_serial_pipe("org.bcvk.journal.initrd")?
+            .into();
+        debug!("Added virtio-serial pipes for journal streaming (real-root + initrd)");
+
+        let stdout_wants_journal = opts.common.output == OutputMode::Journal;
+
+        // Parse BCVK_JOURNAL_FDS=fd1,fd2 to reconstruct the two host file writers.
+        let wants_journal_file = opts.common.log_dir.as_ref().map_or(false, |d| d.journal);
+        let (file_writer, initrd_file_writer): (Option<tokio::fs::File>, Option<tokio::fs::File>) =
+            if wants_journal_file {
+                use std::os::unix::io::FromRawFd as _;
+                let fds_str = std::env::var("BCVK_JOURNAL_FDS")
+                    .context("BCVK_JOURNAL_FDS not set but --log-dir=journal=... was given")?;
+                let mut parts = fds_str.splitn(2, ',');
+                let fd1: i32 = parts
+                    .next()
+                    .unwrap_or("")
+                    .parse()
+                    .context("BCVK_JOURNAL_FDS: invalid first fd")?;
+                let fd2: i32 = parts
+                    .next()
+                    .unwrap_or("")
+                    .parse()
+                    .context("BCVK_JOURNAL_FDS: invalid second fd")?;
+                // SAFETY: fds were opened by the host process and preserved through
+                // execve / flatpak-spawn --forward-fd / podman --preserve-fd.
+                // We are the sole owner at this point.
+                #[allow(unsafe_code)]
+                let (f1, f2) = unsafe {
+                    (
+                        std::fs::File::from_raw_fd(fd1),
+                        std::fs::File::from_raw_fd(fd2),
+                    )
+                };
+                (
+                    Some(tokio::fs::File::from_std(f1)),
+                    Some(tokio::fs::File::from_std(f2)),
+                )
+            } else {
+                (None, None)
+            };
+
+        // Spawn the real-root journal drain task.
+        let reader = tokio::fs::File::from_std(read_file);
+        worker_tasks.spawn(async move {
+            use tokio::io::AsyncBufReadExt as _;
+            use tokio::io::AsyncWriteExt as _;
+            let mut file_writer = file_writer;
+            let mut stdout = tokio::io::stdout();
+            let mut lines = tokio::io::BufReader::new(reader).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(None) => break,
+                    Err(e) => {
+                        tracing::warn!("journal pipe read error: {e}");
+                        break;
+                    }
+                    Ok(Some(line)) => {
+                        if let Some(ref mut fw) = file_writer {
+                            if let Err(e) = fw.write_all(format!("{line}\n").as_bytes()).await {
+                                tracing::warn!("Failed to write journal JSON to file: {e}");
+                                file_writer = None;
+                            }
+                        }
+                        if stdout_wants_journal {
+                            if let Some(text) = journal_json_to_text(&line) {
+                                if let Err(e) = stdout.write_all(text.as_bytes()).await {
+                                    tracing::warn!("Failed to write journal text to stdout: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            tracing::debug!("journal copy task done");
+        });
+
+        // Spawn the initrd journal drain task (writes to journal-initrd.json only).
+        let initrd_reader = tokio::fs::File::from_std(initrd_read_file);
+        worker_tasks.spawn(async move {
+            use tokio::io::AsyncBufReadExt as _;
+            use tokio::io::AsyncWriteExt as _;
+            let mut file_writer = initrd_file_writer;
+            let mut lines = tokio::io::BufReader::new(initrd_reader).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(None) => break,
+                    Err(e) => {
+                        tracing::warn!("initrd journal pipe read error: {e}");
+                        break;
+                    }
+                    Ok(Some(line)) => {
+                        if let Some(ref mut fw) = file_writer {
+                            if let Err(e) = fw.write_all(format!("{line}\n").as_bytes()).await {
+                                tracing::warn!("Failed to write initrd journal JSON to file: {e}");
+                                file_writer = None;
+                            }
+                        }
+                    }
+                }
+            }
+            tracing::debug!("initrd journal copy task done");
+        });
+    }
 
     // DNS is configured via podman --dns flags (see prepare_run_command_with_temp)
     // This fixes DNS resolution issues when QEMU runs inside containers.
@@ -1671,6 +2105,9 @@ Options=
         tracing::debug!("qemu exit status: {qemu:?}");
         tracing::debug!("output copy: {output_copier:?}");
 
+        // Drain any remaining journal output (pipe write end closed when QEMU exits)
+        worker_tasks.join_all().await;
+
         // Parse exit code from systemd service status
         let exit_code = parse_service_exit_code(&status)?;
         if exit_code != 0 {
@@ -1686,6 +2123,8 @@ Options=
         if !exit_status.success() {
             return Err(eyre!("QEMU exited with non-zero status: {}", exit_status));
         }
+        // Drain any remaining journal output (pipe write end closed when QEMU exits)
+        worker_tasks.join_all().await;
     }
 
     drop(tmp_swapfile);
@@ -1699,6 +2138,49 @@ Options=
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_journal_json_to_text() {
+        // _SYSTEMD_UNIT takes priority over SYSLOG_IDENTIFIER, with PID
+        let line = r#"{"MESSAGE":"started","_SYSTEMD_UNIT":"foo.service","SYSLOG_IDENTIFIER":"foo","_PID":"42"}"#;
+        assert_eq!(
+            journal_json_to_text(line),
+            Some("foo.service[42]: started\n".into())
+        );
+
+        // _SYSTEMD_UNIT + _SYSTEMD_USER_UNIT joined with /
+        let line =
+            r#"{"MESSAGE":"hi","_SYSTEMD_UNIT":"app.service","_SYSTEMD_USER_UNIT":"user.service"}"#;
+        assert_eq!(
+            journal_json_to_text(line),
+            Some("app.service/user.service: hi\n".into())
+        );
+
+        // Falls back to SYSLOG_IDENTIFIER when no unit fields; SYSLOG_PID used
+        let line = r#"{"MESSAGE":"hello","SYSLOG_IDENTIFIER":"myapp","SYSLOG_PID":"99"}"#;
+        assert_eq!(
+            journal_json_to_text(line),
+            Some("myapp[99]: hello\n".into())
+        );
+
+        // Falls back to _COMM when no unit or identifier
+        let line = r#"{"MESSAGE":"from comm","_COMM":"bash"}"#;
+        assert_eq!(journal_json_to_text(line), Some("bash: from comm\n".into()));
+
+        // Falls back to "unknown" with no identifying fields
+        let line = r#"{"MESSAGE":"bare message"}"#;
+        assert_eq!(
+            journal_json_to_text(line),
+            Some("unknown: bare message\n".into())
+        );
+
+        // No MESSAGE → None
+        let line = r#"{"SYSLOG_IDENTIFIER":"foo"}"#;
+        assert_eq!(journal_json_to_text(line), None);
+
+        // Invalid JSON → None
+        assert_eq!(journal_json_to_text("not json at all"), None);
+    }
 
     #[test]
     fn test_parse_resolv_conf() {

@@ -150,6 +150,10 @@ Run a bootable container as a persistent VM
 
     User-defined labels for organizing VMs (comma not allowed in labels)
 
+**--graphical-console**
+
+    Enable graphical console (SPICE) for virt-manager access
+
 **--transient**
 
     Create a transient VM that disappears on shutdown/reboot
@@ -165,6 +169,10 @@ Run a bootable container as a persistent VM
 **--platform-console-log**=*PLATFORM_CONSOLE_LOG*
 
     Log platform console (UEFI/bootloader on ttyS0) to this file (created if absent)
+
+**--log-dir**=*STREAMS=DIR*
+
+    Write VM log streams to files in DIR
 
 <!-- END GENERATED OPTIONS -->
 
