@@ -298,25 +298,22 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
     info!("SSH port: {}", ssh_port);
 
     info!("setting up SSH port forwarding...");
-    for attempt in 0..15u32 {
-        match expose_port(
+    crate::utils::wait_for_readiness(
+        indicatif::ProgressBar::hidden(),
+        "Setting up SSH port forwarding",
+        || match expose_port(
             &services_sock_str,
             crate::vm_helpers::GVPROXY_VM_IP,
             ssh_port,
             22,
         ) {
-            Ok(_) => {
-                info!("SSH port {} forwarded", ssh_port);
-                break;
-            }
-            Err(e) if attempt < 14 => {
-                tracing::debug!("SSH port forward attempt {}: {}", attempt, e);
-                let backoff = 200 * 2u64.pow(attempt.min(4));
-                std::thread::sleep(std::time::Duration::from_millis(backoff));
-            }
-            Err(e) => bail!("SSH port forward failed: {}", e),
-        }
-    }
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        },
+        std::time::Duration::from_secs(15),
+        std::time::Duration::from_millis(500),
+    )?;
+    info!("SSH port {} forwarded", ssh_port);
 
     for pm in &opts.port_mappings {
         expose_port(

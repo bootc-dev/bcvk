@@ -2,7 +2,7 @@
 //!
 //! Boot flow (fully diskless):
 //! 1. Mount container image overlay (`podman image mount`)
-//! 2. Start nbdkit with erofs plugin in TCP mode (port forwarded via gvproxy)
+//! 2. Start bcvk-nbd server in TCP mode (port forwarded via gvproxy)
 //! 3. Launch vfkit with EFI boot via NBD TCP + virtio-net (gvproxy)
 //! 4. Wait for SSH and execute commands
 //!
@@ -36,7 +36,6 @@ pub fn ephemeral_base_dir() -> std::path::PathBuf {
 
 /// Metadata for a running ephemeral VM, persisted as JSON for `ps` and `ssh`.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-#[allow(dead_code)]
 pub struct EphemeralVmMetadata {
     /// VM name used as identifier for resource isolation.
     pub name: String,
@@ -56,15 +55,14 @@ pub struct EphemeralVmMetadata {
     pub log_path: Option<String>,
     /// ISO 8601 timestamp when the VM was created.
     pub created: String,
-    /// Name of the nbdkit podman container serving the rootfs.
+    /// Systemd unit name of the bcvk-nbd server serving the rootfs.
     #[serde(default)]
-    pub nbd_container: Option<String>,
+    pub nbd_unit: Option<String>,
     /// NBD port allocated for this VM's rootfs.
     #[serde(default)]
     pub nbd_port: Option<u16>,
 }
 
-#[allow(dead_code)]
 impl EphemeralVmMetadata {
     /// Return the directory path for ephemeral VM metadata files.
     pub fn vms_dir() -> std::path::PathBuf {
@@ -116,8 +114,9 @@ impl EphemeralVmMetadata {
 
     /// Check if the VM process is still alive via kill(pid, 0).
     pub fn is_alive(&self) -> bool {
-        rustix::process::test_kill_process(rustix::process::Pid::from_raw(self.pid as i32).unwrap())
-            .is_ok()
+        rustix::process::Pid::from_raw(self.pid as i32)
+            .map(|pid| rustix::process::test_kill_process(pid).is_ok())
+            .unwrap_or(false)
     }
 }
 
@@ -163,7 +162,7 @@ pub struct RunEphemeralOpts {
 struct VmCleanup {
     vfkit_pid: u32,
     gvproxy_pid: u32,
-    nbd_container: Option<String>,
+    nbd_unit: Option<String>,
     nbd_port: Option<u16>,
     image: String,
     vm_name: String,
@@ -172,20 +171,18 @@ struct VmCleanup {
 impl Drop for VmCleanup {
     fn drop(&mut self) {
         tracing::debug!("cleaning up VM processes...");
-        if let Some(ref name) = self.nbd_container {
+        if let Some(ref name) = self.nbd_unit {
             crate::nbd_macos::stop_nbd_server(name, self.nbd_port);
         }
-        if let Err(e) = rustix::process::kill_process(
-            rustix::process::Pid::from_raw(self.vfkit_pid as i32).unwrap(),
-            rustix::process::Signal::TERM,
-        ) {
-            tracing::warn!("failed to kill vfkit (PID {}): {}", self.vfkit_pid, e);
+        if let Some(pid) = rustix::process::Pid::from_raw(self.vfkit_pid as i32) {
+            if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::TERM) {
+                tracing::warn!("failed to kill vfkit (PID {}): {}", self.vfkit_pid, e);
+            }
         }
-        if let Err(e) = rustix::process::kill_process(
-            rustix::process::Pid::from_raw(self.gvproxy_pid as i32).unwrap(),
-            rustix::process::Signal::TERM,
-        ) {
-            tracing::warn!("failed to kill gvproxy (PID {}): {}", self.gvproxy_pid, e);
+        if let Some(pid) = rustix::process::Pid::from_raw(self.gvproxy_pid as i32) {
+            if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::TERM) {
+                tracing::warn!("failed to kill gvproxy (PID {}): {}", self.gvproxy_pid, e);
+            }
         }
         // Release container image overlay mount
         if let Ok(machine) = detect_machine_name() {
@@ -251,8 +248,6 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
         .unwrap_or_else(|| format!("ephemeral-{}", &digest_short[..8]));
     let ssh_key_path = cache_base.join(format!("{}-key", vm_name));
 
-    fs::create_dir_all(&cache_base)?;
-
     let mut ssh_pubkey = String::new();
     if opts.ssh_keygen || !opts.execute.is_empty() {
         info!("generating SSH keypair...");
@@ -281,7 +276,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
 
     let nbd_port = crate::nbd_macos::find_available_nbd_port();
     info!("NBD transport: TCP (port {})", nbd_port);
-    let nbd_container_name = crate::nbd_macos::start_nbd_server(
+    let nbd_unit_name = crate::nbd_macos::start_nbd_server(
         &machine,
         &merged_path,
         &cmdline,
@@ -344,13 +339,6 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
         ),
     ];
 
-    if let Ok(bench_nbd) = std::env::var("BCVK_BENCH_NBD") {
-        vfkit_args.extend([
-            "--device".to_string(),
-            format!("nbd,uri={},readonly,timeout=5000,deviceId=bench", bench_nbd),
-        ]);
-    }
-
     let serial_log = cache_base.join(format!("{}-serial.log", vm_name));
     vfkit_args.extend([
         "--device".to_string(),
@@ -384,7 +372,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
         serial_log: serial_log.to_string_lossy().to_string(),
         log_path: None,
         created: chrono::Utc::now().to_rfc3339(),
-        nbd_container: Some(nbd_container_name.clone()),
+        nbd_unit: Some(nbd_unit_name.clone()),
         nbd_port: Some(nbd_port),
     };
     metadata.save()?;
@@ -392,7 +380,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     let _cleanup = VmCleanup {
         vfkit_pid: vfkit_child.id(),
         gvproxy_pid: gvproxy_child.id(),
-        nbd_container: Some(nbd_container_name.clone()),
+        nbd_unit: Some(nbd_unit_name.clone()),
         nbd_port: Some(nbd_port),
         image: opts.image.clone(),
         vm_name: vm_name.clone(),
@@ -400,25 +388,22 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
 
     if opts.ssh_keygen || !opts.execute.is_empty() {
         info!("setting up SSH port forwarding...");
-        for attempt in 0..15u32 {
-            match expose_port(
+        crate::utils::wait_for_readiness(
+            indicatif::ProgressBar::hidden(),
+            "Setting up SSH port forwarding",
+            || match expose_port(
                 &services_sock_str,
                 crate::vm_helpers::GVPROXY_VM_IP,
                 ssh_port,
                 22,
             ) {
-                Ok(_) => {
-                    info!("SSH port {} forwarded", ssh_port);
-                    break;
-                }
-                Err(e) if attempt < 14 => {
-                    debug!("SSH port forward attempt {}: {}", attempt, e);
-                    let backoff = 200 * 2u64.pow(attempt.min(4));
-                    std::thread::sleep(Duration::from_millis(backoff));
-                }
-                Err(e) => bail!("SSH port forward failed: {}", e),
-            }
-        }
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            },
+            Duration::from_secs(15),
+            Duration::from_millis(500),
+        )?;
+        info!("SSH port {} forwarded", ssh_port);
 
         wait_for_ssh(ssh_port, &ssh_key_path, "root")?;
 
@@ -452,7 +437,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     std::mem::forget(_cleanup);
     let status = vfkit_child.wait()?;
     info!("vfkit exited: {}", status);
-    crate::nbd_macos::stop_nbd_server(&nbd_container_name, Some(nbd_port));
+    crate::nbd_macos::stop_nbd_server(&nbd_unit_name, Some(nbd_port));
     if let Err(e) = gvproxy_child.kill() {
         tracing::debug!("failed to kill gvproxy: {}", e);
     }
@@ -523,7 +508,7 @@ fn run_detached(opts: &RunEphemeralOpts) -> Result<()> {
         serial_log: String::new(),
         log_path: Some(log_path.to_string_lossy().to_string()),
         created: chrono::Utc::now().to_rfc3339(),
-        nbd_container: None,
+        nbd_unit: None,
         nbd_port: None,
     };
     metadata.save()?;
@@ -603,15 +588,13 @@ pub fn start_gvproxy(gvproxy_sock: &str, services_sock: &str) -> Result<std::pro
         .stderr(Stdio::null())
         .spawn()
         .context("failed to start gvproxy. Ensure gvproxy is installed (included in Podman)")?;
-    for _ in 0..50 {
-        if Path::new(gvproxy_sock).exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    if !Path::new(gvproxy_sock).exists() {
-        bail!("gvproxy socket did not appear");
-    }
+    crate::utils::wait_for_readiness(
+        indicatif::ProgressBar::hidden(),
+        "Waiting for gvproxy socket",
+        || Ok(Path::new(gvproxy_sock).exists()),
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+    )?;
     Ok(child)
 }
 
@@ -698,7 +681,7 @@ mod tests {
             serial_log: "/tmp/test-serial.log".to_string(),
             log_path: Some("/tmp/test-vfkit.log".to_string()),
             created: "2026-01-01T00:00:00Z".to_string(),
-            nbd_container: Some("bcvk-nbd-test-vm".to_string()),
+            nbd_unit: Some("bcvk-nbd-test-vm".to_string()),
             nbd_port: Some(10841),
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
@@ -706,7 +689,7 @@ mod tests {
         assert_eq!(loaded.name, "test-vm");
         assert_eq!(loaded.image, "quay.io/fedora/fedora-bootc:42");
         assert_eq!(loaded.pid, 12345);
-        assert_eq!(loaded.nbd_container.as_deref(), Some("bcvk-nbd-test-vm"));
+        assert_eq!(loaded.nbd_unit.as_deref(), Some("bcvk-nbd-test-vm"));
         assert_eq!(loaded.ssh_port, 2222);
         assert_eq!(loaded.log_path.as_deref(), Some("/tmp/test-vfkit.log"));
     }
@@ -725,7 +708,7 @@ mod tests {
             serial_log: "/tmp/serial.log".to_string(),
             log_path: None,
             created: "2026-05-04T00:00:00Z".to_string(),
-            nbd_container: None,
+            nbd_unit: None,
             nbd_port: None,
         };
         fs::write(&json_path, serde_json::to_string_pretty(&meta).unwrap()).unwrap();
@@ -752,7 +735,7 @@ mod tests {
                 serial_log: "/tmp/serial.log".to_string(),
                 log_path: None,
                 created: "2026-01-01T00:00:00Z".to_string(),
-                nbd_container: Some(format!("bcvk-nbd-vm-{i}")),
+                nbd_unit: Some(format!("bcvk-nbd-vm-{i}")),
                 nbd_port: Some(10800 + i as u16),
             };
             let path = dir.path().join(format!("vm-{i}.json"));

@@ -177,10 +177,9 @@ impl VmMetadata {
         if self.vfkit_pid == 0 {
             return false;
         }
-        rustix::process::test_kill_process(
-            rustix::process::Pid::from_raw(self.vfkit_pid as i32).unwrap(),
-        )
-        .is_ok()
+        rustix::process::Pid::from_raw(self.vfkit_pid as i32)
+            .map(|pid| rustix::process::test_kill_process(pid).is_ok())
+            .unwrap_or(false)
     }
 }
 

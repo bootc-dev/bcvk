@@ -25,8 +25,7 @@ pub fn run(opts: VmStopOpts) -> Result<()> {
 
     info!("stopping VM '{}'...", opts.name);
 
-    if meta.vfkit_pid > 0 {
-        let pid = rustix::process::Pid::from_raw(meta.vfkit_pid as i32).unwrap();
+    if let Some(pid) = rustix::process::Pid::from_raw(meta.vfkit_pid as i32) {
         if opts.force {
             if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::KILL) {
                 tracing::debug!("failed to SIGKILL vfkit (PID {}): {}", meta.vfkit_pid, e);
@@ -44,11 +43,8 @@ pub fn run(opts: VmStopOpts) -> Result<()> {
         }
     }
 
-    if meta.gvproxy_pid > 0 {
-        if let Err(e) = rustix::process::kill_process(
-            rustix::process::Pid::from_raw(meta.gvproxy_pid as i32).unwrap(),
-            rustix::process::Signal::KILL,
-        ) {
+    if let Some(pid) = rustix::process::Pid::from_raw(meta.gvproxy_pid as i32) {
+        if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::KILL) {
             tracing::debug!(
                 "failed to SIGKILL gvproxy (PID {}): {}",
                 meta.gvproxy_pid,

@@ -137,18 +137,18 @@ fn cmd_rm_all(force: bool) -> Result<()> {
 
     for vm in &vms {
         if vm.is_alive() {
-            if let Err(e) = rustix::process::kill_process(
-                rustix::process::Pid::from_raw(vm.pid as i32).unwrap(),
-                rustix::process::Signal::TERM,
-            ) {
-                tracing::warn!("failed to kill VM process {}: {}", vm.pid, e);
+            if let Some(pid) = rustix::process::Pid::from_raw(vm.pid as i32) {
+                if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::TERM) {
+                    tracing::warn!("failed to kill VM process {}: {}", vm.pid, e);
+                }
             }
             if vm.gvproxy_pid > 0 {
-                if let Err(e) = rustix::process::kill_process(
-                    rustix::process::Pid::from_raw(vm.gvproxy_pid as i32).unwrap(),
-                    rustix::process::Signal::TERM,
-                ) {
-                    tracing::warn!("failed to kill gvproxy {}: {}", vm.gvproxy_pid, e);
+                if let Some(pid) = rustix::process::Pid::from_raw(vm.gvproxy_pid as i32) {
+                    if let Err(e) =
+                        rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+                    {
+                        tracing::warn!("failed to kill gvproxy {}: {}", vm.gvproxy_pid, e);
+                    }
                 }
             }
             // Wait for the VM process to exit so cleanup (VmCleanup::drop in
@@ -158,7 +158,7 @@ fn cmd_rm_all(force: bool) -> Result<()> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
-        if let Some(ref name) = vm.nbd_container {
+        if let Some(ref name) = vm.nbd_unit {
             crate::nbd_macos::stop_nbd_server(name, vm.nbd_port);
         }
         EphemeralVmMetadata::remove(&vm.name);

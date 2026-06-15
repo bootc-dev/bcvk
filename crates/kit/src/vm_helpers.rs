@@ -12,8 +12,8 @@ use tracing::info;
 
 use crate::ssh_options::CommonSshOptions;
 
-/// gvproxy default gateway IP (from `-subnet 192.168.127.0/24`).
-pub(crate) const GVPROXY_GATEWAY: &str = "192.168.127.1";
+/// gvproxy gateway hostname, resolved inside the podman machine guest.
+pub(crate) const GVPROXY_GATEWAY: &str = "gateway.containers.internal";
 
 /// VM device IP assigned by gvproxy DHCP static lease.
 pub(crate) const GVPROXY_VM_IP: &str = "192.168.127.2";

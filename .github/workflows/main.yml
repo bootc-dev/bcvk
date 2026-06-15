@@ -33,9 +33,6 @@ jobs:
           brew install zig
           cargo install cargo-zigbuild
 
-      - name: Build nbdkit EROFS plugin (.so)
-        run: make plugin-so-aarch64
-
       - name: Build NBD server binary
         run: make nbd-server-aarch64
 

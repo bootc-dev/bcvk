@@ -86,25 +86,22 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
         .spawn()?;
 
     info!("setting up SSH port forwarding...");
-    for attempt in 0..15u32 {
-        match expose_port(
+    crate::utils::wait_for_readiness(
+        indicatif::ProgressBar::hidden(),
+        "Setting up SSH port forwarding",
+        || match expose_port(
             &services_sock_str,
             crate::vm_helpers::GVPROXY_VM_IP,
             meta.ssh_port,
             22,
         ) {
-            Ok(_) => {
-                info!("SSH port {} forwarded", meta.ssh_port);
-                break;
-            }
-            Err(e) if attempt < 14 => {
-                tracing::debug!("SSH port forward attempt {}: {}", attempt, e);
-                let backoff = 200 * 2u64.pow(attempt.min(4));
-                std::thread::sleep(std::time::Duration::from_millis(backoff));
-            }
-            Err(e) => bail!("SSH port forward failed: {}", e),
-        }
-    }
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        },
+        std::time::Duration::from_secs(15),
+        std::time::Duration::from_millis(500),
+    )?;
+    info!("SSH port {} forwarded", meta.ssh_port);
 
     for &(host_port, guest_port) in &meta.port_mappings {
         expose_port(
@@ -117,7 +114,7 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
     }
 
     let key_path = std::path::Path::new(&meta.ssh_key);
-    wait_for_ssh(meta.ssh_port, key_path, &"root")?;
+    wait_for_ssh(meta.ssh_port, key_path, "root")?;
 
     meta.vfkit_pid = vfkit_child.id();
     meta.gvproxy_pid = gvproxy_child.id();
@@ -132,7 +129,7 @@ pub fn run(opts: VmStartOpts) -> Result<()> {
     );
 
     if opts.ssh {
-        let status = run_ssh_interactive(meta.ssh_port, key_path, &"root")?;
+        let status = run_ssh_interactive(meta.ssh_port, key_path, "root")?;
         std::process::exit(status.code().unwrap_or(1));
     }
 

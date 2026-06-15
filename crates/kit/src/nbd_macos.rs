@@ -20,7 +20,6 @@ pub(crate) fn deploy_nbd_server(machine: &str) -> Result<()> {
 }
 
 /// Start the NBD server via systemd-run and expose the port via gvproxy.
-#[allow(dead_code)]
 pub(crate) fn start_nbd_server(
     machine: &str,
     merged_path: &str,
