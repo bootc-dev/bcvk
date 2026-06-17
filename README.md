@@ -1,4 +1,6 @@
 # bcvk - bootc virtualization kit
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fbootc-dev%2Fbcvk.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fbootc-dev%2Fbcvk?ref=badge_shield)
+
 
 This project helps launch ephemeral VMs from bootc containers, and also create
 disk images that can be imported into other virtualization frameworks.
@@ -123,3 +125,7 @@ Related projects and content:
 See [docs/HACKING.md](docs/HACKING.md).
 
 
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fbootc-dev%2Fbcvk.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fbootc-dev%2Fbcvk?ref=badge_large)
