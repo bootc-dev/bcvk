@@ -6,13 +6,10 @@
 //! 3. Launch vfkit with EFI boot via NBD TCP + virtio-net (gvproxy)
 //! 4. Wait for SSH and execute commands
 //!
-//! Common helpers (gvproxy, SSH, vfkit detection) are pub for reuse by vfkit/ module.
+//! Common helpers (gvproxy, SSH, vfkit detection) live in vm_helpers.rs.
 
 use std::fs;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use color_eyre::{
     eyre::{bail, Context},
@@ -20,16 +17,15 @@ use color_eyre::{
 };
 use tracing::{debug, info};
 
-pub use crate::vm_helpers::{
-    default_vcpus, detect_machine_name, ensure_image_and_get_digest, is_machine_rootful,
-    parse_memory_to_mb, run_ssh_command, run_ssh_interactive, wait_for_ssh,
+use crate::vm_helpers::{
+    default_vcpus, detect_machine_name, ensure_image_and_get_digest, find_available_ssh_port,
+    find_vfkit, generate_mac, is_machine_rootful, parse_memory_to_mb, run_ssh_command,
+    run_ssh_interactive, start_gvproxy, wait_for_ssh, VmMetadataStore,
 };
 
 /// Base directory for ephemeral VM state on macOS host.
 pub fn ephemeral_base_dir() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".local/share/bcvk/ephemeral")
+    crate::vm_helpers::bcvk_base_dir().join("ephemeral")
 }
 
 // --- Data structures ---
@@ -63,55 +59,16 @@ pub struct EphemeralVmMetadata {
     pub nbd_port: Option<u16>,
 }
 
-impl EphemeralVmMetadata {
-    /// Return the directory path for ephemeral VM metadata files.
-    pub fn vms_dir() -> std::path::PathBuf {
+impl crate::vm_helpers::VmMetadataStore for EphemeralVmMetadata {
+    fn vms_dir() -> std::path::PathBuf {
         ephemeral_base_dir().join("vms")
     }
-
-    /// Save metadata to a JSON file in the VMs directory.
-    pub fn save(&self) -> Result<()> {
-        let dir = Self::vms_dir();
-        fs::create_dir_all(&dir)?;
-        let path = dir.join(format!("{}.json", self.name));
-        fs::write(&path, serde_json::to_string_pretty(self)?)?;
-        Ok(())
+    fn name(&self) -> &str {
+        &self.name
     }
+}
 
-    /// Remove metadata file for the named VM.
-    pub fn remove(name: &str) {
-        let path = Self::vms_dir().join(format!("{}.json", name));
-        crate::vm_helpers::remove_file_if_exists(&path);
-    }
-
-    /// Load metadata for the named VM from its JSON file.
-    pub fn load(name: &str) -> Result<Self> {
-        let path = Self::vms_dir().join(format!("{}.json", name));
-        let data = fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&data)?)
-    }
-
-    /// List all ephemeral VM metadata from the VMs directory.
-    pub fn list_all() -> Result<Vec<Self>> {
-        let dir = Self::vms_dir();
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-        let mut vms = Vec::new();
-        for entry in fs::read_dir(&dir)? {
-            let path = entry?.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(meta) = serde_json::from_str::<Self>(&data) {
-                    vms.push(meta);
-                }
-            }
-        }
-        Ok(vms)
-    }
-
+impl EphemeralVmMetadata {
     /// Check if the VM process is still alive via kill(pid, 0).
     pub fn is_alive(&self) -> bool {
         rustix::process::Pid::from_raw(self.pid as i32)
@@ -131,9 +88,8 @@ pub struct RunEphemeralOpts {
     /// Number of vCPUs (overridden by --itype if specified)
     #[clap(long)]
     pub vcpus: Option<u32>,
-    /// Memory size (overridden by --itype if specified)
-    #[clap(long, default_value = "4G")]
-    pub memory: String,
+    #[clap(flatten)]
+    pub memory: crate::common_opts::MemoryOpts,
     /// Generate a temporary SSH key pair for VM access
     #[clap(long = "ssh-keygen", short = 'K')]
     pub ssh_keygen: bool,
@@ -286,18 +242,15 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
     )?;
 
     // gvproxy + vfkit (EFI boot)
-    let gvproxy_sock = cache_base.join(format!("{}-gvproxy.sock", vm_name));
-    let services_sock = cache_base.join(format!("{}-gvproxy-svc.sock", vm_name));
+    let (gvproxy_sock, services_sock) =
+        crate::vm_helpers::gvproxy_socket_paths(&cache_base, &vm_name);
     let gvproxy_sock_str = gvproxy_sock.to_string_lossy().to_string();
     let services_sock_str = services_sock.to_string_lossy().to_string();
     info!("starting gvproxy...");
     let mut gvproxy_child = start_gvproxy(&gvproxy_sock_str, &services_sock_str)?;
 
     let mac = generate_mac();
-    let mac_str = format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    );
+    let mac_str = crate::vm_helpers::format_mac_address(&mac);
 
     let efi_var_store = cache_base.join(format!("{}-efi-vars", vm_name));
     let bootloader_arg = format!("efi,variable-store={},create", efi_var_store.display());
@@ -311,7 +264,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
         .itype
         .map(|t| t.memory_mb())
         .map(Ok)
-        .unwrap_or_else(|| parse_memory_to_mb(&opts.memory))?;
+        .unwrap_or_else(|| parse_memory_to_mb(&opts.memory.memory))?;
 
     let mut vfkit_args = vec![
         "--cpus".to_string(),
@@ -388,22 +341,7 @@ fn run_vfkit(opts: RunEphemeralOpts) -> Result<()> {
 
     if opts.ssh_keygen || !opts.execute.is_empty() {
         info!("setting up SSH port forwarding...");
-        crate::utils::wait_for_readiness(
-            indicatif::ProgressBar::hidden(),
-            "Setting up SSH port forwarding",
-            || match expose_port(
-                &services_sock_str,
-                crate::vm_helpers::GVPROXY_VM_IP,
-                ssh_port,
-                22,
-            ) {
-                Ok(_) => Ok(true),
-                Err(_) => Ok(false),
-            },
-            Duration::from_secs(15),
-            Duration::from_millis(500),
-        )?;
-        info!("SSH port {} forwarded", ssh_port);
+        crate::vm_helpers::setup_ssh_port_forwarding(&services_sock_str, ssh_port)?;
 
         wait_for_ssh(ssh_port, &ssh_key_path, "root")?;
 
@@ -518,156 +456,9 @@ fn run_detached(opts: &RunEphemeralOpts) -> Result<()> {
 
 // --- macOS-specific helpers (pub for vfkit/ module) ---
 
-/// Clear extended attributes from a file.
-///
-/// Apple Virtualization.framework rejects disk images with xattrs like
-/// `security.selinux` or `user.containers.override_stat` that are added
-/// by podman/buildah when creating images inside containers.
-pub fn clear_xattr(path: &Path) {
-    if let Err(e) = Command::new("xattr")
-        .args(["-c", &path.to_string_lossy()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        tracing::debug!("failed to clear xattr on {}: {}", path.display(), e);
-    }
-}
-
-/// Find the vfkit binary, checking PATH and Podman PKG location.
-pub fn find_vfkit() -> Result<String> {
-    if let Ok(path) = which::which("vfkit") {
-        return Ok(path.to_string_lossy().to_string());
-    }
-    let podman_path = "/opt/podman/bin/vfkit";
-    if Path::new(podman_path).exists() {
-        return Ok(podman_path.to_string());
-    }
-    bail!("vfkit not found. Install: brew install vfkit")
-}
-
-/// Fixed MAC address matching gvproxy's DHCP static lease for [`GVPROXY_VM_IP`](crate::vm_helpers::GVPROXY_VM_IP).
-const GVPROXY_STATIC_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
-
-/// Generate the fixed MAC address for gvproxy DHCP static lease.
-pub fn generate_mac() -> [u8; 6] {
-    GVPROXY_STATIC_MAC
-}
-
-/// Find the gvproxy binary, checking PATH and Podman installation paths.
-fn find_gvproxy() -> Result<String> {
-    if let Ok(path) = which::which("gvproxy") {
-        return Ok(path.to_string_lossy().to_string());
-    }
-    for candidate in [
-        "/opt/homebrew/opt/podman/libexec/podman/gvproxy",
-        "/opt/podman/bin/gvproxy",
-    ] {
-        if Path::new(candidate).exists() {
-            return Ok(candidate.to_string());
-        }
-    }
-    bail!("gvproxy not found. Ensure Podman is installed (brew install podman)")
-}
-
-/// Start a gvproxy instance with the given socket paths.
-pub fn start_gvproxy(gvproxy_sock: &str, services_sock: &str) -> Result<std::process::Child> {
-    let gvproxy_bin = find_gvproxy()?;
-    crate::vm_helpers::remove_file_if_exists(std::path::Path::new(gvproxy_sock));
-    crate::vm_helpers::remove_file_if_exists(std::path::Path::new(services_sock));
-    let child = Command::new(&gvproxy_bin)
-        .args([
-            "-listen-vfkit",
-            &format!("unixgram://{}", gvproxy_sock),
-            "-ssh-port",
-            "-1",
-            "-services",
-            &format!("unix://{}", services_sock),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to start gvproxy. Ensure gvproxy is installed (included in Podman)")?;
-    crate::utils::wait_for_readiness(
-        indicatif::ProgressBar::hidden(),
-        "Waiting for gvproxy socket",
-        || Ok(Path::new(gvproxy_sock).exists()),
-        Duration::from_secs(5),
-        Duration::from_millis(100),
-    )?;
-    Ok(child)
-}
-
-/// Expose a TCP port forwarding rule via gvproxy's HTTP API.
-pub fn expose_port(
-    services_sock: &str,
-    vm_ip: &str,
-    host_port: u16,
-    guest_port: u16,
-) -> Result<()> {
-    let body = format!(
-        r#"{{"local":":{}","remote":"{}:{}","protocol":"tcp"}}"#,
-        host_port, vm_ip, guest_port
-    );
-    let mut stream = UnixStream::connect(services_sock)?;
-    let request = format!(
-        "POST /services/forwarder/expose HTTP/1.1\r\nHost: unix\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    std::io::Write::write_all(&mut stream, request.as_bytes())?;
-    std::io::Write::flush(&mut stream)?;
-    let mut response = vec![0u8; 1024];
-    if let Err(e) = std::io::Read::read(&mut stream, &mut response) {
-        tracing::debug!("failed to read gvproxy response: {}", e);
-    }
-    let response_str = String::from_utf8_lossy(&response);
-    if !response_str.contains("200") {
-        bail!(
-            "gvproxy expose failed: {}",
-            response_str.trim_end_matches('\0')
-        );
-    }
-    Ok(())
-}
-
-/// Find an available TCP port for SSH forwarding in range 2222-3000.
-pub fn find_available_ssh_port() -> u16 {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    const PORT_RANGE_START: u16 = 2222;
-    const PORT_RANGE_END: u16 = 3000;
-    for _ in 0..100 {
-        let port = rng.random_range(PORT_RANGE_START..PORT_RANGE_END);
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    for port in PORT_RANGE_START..PORT_RANGE_END {
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    PORT_RANGE_START
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_generate_mac() {
-        let mac = generate_mac();
-        assert_eq!(mac, GVPROXY_STATIC_MAC);
-    }
-
-    #[test]
-    fn test_find_available_ssh_port() {
-        let port = find_available_ssh_port();
-        assert!((2222..3000).contains(&port));
-        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
-    }
 
     #[test]
     fn test_ephemeral_vm_metadata_roundtrip() {

@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use super::VmMetadata;
+use super::{VmMetadata, VmMetadataStore};
 use clap::Parser;
 use color_eyre::Result;
 

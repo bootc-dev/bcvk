@@ -6,7 +6,7 @@ use clap::Parser;
 use color_eyre::Result;
 use tracing::info;
 
-use super::VmMetadata;
+use super::{VmMetadata, VmMetadataStore};
 
 /// Options for `vm rm`.
 #[derive(Parser, Debug)]

@@ -14,10 +14,9 @@ use color_eyre::Result;
 use tracing::{debug, info};
 
 use crate::install_options::InstallOptions;
-use crate::run_ephemeral_macos::clear_xattr;
 use crate::vm_helpers::{
-    detect_machine_name, ensure_image_and_get_digest, generate_ssh_keypair, is_machine_rootful,
-    parse_size, remove_file_if_exists,
+    clear_xattr, detect_machine_name, ensure_image_and_get_digest, generate_ssh_keypair,
+    is_machine_rootful, parse_size, remove_file_if_exists,
 };
 use sha2::{Digest, Sha256};
 
@@ -46,16 +45,12 @@ pub struct ToDiskMacosOpts {
 }
 
 fn base_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("cannot determine home directory")
-        .join(".local/share/bcvk/base")
+    crate::vm_helpers::bcvk_base_dir().join("base")
 }
 
 /// Directory for persistent VM disk images.
 pub fn vms_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("cannot determine home directory")
-        .join(".local/share/bcvk/vms")
+    crate::vm_helpers::bcvk_base_dir().join("vms")
 }
 
 fn resolve_path_in_machine(host_path: &str) -> String {

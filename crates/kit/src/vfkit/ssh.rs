@@ -1,6 +1,6 @@
 //! vm ssh — SSH into a running persistent VM.
 
-use super::VmMetadata;
+use super::{VmMetadata, VmMetadataStore};
 use crate::vm_helpers::{run_ssh_command, run_ssh_interactive};
 use clap::Parser;
 use color_eyre::{eyre::bail, Result};

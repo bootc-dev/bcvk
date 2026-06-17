@@ -1,6 +1,6 @@
 //! vm list — List all persistent VMs.
 
-use super::{OutputFormat, VmMetadata};
+use super::{OutputFormat, VmMetadata, VmMetadataStore};
 use clap::Parser;
 use color_eyre::Result;
 

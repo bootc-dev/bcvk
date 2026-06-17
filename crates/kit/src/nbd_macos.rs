@@ -104,24 +104,14 @@ pub(crate) fn start_nbd_server(
     Ok(unit_name)
 }
 
+/// NBD port allocation range start (inclusive).
+const NBD_PORT_RANGE_START: u16 = 10800;
+/// NBD port allocation range end (exclusive).
+const NBD_PORT_RANGE_END: u16 = 10900;
+
 /// Find an available TCP port for NBD in range 10800-10900.
 pub fn find_available_nbd_port() -> u16 {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    const PORT_RANGE_START: u16 = 10800;
-    const PORT_RANGE_END: u16 = 10900;
-    for _ in 0..100 {
-        let port = rng.random_range(PORT_RANGE_START..PORT_RANGE_END);
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    for port in PORT_RANGE_START..PORT_RANGE_END {
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    PORT_RANGE_START
+    vm_helpers::find_available_port_in_range(NBD_PORT_RANGE_START, NBD_PORT_RANGE_END)
 }
 
 /// Stop an NBD server and unexpose its gvproxy port (best-effort).

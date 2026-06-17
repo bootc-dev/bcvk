@@ -8,13 +8,11 @@ use clap::Parser;
 use color_eyre::{eyre::bail, Result};
 use tracing::info;
 
-use super::VmMetadata;
-use crate::run_ephemeral_macos::{
-    clear_xattr, expose_port, find_available_ssh_port, find_vfkit, generate_mac, start_gvproxy,
-};
+use super::{VmMetadata, VmMetadataStore};
 use crate::vm_helpers::{
-    detect_machine_name, ensure_image_and_get_digest, parse_memory_to_mb, remove_file_if_exists,
-    run_ssh_interactive, sanitize_vm_name, wait_for_ssh,
+    clear_xattr, detect_machine_name, ensure_image_and_get_digest, expose_port,
+    find_available_ssh_port, find_vfkit, generate_mac, parse_memory_to_mb, remove_file_if_exists,
+    run_ssh_interactive, sanitize_vm_name, start_gvproxy, wait_for_ssh,
 };
 
 /// Port mapping from host to VM (format: host_port:guest_port).
@@ -65,9 +63,8 @@ pub struct VmRunOpts {
     /// Number of vCPUs (overridden by --itype if specified)
     #[clap(long)]
     pub vcpus: Option<u32>,
-    /// Memory size (overridden by --itype if specified)
-    #[clap(long, default_value = "4G")]
-    pub memory: String,
+    #[clap(flatten)]
+    pub memory: crate::common_opts::MemoryOpts,
     /// Path to an existing SSH private key
     #[clap(long)]
     pub ssh_key: Option<String>,
@@ -168,7 +165,14 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
                             );
                         }
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    crate::vm_helpers::wait_for_process_exit(
+                        existing.vfkit_pid,
+                        std::time::Duration::from_millis(200),
+                    );
+                    crate::vm_helpers::wait_for_process_exit(
+                        existing.gvproxy_pid,
+                        std::time::Duration::from_millis(200),
+                    );
                 }
                 VmMetadata::remove(&vm_name);
             } else {
@@ -241,8 +245,7 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
 
     let efi_store = vms_dir.join(format!("{}-efi-vars", vm_name));
     let serial_log = vms_dir.join(format!("{}-serial.log", vm_name));
-    let gvproxy_sock = vms_dir.join(format!("{}-gvproxy.sock", vm_name));
-    let services_sock = vms_dir.join(format!("{}-gvproxy-svc.sock", vm_name));
+    let (gvproxy_sock, services_sock) = crate::vm_helpers::gvproxy_socket_paths(&vms_dir, &vm_name);
 
     let gvproxy_sock_str = gvproxy_sock.to_string_lossy().to_string();
     let services_sock_str = services_sock.to_string_lossy().to_string();
@@ -251,17 +254,14 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
     let gvproxy_child = start_gvproxy(&gvproxy_sock_str, &services_sock_str)?;
 
     let mac = generate_mac();
-    let mac_str = format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    );
+    let mac_str = crate::vm_helpers::format_mac_address(&mac);
 
     let vcpus = opts.itype.map(|t| t.vcpus()).or(opts.vcpus).unwrap_or(2);
     let memory_mb = opts
         .itype
         .map(|t| t.memory_mb())
         .map(Ok)
-        .unwrap_or_else(|| parse_memory_to_mb(&opts.memory))?;
+        .unwrap_or_else(|| parse_memory_to_mb(&opts.memory.memory))?;
 
     let vfkit_bin = find_vfkit()?;
     let mut vfkit_args = vec![
@@ -298,22 +298,7 @@ pub fn run(opts: VmRunOpts) -> Result<()> {
     info!("SSH port: {}", ssh_port);
 
     info!("setting up SSH port forwarding...");
-    crate::utils::wait_for_readiness(
-        indicatif::ProgressBar::hidden(),
-        "Setting up SSH port forwarding",
-        || match expose_port(
-            &services_sock_str,
-            crate::vm_helpers::GVPROXY_VM_IP,
-            ssh_port,
-            22,
-        ) {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false),
-        },
-        std::time::Duration::from_secs(15),
-        std::time::Duration::from_millis(500),
-    )?;
-    info!("SSH port {} forwarded", ssh_port);
+    crate::vm_helpers::setup_ssh_port_forwarding(&services_sock_str, ssh_port)?;
 
     for pm in &opts.port_mappings {
         expose_port(

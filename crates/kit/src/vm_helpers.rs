@@ -3,7 +3,7 @@
 //! Functions in this module are OS-independent (use `podman` and `ssh` CLI).
 //! Modelled after `ssh_options.rs` — designed for future cross-platform sharing.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -112,32 +112,25 @@ pub fn wait_for_ssh(port: u16, key_path: &Path, user: &str) -> Result<()> {
     let ssh_opts = CommonSshOptions::default();
     let user_host = format!("{}@localhost", user);
     info!("waiting for SSH on port {}...", port);
-    let start = std::time::Instant::now();
-    let mut attempt = 0u32;
-    loop {
-        if start.elapsed() > SSH_TIMEOUT {
-            bail!("SSH connection timeout ({}s)", SSH_TIMEOUT.as_secs());
-        }
-        let mut cmd = Command::new("ssh");
-        cmd.args(["-p", &port.to_string(), "-i", &key_path.to_string_lossy()]);
-        ssh_opts.apply_to_command(&mut cmd);
-        cmd.args(["-o", "BatchMode=yes", &user_host, "true"]);
-        if let Ok(s) = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status() {
-            if s.success() {
-                info!("SSH connected after {}s", start.elapsed().as_secs());
-                return Ok(());
+    let key_str = key_path.to_string_lossy().to_string();
+    let (elapsed, _pb) = crate::utils::wait_for_readiness(
+        indicatif::ProgressBar::hidden(),
+        "Waiting for SSH",
+        || {
+            let mut cmd = Command::new("ssh");
+            cmd.args(["-p", &port.to_string(), "-i", &key_str]);
+            ssh_opts.apply_to_command(&mut cmd);
+            cmd.args(["-o", "BatchMode=yes", &user_host, "true"]);
+            match cmd.stdout(Stdio::null()).stderr(Stdio::null()).status() {
+                Ok(s) if s.success() => Ok(true),
+                _ => Ok(false),
             }
-        }
-        let backoff = if attempt < 2 {
-            100
-        } else if attempt < 4 {
-            200
-        } else {
-            500
-        };
-        std::thread::sleep(Duration::from_millis(backoff));
-        attempt += 1;
-    }
+        },
+        SSH_TIMEOUT,
+        Duration::from_millis(200),
+    )?;
+    info!("SSH connected after {}s", elapsed.as_secs());
+    Ok(())
 }
 
 /// Execute a command via SSH and return the exit status.
@@ -445,6 +438,259 @@ pub fn is_nbd_unit_dead(machine: &str, unit_name: &str) -> bool {
     }
 }
 
+// --- macOS VM helpers (moved from run_ephemeral_macos.rs) ---
+
+/// Clear extended attributes from a file.
+///
+/// Apple Virtualization.framework rejects disk images with xattrs like
+/// `security.selinux` or `user.containers.override_stat` that are added
+/// by podman/buildah when creating images inside containers.
+pub fn clear_xattr(path: &Path) {
+    if let Err(e) = Command::new("xattr")
+        .args(["-c", &path.to_string_lossy()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        tracing::debug!("failed to clear xattr on {}: {}", path.display(), e);
+    }
+}
+
+/// Find the vfkit binary, checking PATH and Podman PKG location.
+pub fn find_vfkit() -> Result<String> {
+    if let Ok(path) = which::which("vfkit") {
+        return Ok(path.to_string_lossy().to_string());
+    }
+    let podman_path = "/opt/podman/bin/vfkit";
+    if Path::new(podman_path).exists() {
+        return Ok(podman_path.to_string());
+    }
+    bail!("vfkit not found. Install: brew install vfkit")
+}
+
+/// Shared persistence methods for VM metadata types.
+///
+/// Implementors provide `vms_dir()` and `name()`, getting JSON-backed
+/// `save`/`load`/`remove`/`list_all` for free.
+pub trait VmMetadataStore: serde::Serialize + serde::de::DeserializeOwned + Sized {
+    /// Return the directory path for VM metadata files.
+    fn vms_dir() -> PathBuf;
+    /// Return the VM name used as the JSON filename stem.
+    fn name(&self) -> &str;
+
+    /// Save metadata to a JSON file in the VMs directory.
+    fn save(&self) -> color_eyre::Result<()> {
+        let dir = Self::vms_dir();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", self.name()));
+        std::fs::write(&path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    /// Load metadata for the named VM from its JSON file.
+    fn load(name: &str) -> color_eyre::Result<Self> {
+        let path = Self::vms_dir().join(format!("{}.json", name));
+        let data = std::fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&data)?)
+    }
+
+    /// Remove metadata file for the named VM.
+    fn remove(name: &str) {
+        let path = Self::vms_dir().join(format!("{}.json", name));
+        remove_file_if_exists(&path);
+    }
+
+    /// List all VM metadata from the VMs directory.
+    fn list_all() -> color_eyre::Result<Vec<Self>> {
+        let dir = Self::vms_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut items = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(meta) = serde_json::from_str::<Self>(&data) {
+                    items.push(meta);
+                }
+            }
+        }
+        Ok(items)
+    }
+}
+
+/// Base directory for bcvk persistent state: `~/.local/share/bcvk`.
+pub fn bcvk_base_dir() -> PathBuf {
+    dirs::home_dir()
+        .expect("cannot determine home directory")
+        .join(".local/share/bcvk")
+}
+
+/// Wait for a process to exit, polling with rustix.
+/// Returns true if process exited within timeout, false otherwise.
+pub fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        match rustix::process::Pid::from_raw(pid as i32) {
+            Some(p) if rustix::process::test_kill_process(p).is_ok() => {}
+            _ => return true,
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// Set up SSH port forwarding via gvproxy with retry.
+pub fn setup_ssh_port_forwarding(services_sock: &str, ssh_port: u16) -> Result<()> {
+    crate::utils::wait_for_readiness(
+        indicatif::ProgressBar::hidden(),
+        "Setting up SSH port forwarding",
+        || match expose_port(services_sock, GVPROXY_VM_IP, ssh_port, 22) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        },
+        Duration::from_secs(15),
+        Duration::from_millis(200),
+    )?;
+    info!("SSH port {} forwarded", ssh_port);
+    Ok(())
+}
+
+/// Construct gvproxy Unix socket paths for a given VM.
+pub fn gvproxy_socket_paths(base: &Path, vm_name: &str) -> (PathBuf, PathBuf) {
+    (
+        base.join(format!("{vm_name}-gvproxy.sock")),
+        base.join(format!("{vm_name}-gvproxy-svc.sock")),
+    )
+}
+
+/// Format a 6-byte MAC address as a colon-separated hex string.
+pub fn format_mac_address(mac: &[u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
+}
+
+/// Fixed MAC address matching gvproxy's DHCP static lease for [`GVPROXY_VM_IP`].
+const GVPROXY_STATIC_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
+
+/// Generate the fixed MAC address for gvproxy DHCP static lease.
+pub fn generate_mac() -> [u8; 6] {
+    GVPROXY_STATIC_MAC
+}
+
+/// Find the gvproxy binary, checking PATH and Podman installation paths.
+fn find_gvproxy() -> Result<String> {
+    if let Ok(path) = which::which("gvproxy") {
+        return Ok(path.to_string_lossy().to_string());
+    }
+    for candidate in [
+        "/opt/homebrew/opt/podman/libexec/podman/gvproxy",
+        "/opt/podman/bin/gvproxy",
+    ] {
+        if Path::new(candidate).exists() {
+            return Ok(candidate.to_string());
+        }
+    }
+    bail!("gvproxy not found. Ensure Podman is installed (brew install podman)")
+}
+
+/// Start a gvproxy instance with the given socket paths.
+pub fn start_gvproxy(gvproxy_sock: &str, services_sock: &str) -> Result<std::process::Child> {
+    let gvproxy_bin = find_gvproxy()?;
+    remove_file_if_exists(std::path::Path::new(gvproxy_sock));
+    remove_file_if_exists(std::path::Path::new(services_sock));
+    let child = Command::new(&gvproxy_bin)
+        .args([
+            "-listen-vfkit",
+            &format!("unixgram://{}", gvproxy_sock),
+            "-ssh-port",
+            "-1",
+            "-services",
+            &format!("unix://{}", services_sock),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to start gvproxy. Ensure gvproxy is installed (included in Podman)")?;
+    crate::utils::wait_for_readiness(
+        indicatif::ProgressBar::hidden(),
+        "Waiting for gvproxy socket",
+        || Ok(Path::new(gvproxy_sock).exists()),
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+    )?;
+    Ok(child)
+}
+
+/// Expose a TCP port forwarding rule via gvproxy's HTTP API.
+pub fn expose_port(
+    services_sock: &str,
+    vm_ip: &str,
+    host_port: u16,
+    guest_port: u16,
+) -> Result<()> {
+    use std::os::unix::net::UnixStream;
+    let body =
+        format!(r#"{{"local":":{host_port}","remote":"{vm_ip}:{guest_port}","protocol":"tcp"}}"#,);
+    let mut stream = UnixStream::connect(services_sock)?;
+    let request = format!(
+        "POST /services/forwarder/expose HTTP/1.1\r\nHost: unix\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    std::io::Write::write_all(&mut stream, request.as_bytes())?;
+    std::io::Write::flush(&mut stream)?;
+    let mut response = vec![0u8; 1024];
+    if let Err(e) = std::io::Read::read(&mut stream, &mut response) {
+        tracing::debug!("failed to read gvproxy response: {}", e);
+    }
+    let response_str = String::from_utf8_lossy(&response);
+    if !response_str.contains("200") {
+        bail!(
+            "gvproxy expose failed: {}",
+            response_str.trim_end_matches('\0')
+        );
+    }
+    Ok(())
+}
+
+/// SSH port allocation range start (inclusive).
+const SSH_PORT_RANGE_START: u16 = 2222;
+/// SSH port allocation range end (exclusive).
+const SSH_PORT_RANGE_END: u16 = 3000;
+
+/// Maximum random port allocation attempts before sequential fallback.
+const PORT_FIND_MAX_ATTEMPTS: usize = 100;
+
+/// Find an available TCP port by random probing then sequential scan.
+pub fn find_available_port_in_range(start: u16, end: u16) -> u16 {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    for _ in 0..PORT_FIND_MAX_ATTEMPTS {
+        let port = rng.random_range(start..end);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    for port in start..end {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    start
+}
+
+/// Find an available TCP port for SSH forwarding in range 2222-3000.
+pub fn find_available_ssh_port() -> u16 {
+    find_available_port_in_range(SSH_PORT_RANGE_START, SSH_PORT_RANGE_END)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,5 +738,18 @@ mod tests {
         );
         assert_eq!(sanitize_vm_name("centos:stream10"), "centos-stream10");
         assert_eq!(sanitize_vm_name("simple"), "simple");
+    }
+
+    #[test]
+    fn test_generate_mac() {
+        let mac = generate_mac();
+        assert_eq!(mac, GVPROXY_STATIC_MAC);
+    }
+
+    #[test]
+    fn test_find_available_ssh_port() {
+        let port = find_available_ssh_port();
+        assert!((2222..3000).contains(&port));
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
     }
 }

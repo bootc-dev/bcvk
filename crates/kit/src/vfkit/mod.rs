@@ -3,11 +3,12 @@
 //! Subcommands mirror the Linux libvirt/ module structure:
 //! run, list, ssh, stop, start, rm, rm-all, inspect
 
-use std::fs;
 use std::path::PathBuf;
 
 use clap::Subcommand;
 use color_eyre::Result;
+
+pub use crate::vm_helpers::VmMetadataStore;
 
 pub mod inspect;
 pub mod list;
@@ -121,57 +122,16 @@ pub struct VmMetadata {
     pub port_mappings: Vec<(u16, u16)>,
 }
 
+impl crate::vm_helpers::VmMetadataStore for VmMetadata {
+    fn vms_dir() -> PathBuf {
+        crate::vm_helpers::bcvk_base_dir().join("vms")
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 impl VmMetadata {
-    /// Return the directory path for persistent VM metadata files.
-    pub fn vms_dir() -> PathBuf {
-        dirs::home_dir()
-            .expect("cannot determine home directory")
-            .join(".local/share/bcvk/vms")
-    }
-
-    /// Save metadata to a JSON file in the VMs directory.
-    pub fn save(&self) -> Result<()> {
-        let dir = Self::vms_dir();
-        fs::create_dir_all(&dir)?;
-        let path = dir.join(format!("{}.json", self.name));
-        fs::write(&path, serde_json::to_string_pretty(self)?)?;
-        Ok(())
-    }
-
-    /// Load metadata for the named VM from its JSON file.
-    pub fn load(name: &str) -> Result<Self> {
-        let path = Self::vms_dir().join(format!("{}.json", name));
-        let data = fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&data)?)
-    }
-
-    /// Remove metadata file for the named VM.
-    pub fn remove(name: &str) {
-        let path = Self::vms_dir().join(format!("{}.json", name));
-        crate::vm_helpers::remove_file_if_exists(&path);
-    }
-
-    /// List all persistent VM metadata from the VMs directory.
-    pub fn list_all() -> Result<Vec<Self>> {
-        let dir = Self::vms_dir();
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-        let mut vms = Vec::new();
-        for entry in fs::read_dir(&dir)? {
-            let path = entry?.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(meta) = serde_json::from_str::<Self>(&data) {
-                    vms.push(meta);
-                }
-            }
-        }
-        Ok(vms)
-    }
-
     /// Check if the VM process is still alive via kill(pid, 0).
     pub fn is_alive(&self) -> bool {
         if self.vfkit_pid == 0 {
@@ -186,6 +146,7 @@ impl VmMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn sample_vm_metadata(name: &str) -> VmMetadata {
         VmMetadata {

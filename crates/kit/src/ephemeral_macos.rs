@@ -8,6 +8,7 @@ use color_eyre::eyre::bail;
 use color_eyre::Result;
 
 use crate::run_ephemeral_macos::{self, EphemeralVmMetadata};
+use crate::vm_helpers::VmMetadataStore;
 
 /// Options for `ephemeral run-ssh`, combining run options with optional SSH arguments.
 #[derive(Debug, clap::Parser)]
@@ -20,6 +21,7 @@ pub struct RunEphemeralSshOpts {
     pub ssh_args: Vec<String>,
 }
 
+/// Subcommands for ephemeral VM management.
 #[derive(Debug, Subcommand)]
 pub enum EphemeralCommands {
     /// Run bootc containers as ephemeral VMs
@@ -166,7 +168,7 @@ fn cmd_rm_all(force: bool) -> Result<()> {
     }
 
     // Sweep orphaned resources inside podman machine
-    if let Ok(machine) = run_ephemeral_macos::detect_machine_name() {
+    if let Ok(machine) = crate::vm_helpers::detect_machine_name() {
         // Stop orphaned bcvk-nbd systemd units
         if let Err(e) = Command::new("podman")
             .args([
@@ -207,9 +209,12 @@ fn cmd_ssh(name: &str, args: &[String]) -> Result<()> {
 
     // Try to set up SSH port forwarding via VM-specific gvproxy socket
     let base = run_ephemeral_macos::ephemeral_base_dir();
-    let svc_sock = format!("{}/{}-gvproxy-svc.sock", base.display(), name);
+    let svc_sock = crate::vm_helpers::gvproxy_socket_paths(&base, name)
+        .1
+        .to_string_lossy()
+        .to_string();
     if std::path::Path::new(&svc_sock).exists() {
-        if let Err(e) = run_ephemeral_macos::expose_port(
+        if let Err(e) = crate::vm_helpers::expose_port(
             &svc_sock,
             crate::vm_helpers::GVPROXY_VM_IP,
             vm.ssh_port,
@@ -221,12 +226,11 @@ fn cmd_ssh(name: &str, args: &[String]) -> Result<()> {
 
     let key_path = std::path::Path::new(&vm.ssh_key);
     if args.is_empty() {
-        run_ephemeral_macos::run_ssh_interactive(vm.ssh_port, key_path, "root")?;
+        crate::vm_helpers::run_ssh_interactive(vm.ssh_port, key_path, "root")?;
     } else {
         let combined = shlex::try_join(args.iter().map(|s| s.as_str()))
             .map_err(|e| color_eyre::eyre::eyre!("failed to escape SSH command: {}", e))?;
-        let status =
-            run_ephemeral_macos::run_ssh_command(vm.ssh_port, key_path, "root", &combined)?;
+        let status = crate::vm_helpers::run_ssh_command(vm.ssh_port, key_path, "root", &combined)?;
         if !status.success() {
             std::process::exit(status.code().unwrap_or(1));
         }

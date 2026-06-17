@@ -1,6 +1,6 @@
 //! vm inspect — Show detailed VM information.
 
-use super::{OutputFormat, VmMetadata};
+use super::{OutputFormat, VmMetadata, VmMetadataStore};
 use clap::Parser;
 use color_eyre::Result;
 
