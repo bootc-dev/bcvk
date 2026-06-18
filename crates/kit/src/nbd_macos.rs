@@ -11,8 +11,8 @@ use tracing::info;
 use crate::utils::wait_for_readiness;
 use crate::vm_helpers;
 
-/// NBD server binary (aarch64 ELF), embedded at compile time.
-const NBD_SERVER: &[u8] = include_bytes!("../bcvk-nbd-aarch64");
+/// NBD server binary (Linux ELF for host arch), embedded at compile time.
+const NBD_SERVER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bcvk-nbd"));
 
 /// Deploy the NBD server binary to the podman machine.
 pub(crate) fn deploy_nbd_server(machine: &str) -> Result<()> {
