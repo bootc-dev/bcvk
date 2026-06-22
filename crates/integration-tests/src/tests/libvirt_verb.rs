@@ -265,7 +265,7 @@ fn test_libvirt_comprehensive_workflow() -> TestResult {
 
     // Test 5: Verify VM lifecycle (already running, test inspect)
     println!("Test 5: Verifying VM is running...");
-    let info = cmd!(sh, "virsh dominfo {domain_name}").read()?;
+    let info = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
     assert!(
         info.contains("running") || info.contains("idle"),
         "Domain should be running"
@@ -277,7 +277,7 @@ fn test_libvirt_comprehensive_workflow() -> TestResult {
     let rm_test_domain = create_test_vm_and_assert("test-rm", &test_image)?;
 
     // Verify it's running
-    let rm_info = cmd!(sh, "virsh dominfo {rm_test_domain}").read()?;
+    let rm_info = cmd!(sh, "env LC_ALL=C virsh dominfo {rm_test_domain}").read()?;
     assert!(
         rm_info.contains("running") || rm_info.contains("idle"),
         "Test VM should be running before rm test"
@@ -338,7 +338,7 @@ fn test_libvirt_comprehensive_workflow() -> TestResult {
     println!("✓ Replaced VM exists with same name");
 
     // Verify it's a fresh VM (should be running)
-    let replaced_info = cmd!(sh, "virsh dominfo {replace_test_domain}").read()?;
+    let replaced_info = cmd!(sh, "env LC_ALL=C virsh dominfo {replace_test_domain}").read()?;
     assert!(
         replaced_info.contains("running") || replaced_info.contains("idle"),
         "Replaced VM should be running"
@@ -491,7 +491,7 @@ fn test_libvirt_run_vm_lifecycle() -> TestResult {
     };
 
     // Verify domain is running (libvirt run starts the domain by default)
-    let info = cmd!(sh, "virsh dominfo {domain_name}").read()?;
+    let info = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
     assert!(info.contains("State:"), "Should show domain state");
     assert!(
         info.contains("running") || info.contains("idle"),
@@ -815,7 +815,7 @@ fn test_libvirt_run_transient_vm() -> TestResult {
 
     // Verify domain is transient using virsh dominfo
     println!("Verifying domain is marked as transient...");
-    let dominfo = cmd!(sh, "virsh dominfo {domain_name}").read()?;
+    let dominfo = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
     println!("Domain info:\n{}", dominfo);
 
     // Verify "Persistent: no" appears in dominfo
@@ -933,7 +933,7 @@ fn test_libvirt_run_transient_replace() -> TestResult {
     let sh = shell()?;
 
     // Verify domain is transient
-    let dominfo = cmd!(sh, "virsh dominfo {domain_name}").read()?;
+    let dominfo = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
     assert!(
         dominfo.contains("Persistent:") && dominfo.contains("no"),
         "Domain should be transient. dominfo: {}",
@@ -951,7 +951,7 @@ fn test_libvirt_run_transient_replace() -> TestResult {
     println!("✓ Successfully replaced transient domain");
 
     // Verify the new domain exists and is transient
-    let dominfo = cmd!(sh, "virsh dominfo {domain_name}").read()?;
+    let dominfo = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
     assert!(
         dominfo.contains("Persistent:") && dominfo.contains("no"),
         "Replaced domain should still be transient. dominfo: {}",

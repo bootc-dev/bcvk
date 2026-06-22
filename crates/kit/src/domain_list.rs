@@ -89,6 +89,7 @@ impl DomainLister {
     /// Build a virsh command with optional connection URI
     fn virsh_command(&self) -> Command {
         let mut cmd = Command::new("virsh");
+        cmd.env("LC_ALL", "C");
         if let Some(ref uri) = self.connect_uri {
             cmd.arg("-c").arg(uri);
         }
