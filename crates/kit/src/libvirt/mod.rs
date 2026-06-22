@@ -52,6 +52,7 @@ impl LibvirtOptions {
     /// Create a virsh Command with the appropriate connection URI
     pub fn virsh_command(&self) -> std::process::Command {
         let mut cmd = std::process::Command::new("virsh");
+        cmd.env("LC_ALL", "C");
         if let Some(ref uri) = self.connect {
             cmd.arg("-c").arg(uri);
         }

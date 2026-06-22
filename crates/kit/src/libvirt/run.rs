@@ -29,6 +29,7 @@ const UPDATE_FROM_HOST_TRANSPORT: &str = "containers-storage";
 /// Create a virsh command with optional connection URI
 pub(super) fn virsh_command(connect_uri: Option<&str>) -> Result<std::process::Command> {
     let mut cmd = std::process::Command::new("virsh");
+    cmd.env("LC_ALL", "C");
     if let Some(uri) = connect_uri {
         cmd.arg("-c").arg(uri);
     }
