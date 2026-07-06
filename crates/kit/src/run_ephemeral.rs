@@ -1368,7 +1368,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
                 &format!(".linux={}", kernel_mount),
                 kernel_info.kernel_path.as_str(),
             ])
-            .run()
+            .run_capture_stderr()
             .map_err(|e| eyre!("Failed to extract kernel from UKI: {e}"))?;
         debug!("Extracted kernel from UKI to {}", kernel_mount);
 
@@ -1379,7 +1379,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
                 &format!(".initrd={}", initramfs_mount),
                 kernel_info.kernel_path.as_str(),
             ])
-            .run()
+            .run_capture_stderr()
             .map_err(|e| eyre!("Failed to extract initramfs from UKI: {e}"))?;
         debug!("Extracted initramfs from UKI to {}", initramfs_mount);
     } else {
@@ -1399,7 +1399,7 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
                 kernel_info.kernel_path.as_str(),
                 kernel_mount,
             ])
-            .run()
+            .run_capture_stderr()
             .map_err(|e| eyre!("Failed to bind mount kernel: {e}"))?;
 
         // Copy initramfs so we can append to it
@@ -1762,7 +1762,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
 
         Command::new("mkswap")
             .args(["-q", path.as_str()])
-            .run()
+            .run_capture_stderr()
             .map_err(|e| eyre!("{e}"))?;
 
         qemu_config.add_virtio_blk_device_with_format(
