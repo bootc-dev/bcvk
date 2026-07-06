@@ -21,7 +21,7 @@ itest = { path = "../itest" }
 bcvk = { path = "../kit" }
 anyhow = "1"
 linkme = "0.3"
-dirs = "5.0"
+dirs = "6.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-error = { workspace = true }
@@ -29,7 +29,7 @@ xshell = { workspace = true }
 cfg-if = { workspace = true }
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
-zlink = "0.4"
+zlink = "0.5"
 tokio = { version = "1", features = ["rt", "net", "macros"] }
 tempfile = "3"
 uuid = { version = "1.18.1", features = ["v4"] }
