@@ -7,6 +7,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use color_eyre::{eyre::eyre, Result};
+use quick_xml::escape::unescape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
@@ -223,9 +224,11 @@ pub fn parse_xml_dom(xml: &str) -> Result<XmlNode> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if let Ok(text) = e.unescape() {
-                    if let Some(current) = stack.last_mut() {
-                        current.text.push_str(&text);
+                if let Ok(decoded) = e.decode() {
+                    if let Ok(text) = unescape(&decoded) {
+                        if let Some(current) = stack.last_mut() {
+                            current.text.push_str(&text);
+                        }
                     }
                 }
             }
