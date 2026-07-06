@@ -102,7 +102,14 @@ impl DiskImageMetadata {
         let json = serde_json::to_string(&inputs).expect("Failed to serialize cache inputs");
         let mut hasher = Sha256::new();
         hasher.update(json.as_bytes());
-        format!("sha256:{:x}", hasher.finalize())
+        format!(
+            "sha256:{}",
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        )
     }
 
     /// Write metadata to a file using extended attributes via rustix
