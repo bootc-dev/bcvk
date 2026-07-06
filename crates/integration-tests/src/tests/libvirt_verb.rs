@@ -20,7 +20,7 @@ use bcvk::xml_utils::parse_xml_dom;
 
 /// Generate a random alphanumeric suffix for VM names to avoid collisions
 fn random_suffix() -> String {
-    use rand::{distr::Alphanumeric, Rng};
+    use rand::{distr::Alphanumeric, RngExt};
     rand::rng()
         .sample_iter(&Alphanumeric)
         .take(8)
