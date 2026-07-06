@@ -58,8 +58,9 @@ jobs:
     dist_git_branches: &dist_git_branches
       - fedora-all
       - epel9
-      - epel10.1
+      - epel10
       - epel10.2
+      - epel10.3
 
   - job: koji_build
     trigger: commit
