@@ -22,7 +22,7 @@ itest-macros = { path = "../itest-macros" }
 libtest-mimic = "0.8"
 linkme = "0.3"
 paste = "1"
-quick-junit = "0.5"
+quick-junit = "0.6"
 rustix = { version = "1", default-features = false, features = ["fs", "pipe", "process"] }
 tokio = { version = "1", features = ["rt"] }
 xshell = { workspace = true }

@@ -10,13 +10,13 @@ chrono = { version = "0.4", features = ["serde"] }
 const_format = { workspace = true }
 color-eyre = { workspace = true }
 clap = { version = "4.4", features = ["derive", "env"] }
-clap_mangen = { version = "0.2.20", optional = true }
+clap_mangen = { version = "0.3.0", optional = true }
 data-encoding = { version = "2.9" }
-dirs = "5.0"
+dirs = "6.0"
 fn-error-context = { version = "0.2" }
-indicatif = "0.17"
-notify = "6.1"
-thiserror = "1.0"
+indicatif = "0.18"
+notify = "8.0"
+thiserror = "2.0"
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
 serde_yaml = "0.9"
@@ -24,42 +24,42 @@ tokio = { version = "1", features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-error = { workspace = true }
-shlex = "1"
-reqwest = { version = "0.12", features = ["blocking"] }
+shlex = "2"
+reqwest = { version = "0.13", features = ["blocking"] }
 tempfile = "3"
 uuid = { version = "1.10", features = ["v4"] }
 xshell = { workspace = true }
-yaml-rust2 = "0.9"
+yaml-rust2 = "0.11"
 rand = { workspace = true }
 cfg-if = { workspace = true }
 indoc = "2.0.6"
 regex = "1.10"
-itertools = "0.14.0"
+itertools = "0.15.0"
 camino = "1.1.12"
 comfy-table = "7.1"
-strum = { version = "0.26", features = ["derive"] }
-quick-xml = "0.36"
-oci-spec = "0.8.2"
-sha2 = "0.10"
-which = "7.0"
+strum = { version = "0.28", features = ["derive"] }
+quick-xml = "0.41"
+oci-spec = "0.10.0"
+sha2 = "0.11"
+which = "8.0"
 cpio = "0.4"
 
 # Linux-only dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 bcvk-qemu = { path = "../bcvk-qemu" }
 cap-std-ext = { workspace = true }
-bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
-bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "93b22f4dbc2d54f7cca7c1df3ee59fcdec0b2cf1" }
+bootc-mount = { git = "https://github.com/bootc-dev/bootc", rev = "54768712ee0308c51ccd27e8d7772d9c9f9aad39" }
+bootc-utils = { git = "https://github.com/bootc-dev/bootc", rev = "54768712ee0308c51ccd27e8d7772d9c9f9aad39" }
 rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 vsock = "0.5"
-nix = { version = "0.29", features = ["socket"] }
+nix = { version = "0.31", features = ["socket"] }
 libc = "0.2"
-zlink = "0.4"
+zlink = "0.5"
 futures-util = "0.3"
 libsystemd = "0.7"
 
 [dev-dependencies]
-similar-asserts = "1.5"
+similar-asserts = "2.0"
 
 [features]
 # Implementation detail of man page generation.
