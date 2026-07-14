@@ -3,7 +3,7 @@ use color_eyre::Result;
 use indicatif::ProgressBar;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::run_ephemeral::{run_detached, RunEphemeralOpts};
@@ -151,31 +151,11 @@ fn is_container_running(container_name: &str) -> Result<bool> {
     Ok(state.trim() == "running")
 }
 
-/// Wait for VM SSH availability using the supervisor status file
+/// Spawn the status monitor subprocess and return the child process.
 ///
-/// Monitors /run/supervisor-status.json inside the container for SSH.
-/// Returns Ok(true) when systemd indicates ssh is probably ready.
-/// Returns Ok(false) if we don't support systemd status notifications.
-pub fn wait_for_vm_ssh(
-    container_name: &str,
-    timeout: Option<Duration>,
-    progress: ProgressBar,
-) -> Result<(bool, ProgressBar)> {
-    let timeout = timeout.unwrap_or(SSH_TIMEOUT);
-
-    debug!(
-        "Waiting for VM readiness via supervisor status file (timeout: {}s)...",
-        timeout.as_secs()
-    );
-
-    // Check if container is still running before attempting exec
-    if !is_container_running(container_name)? {
-        progress.finish_and_clear();
-        show_container_logs(container_name);
-        return Err(eyre!("Container exited before SSH became available"));
-    }
-
-    // Use the new monitor-status subcommand for efficient inotify-based monitoring
+/// The monitor watches /run/supervisor-status.json inside the container via
+/// inotify and streams JSON status lines to stdout.
+fn spawn_status_monitor(container_name: &str) -> Result<std::process::Child> {
     let mut cmd = Command::new("podman");
     cmd.args([
         "exec",
@@ -192,98 +172,150 @@ pub fn wait_for_vm_ssh(
                 .map_err(Into::into)
         });
     }
-    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn() {
-        Ok(child) => child,
-        Err(e) => {
-            progress.finish_and_clear();
-            show_container_logs(container_name);
-            return Err(e).context("Failed to start status monitor");
-        }
-    };
-
-    let stdout = child.stdout.take().unwrap();
-    let reader = std::io::BufReader::new(stdout);
-
-    // Read JSON lines from the monitor
-    for line in std::io::BufRead::lines(reader) {
-        let line = line.context("Reading monitor output")?;
-
-        let status: SupervisorStatus = serde_json::from_str(&line)
-            .with_context(|| format!("Failed to parse monitor output as JSON: {}", line))?;
-        debug!("Status update: {:?}", status.state);
-
-        if status.ssh_access {
-            // End the monitor
-            let _ = child.kill();
-            return Ok((true, progress));
-        }
-
-        if let Some(state) = status.state {
-            match state {
-                SupervisorState::Ready => {
-                    debug!("VM is ready!");
-                    progress.set_message("Ready");
-                }
-                SupervisorState::ReachedTarget(ref target) => {
-                    progress.set_message(format!("Reached target {}", target));
-                    debug!("Boot progress: Reached {}", target);
-                }
-                SupervisorState::WaitingForSystemd => {
-                    progress.set_message("Waiting for systemd...");
-                    debug!("Waiting for systemd to initialize...");
-                }
-            }
-        } else {
-            debug!("Target does not support systemd readiness");
-            return Ok((false, progress));
-        }
-    }
-
-    let status = child.wait()?;
-
-    progress.finish_and_clear();
-    show_container_logs(container_name);
-    Err(eyre!("Monitor process exited unexpectedly: {status:?}"))
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("Failed to start status monitor")
 }
 
-/// Wait for SSH to be ready by polling SSH connection attempts
+/// Events from the concurrent monitor and SSH polling threads.
+enum ReadinessEvent {
+    MonitorLine(std::io::Result<String>),
+    SshReady,
+}
+
+/// Wait for SSH to be ready, using vsock boot progress and SSH polling concurrently.
 ///
-/// Attempts to connect to the VM via SSH until successful or timeout.
-/// This is used as a fallback when systemd notification is not available.
+/// Starts the vsock-based status monitor alongside SSH connectivity polling,
+/// each in their own thread. Both write to a shared channel; the main thread
+/// blocks on recv_timeout() so no CPU is burned polling.
 pub fn wait_for_ssh_ready(
     container_name: &str,
     timeout: Option<Duration>,
     progress: ProgressBar,
 ) -> Result<(std::time::Duration, ProgressBar)> {
     let timeout = timeout.unwrap_or(SSH_TIMEOUT);
-    let (_, progress) = wait_for_vm_ssh(container_name, Some(timeout), progress)?;
+    let start = Instant::now();
 
-    debug!("Polling SSH connectivity...");
+    if !is_container_running(container_name)? {
+        progress.finish_and_clear();
+        show_container_logs(container_name);
+        return Err(eyre!("Container exited before SSH became available"));
+    }
 
-    // Use SSH options optimized for connectivity testing
-    let ssh_options = crate::ssh::SshConnectionOptions::for_connectivity_test();
-    let container_name = container_name.to_string();
+    let (tx, rx) = std::sync::mpsc::channel::<ReadinessEvent>();
 
-    // Use shared polling function with container-specific test
-    crate::utils::wait_for_readiness(
-        progress,
-        "Waiting for SSH",
-        || {
-            // Try to connect via SSH and run a simple command
-            let status = crate::ssh::connect(
-                &container_name,
-                vec!["true".to_string()], // Just run 'true' to test connectivity
-                &ssh_options,
-            );
-
-            match status {
-                Ok(exit_status) if exit_status.success() => Ok(true),
-                _ => Ok(false),
+    // Spawn the vsock status monitor reader thread.
+    let mut monitor_child = match spawn_status_monitor(container_name) {
+        Ok(child) => Some(child),
+        Err(e) => {
+            debug!("Status monitor failed to start, using SSH polling only: {e}");
+            None
+        }
+    };
+    if let Some(ref mut child) = monitor_child {
+        let stdout = child.stdout.take().unwrap();
+        let monitor_tx = tx.clone();
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stdout);
+            for line in std::io::BufRead::lines(reader) {
+                if monitor_tx.send(ReadinessEvent::MonitorLine(line)).is_err() {
+                    break;
+                }
             }
-        },
-        timeout,
-        Duration::from_secs(1), // Poll every 1 second
-    )
+        });
+    }
+
+    // Spawn SSH polling thread.
+    let ssh_container = container_name.to_string();
+    let ssh_tx = tx.clone();
+    std::thread::spawn(move || {
+        let ssh_options = crate::ssh::SshConnectionOptions::for_connectivity_test();
+        loop {
+            let status =
+                crate::ssh::connect(&ssh_container, vec!["true".to_string()], &ssh_options);
+            if matches!(status, Ok(ref s) if s.success()) {
+                let _ = ssh_tx.send(ReadinessEvent::SshReady);
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+
+    // Drop our copy so the channel disconnects when both threads exit.
+    drop(tx);
+
+    debug!(
+        "Waiting for VM readiness (timeout: {}s), polling SSH and monitoring vsock concurrently",
+        timeout.as_secs()
+    );
+
+    loop {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            if let Some(ref mut child) = monitor_child {
+                let _ = child.kill();
+            }
+            progress.finish_and_clear();
+            show_container_logs(container_name);
+            return Err(eyre!(
+                "Timeout waiting for readiness after {}s",
+                timeout.as_secs()
+            ));
+        }
+
+        let event = match rx.recv_timeout(remaining) {
+            Ok(event) => event,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(ref mut child) = monitor_child {
+                    let _ = child.kill();
+                }
+                progress.finish_and_clear();
+                show_container_logs(container_name);
+                return Err(eyre!("Both monitor and SSH polling stopped unexpectedly"));
+            }
+        };
+
+        match event {
+            ReadinessEvent::SshReady => {
+                debug!("SSH ready after {}s", start.elapsed().as_secs());
+                if let Some(ref mut child) = monitor_child {
+                    let _ = child.kill();
+                }
+                return Ok((start.elapsed(), progress));
+            }
+            ReadinessEvent::MonitorLine(line) => match line {
+                Ok(line) => {
+                    if let Ok(status) = serde_json::from_str::<SupervisorStatus>(&line) {
+                        debug!("Status update: {:?}", status.state);
+                        if status.ssh_access {
+                            if let Some(ref mut child) = monitor_child {
+                                let _ = child.kill();
+                            }
+                            return Ok((start.elapsed(), progress));
+                        }
+                        if let Some(ref state) = status.state {
+                            match state {
+                                SupervisorState::Ready => {
+                                    progress.set_message("Ready");
+                                }
+                                SupervisorState::ReachedTarget(target) => {
+                                    progress.set_message(format!("Reached target {}", target));
+                                }
+                                SupervisorState::WaitingForSystemd => {
+                                    progress.set_message("Waiting for systemd...");
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Monitor read error: {e}");
+                }
+            },
+        }
+    }
 }
 
 /// Run an ephemeral pod and immediately SSH into it, with lifecycle binding
