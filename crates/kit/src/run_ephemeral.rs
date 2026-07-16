@@ -839,6 +839,11 @@ fn prepare_run_command_with_temp(
         // (We don't want all of `/` as that would scope in a lot more)
         "/usr:/run/tmproot/usr:ro",
         "-v",
+        // Some host distributions don't have all libraries in /lib or /lib64.
+        // We mount the current ld.so.cache into the tmproot so it matches
+        // library locations in the mounted /usr
+        "/etc/ld.so.cache:/run/tmproot/etc/ld.so.cache:ro",
+        "-v",
         &format!("{}:{}", entrypoint_path, ENTRYPOINT),
         "-v",
         &format!("{self_exe}:/run/selfexe:ro"),
