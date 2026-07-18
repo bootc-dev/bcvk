@@ -822,6 +822,9 @@ fn prepare_run_command_with_temp(
         // Also needed for nested containers
         "--security-opt=seccomp=unconfined",
         "--security-opt=unmask=/proc/*",
+        // Devices like /dev/kvm with group access need those groups propagated to the
+        // container so commands in the container can use them
+        "--group-add=keep-groups",
         // This is a general hardening thing to do when running privileged
         "-v",
         "/sys:/sys:ro",
