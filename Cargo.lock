@@ -281,6 +281,8 @@ dependencies = [
  "libc",
  "nix",
  "rustix",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "vsock",
