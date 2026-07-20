@@ -8,7 +8,6 @@ all: bin manpages
 
 .PHONY: bin
 bin:
-	cargo check --workspace
 	cargo build --release
 
 # Generate man pages from markdown sources
@@ -67,4 +66,17 @@ update-manpages:
 
 update-generated: sync-manpages manpages
 
-.PHONY: all bin install manpages update-generated makesudoinstall sync-manpages update-manpages sync-cli-options
+.PHONY: all bin install manpages update-generated makesudoinstall sync-manpages update-manpages sync-cli-options nbd-server
+
+# Cross-compile NBD server for podman machine (needed on macOS/Windows, no-op on Linux)
+NBD_ARCH := $(shell rustc -vV | awk '/^host:/ {split($$2, a, "-"); print a[1]}')
+NBD_TARGET := $(NBD_ARCH)-unknown-linux-gnu
+
+.PHONY: nbd-server
+nbd-server:
+ifneq ($(shell uname -s),Linux)
+	PATH="$(HOME)/.rustup/toolchains/stable-$(shell rustc -vV | awk '/^host:/ {print $$2}')/bin:$(HOME)/.cargo/bin:$(PATH)" \
+	  cargo zigbuild --target $(NBD_TARGET) --release -p bcvk-nbd
+	mkdir -p target/nbd-server
+	cp target/$(NBD_TARGET)/release/bcvk-nbd target/nbd-server/bcvk-nbd
+endif
