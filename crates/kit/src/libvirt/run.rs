@@ -310,6 +310,10 @@ pub struct LibvirtRunOpts {
     #[clap(long = "ignition")]
     pub ignition_config: Option<Utf8PathBuf>,
 
+    /// Path to virtiofsd binary (overrides auto-detection for disk creation)
+    #[clap(long = "virtiofsd", env = "VIRTIOFSD_BIN")]
+    pub virtiofsd_binary: Option<String>,
+
     /// Log virtio console (OS/journald on hvc0) to this file (created if absent)
     #[clap(long = "console-log")]
     pub console_log: Option<Utf8PathBuf>,
@@ -520,6 +524,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
         &image_digest,
         &opts.install,
         connect_uri,
+        opts.virtiofsd_binary.as_deref(),
     )
     .with_context(|| "Failed to find or create base disk")?;
 
