@@ -848,7 +848,7 @@ pub fn list_storage_pool_volumes(connect_uri: Option<&str>) -> Result<Vec<Utf8Pa
 
 /// Find an available SSH port for port forwarding using random allocation
 fn find_available_ssh_port() -> u16 {
-    use rand::Rng;
+    use rand::RngExt;
 
     // Try random ports in the range 2222-3000 to avoid conflicts in concurrent scenarios
     let mut rng = rand::rng();
