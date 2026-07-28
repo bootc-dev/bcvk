@@ -58,6 +58,11 @@ zlink = "0.4"
 futures-util = "0.3"
 libsystemd = "0.7"
 
+# macOS-only dependencies (vfkit backend)
+[target.'cfg(target_os = "macos")'.dependencies]
+rustix = { version = "1", features = ["process"] }
+zstd = "0.13"
+
 [dev-dependencies]
 similar-asserts = "1.5"
 

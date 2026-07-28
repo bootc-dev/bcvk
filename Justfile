@@ -3,9 +3,10 @@ PRIMARY_IMAGE := "quay.io/centos-bootc/centos-bootc:stream10"
 # <https://github.com/bootc-dev/bcvk/issues/153>
 ALL_BASE_IMAGES := "quay.io/fedora/fedora-bootc:43 quay.io/fedora/fedora-bootc:44 quay.io/centos-bootc/centos-bootc:stream9 quay.io/centos-bootc/centos-bootc:stream10 quay.io/almalinuxorg/almalinux-bootc:10.0"
 
-# Build the native binary
+# Build the native binary (cross-compiles NBD server on non-Linux hosts)
 build:
-   make
+    make nbd-server
+    make bin
 
 # Static checks
 validate:
