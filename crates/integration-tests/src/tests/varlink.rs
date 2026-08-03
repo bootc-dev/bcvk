@@ -183,7 +183,7 @@ trait ToDiskProxy {
 // ---------------------------------------------------------------------------
 
 struct ActivatedBcvk {
-    conn: zlink::Connection<zlink::unix::Stream>,
+    conn: zlink::Connection<zlink::tokio::unix::Stream>,
     rt: tokio::runtime::Runtime,
 }
 
@@ -215,7 +215,7 @@ fn activated_connection() -> anyhow::Result<ActivatedBcvk> {
         .enable_all()
         .build()?;
     let tokio_stream = rt.block_on(async { tokio::net::UnixStream::from_std(ours) })?;
-    let zlink_stream = zlink::unix::Stream::from(tokio_stream);
+    let zlink_stream = zlink::tokio::unix::Stream::try_from(tokio_stream)?;
     let conn = zlink::Connection::from(zlink_stream);
 
     Ok(ActivatedBcvk { conn, rt })

@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 const_format = { workspace = true }
 color-eyre = { workspace = true }
@@ -54,7 +54,7 @@ rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "
 vsock = "0.5"
 nix = { version = "0.31", features = ["socket"] }
 libc = "0.2"
-zlink = "0.5"
+zlink = "0.7"
 futures-util = "0.3"
 libsystemd = "0.7"
 
