@@ -62,6 +62,13 @@ pub struct ContainerListEntry {
     pub command: Vec<String>,
 }
 
+/// Options for the test-basic subcommand
+#[derive(clap::Parser, Debug)]
+pub struct TestBasicOpts {
+    #[command(flatten)]
+    pub run_opts: run_ephemeral::RunEphemeralOpts,
+}
+
 /// Ephemeral VM operations
 #[derive(Debug, Subcommand)]
 #[command(after_long_help = "\
@@ -136,6 +143,10 @@ pub enum EphemeralCommands {
     #[clap(name = "run-ssh")]
     RunSsh(run_ephemeral_ssh::RunEphemeralSshOpts),
 
+    /// Boot an ephemeral VM and verify systemd is healthy
+    #[clap(name = "test-basic")]
+    TestBasic(TestBasicOpts),
+
     /// Connect to running VMs via SSH
     #[clap(name = "ssh")]
     Ssh(SshOpts),
@@ -163,6 +174,17 @@ impl EphemeralCommands {
         match self {
             EphemeralCommands::Run(opts) => run_ephemeral::run(opts),
             EphemeralCommands::RunSsh(opts) => run_ephemeral_ssh::run_ephemeral_ssh(opts),
+            EphemeralCommands::TestBasic(opts) => {
+                let ssh_opts = run_ephemeral_ssh::RunEphemeralSshOpts {
+                    run_opts: opts.run_opts,
+                    ssh_args: vec![
+                        "systemctl".to_string(),
+                        "is-system-running".to_string(),
+                        "--wait".to_string(),
+                    ],
+                };
+                run_ephemeral_ssh::run_ephemeral_ssh(ssh_opts)
+            }
             EphemeralCommands::Ssh(opts) => {
                 // Create progress bar if stderr is a terminal
                 let progress_bar = crate::boot_progress::create_boot_progress_bar();
