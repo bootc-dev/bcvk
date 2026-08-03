@@ -463,15 +463,15 @@ trait ToDiskProxy {
 #[derive(Debug)]
 struct ActivatedListener {
     /// The connection to yield on the first accept(), consumed after use.
-    conn: Option<zlink::Connection<zlink::unix::Stream>>,
+    conn: Option<zlink::Connection<zlink::tokio::unix::Stream>>,
 }
 
 impl zlink::Listener for ActivatedListener {
-    type Socket = zlink::unix::Stream;
+    type Socket = zlink::tokio::unix::Stream;
 
-    async fn accept(&mut self) -> zlink::Result<zlink::Connection<Self::Socket>> {
+    async fn accept(&mut self) -> zlink::Result<Option<zlink::Connection<Self::Socket>>> {
         match self.conn.take() {
-            Some(conn) => Ok(conn),
+            Some(conn) => Ok(Some(conn)),
             None => std::future::pending().await,
         }
     }
@@ -503,7 +503,7 @@ fn try_activated_listener() -> color_eyre::Result<Option<ActivatedListener>> {
     let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd.into_raw_fd()) };
     std_stream.set_nonblocking(true)?;
     let tokio_stream = tokio::net::UnixStream::from_std(std_stream)?;
-    let zlink_stream = zlink::unix::Stream::from(tokio_stream);
+    let zlink_stream = zlink::tokio::unix::Stream::try_from(tokio_stream)?;
     let conn = zlink::Connection::from(zlink_stream);
     Ok(Some(ActivatedListener { conn: Some(conn) }))
 }
