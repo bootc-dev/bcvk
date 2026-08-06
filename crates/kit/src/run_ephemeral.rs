@@ -437,6 +437,11 @@ pub struct CommonVmOpts {
     )]
     pub ssh_keygen: bool,
 
+    /// Isolate the VM from the network. SSH access from the host is
+    /// preserved, but the VM cannot reach the internet or other hosts.
+    #[clap(long)]
+    pub network_isolation: bool,
+
     #[clap(
         long = "virtiofsd",
         env = "VIRTIOFSD_BIN",

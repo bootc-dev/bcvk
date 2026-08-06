@@ -302,6 +302,11 @@ pub struct LibvirtRunOpts {
     #[clap(long)]
     pub graphical_console: bool,
 
+    /// Isolate the VM from the network. SSH access from the host is
+    /// preserved, but the VM cannot reach the internet or other hosts.
+    #[clap(long)]
+    pub network_isolation: bool,
+
     /// Create a transient VM that disappears on shutdown/reboot
     #[clap(long)]
     pub transient: bool,
