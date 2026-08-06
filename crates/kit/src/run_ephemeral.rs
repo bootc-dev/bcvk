@@ -1396,19 +1396,10 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
             .as_ref()
             .ok_or_else(|| eyre!("Traditional kernel found but no initramfs path"))?;
 
-        fs::File::create(kernel_mount)?;
-
-        // Bind mount kernel (read-only is fine)
-        Command::new("mount")
-            .args([
-                "--bind",
-                "-o",
-                "ro",
-                kernel_info.kernel_path.as_str(),
-                kernel_mount,
-            ])
-            .run_capture_stderr()
-            .map_err(|e| eyre!("Failed to bind mount kernel: {e}"))?;
+        // Copy kernel; a bind mount would be slightly cheaper but can fail with
+        // EPERM on newer kernels due to locked-mount restrictions in user namespaces.
+        fs::copy(&kernel_info.kernel_path, kernel_mount)
+            .map_err(|e| eyre!("Failed to copy kernel: {e}"))?;
 
         // Copy initramfs so we can append to it
         fs::copy(source_initramfs_path, initramfs_mount)
