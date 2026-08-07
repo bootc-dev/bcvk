@@ -154,6 +154,10 @@ Run a bootable container as a persistent VM
 
     Enable graphical console (SPICE) for virt-manager access
 
+**--network-isolation**
+
+    Isolate the VM from the network. SSH access from the host is preserved, but the VM cannot reach the internet or other hosts
+
 **--transient**
 
     Create a transient VM that disappears on shutdown/reboot
@@ -161,6 +165,10 @@ Run a bootable container as a persistent VM
 **--ignition**=*IGNITION_CONFIG*
 
     Path to Ignition config file (JSON format) for first-boot provisioning
+
+**--virtiofsd**=*VIRTIOFSD_BINARY*
+
+    Path to virtiofsd binary (overrides auto-detection for disk creation)
 
 **--console-log**=*CONSOLE_LOG*
 

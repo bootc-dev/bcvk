@@ -84,6 +84,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Generate SSH keypair and inject via systemd credentials
 
+**--network-isolation**
+
+    Isolate the VM from the network. SSH access from the host is preserved, but the VM cannot reach the internet or other hosts
+
 **--virtiofsd**=*VIRTIOFSD_BINARY*
 
     Path to virtiofsd binary (overrides auto-detection)
