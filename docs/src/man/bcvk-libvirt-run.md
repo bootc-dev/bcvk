@@ -227,6 +227,16 @@ Capture the platform console (UEFI/GRUB/serial) separately:
         --platform-console-log /var/home/user/vm-serial.log \
         quay.io/fedora/fedora-bootc:42
 
+Create a network-isolated VM for hermetic testing:
+
+    bcvk libvirt run --name test-runner \
+        --network-isolation \
+        --bind-storage-ro \
+        quay.io/centos-bootc/centos-bootc:stream10
+
+SSH access from the host is preserved, but processes inside the guest
+cannot reach the internet or other external hosts.
+
 Server management workflow:
 
     # Create a persistent server VM

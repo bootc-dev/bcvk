@@ -231,6 +231,15 @@ Mount source code for testing:
     bcvk ephemeral run-ssh --bind /home/user/project:src localhost/mybootc
     # Inside VM: ls /run/virtiofs-mnt-src
 
+## Network Isolation
+
+Run tests in a network-isolated VM to avoid flakes from external services:
+
+    bcvk ephemeral run-ssh --network-isolation localhost/mybootc -- make test
+
+SSH connectivity from the host is preserved; only outbound traffic from
+within the guest is blocked.
+
 ## Debugging
 
 Enable console output to see boot messages:

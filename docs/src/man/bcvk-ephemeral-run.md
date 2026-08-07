@@ -276,6 +276,22 @@ For network-level port forwarding via podman, configure slirp4netns:
         --network slirp4netns:port_handler=slirp4netns,allow_host_loopback=true \
         --name webvm localhost/mybootc
 
+## Network Isolation
+
+Block all outbound network access from the VM while preserving SSH
+connectivity from the host.  This is useful for CI/CD pipelines where test
+execution should not depend on external network resources:
+
+    bcvk ephemeral run -d --rm -K \
+        --network-isolation \
+        --bind-storage-ro \
+        --name testvm localhost/mybootc
+
+The VM can still be reached via **bcvk ephemeral ssh**, but processes inside
+the guest cannot connect to the internet or other external hosts.  Pre-stage
+any required resources (container images, packages) on the host and share
+them into the VM using **--bind**, **--ro-bind**, or **--bind-storage-ro**.
+
 ## Instance Types
 
 Use predefined instance types for consistent resource allocation:
