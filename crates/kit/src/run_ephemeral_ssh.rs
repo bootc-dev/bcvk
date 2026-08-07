@@ -289,12 +289,14 @@ pub fn wait_for_ssh_ready(
                 Ok(line) => {
                     if let Ok(status) = serde_json::from_str::<SupervisorStatus>(&line) {
                         debug!("Status update: {:?}", status.state);
-                        if status.ssh_access {
-                            if let Some(ref mut child) = monitor_child {
-                                let _ = child.kill();
-                            }
-                            return Ok((start.elapsed(), progress));
-                        }
+                        // Note: we intentionally do NOT return early when
+                        // status.ssh_access is true. ssh-access.target is
+                        // activated by sshd-vsock.socket (the AF_VSOCK SSH
+                        // listener from systemd-ssh-generator), which can
+                        // happen before sshd.service (TCP port 22) is ready.
+                        // Since we connect via TCP (QEMU hostfwd), only the
+                        // SshReady event (actual SSH connectivity test) is a
+                        // reliable readiness signal.
                         if let Some(ref state) = status.state {
                             match state {
                                 SupervisorState::Ready => {
