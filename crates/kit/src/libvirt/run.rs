@@ -1555,8 +1555,13 @@ fn create_libvirt_domain_from_disk(
         ));
     }
 
+    let restrict_opt = if opts.network_isolation {
+        ",restrict=on"
+    } else {
+        ""
+    };
     let netdev_config = format!(
-        "user,id=ssh0,{}",
+        "user,id=ssh0{restrict_opt},{}",
         hostfwd_args
             .iter()
             .map(|fwd| format!("hostfwd={}", fwd))
