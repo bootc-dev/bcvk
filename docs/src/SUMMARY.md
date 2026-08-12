@@ -14,6 +14,7 @@
     - [ephemeral run](./man/bcvk-ephemeral-run.md)
     - [ephemeral ssh](./man/bcvk-ephemeral-ssh.md)
     - [ephemeral run-ssh](./man/bcvk-ephemeral-run-ssh.md)
+    - [ephemeral test-basic](./man/bcvk-ephemeral-test-basic.md)
   - [to-disk](./man/bcvk-to-disk.md)
   - [images](./man/bcvk-images.md)
     - [images list](./man/bcvk-images-list.md)
