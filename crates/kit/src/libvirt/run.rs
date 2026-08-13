@@ -15,7 +15,7 @@ use tracing::{debug, info};
 
 use crate::common_opts::MemoryOpts;
 use crate::domain_list::DomainLister;
-use crate::images::get_image_digest;
+use crate::images::{get_image_digest, prepend_transport_to_img};
 use crate::install_options::InstallOptions;
 use crate::libvirt::domain::VirtiofsFilesystem;
 use crate::utils::parse_memory_to_mb;
@@ -485,15 +485,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
     };
 
     let image_to_install = opts.image_to_install.as_ref().unwrap_or(&opts.image);
-
-    let has_transport = ["docker://", "containers-storage:", "oci:", "dir:"]
-        .iter()
-        .any(|t| image_to_install.starts_with(t));
-    let image_to_install = if has_transport {
-        image_to_install.clone()
-    } else {
-        format!("containers-storage:{image_to_install}")
-    };
+    let image_to_install = prepend_transport_to_img(&image_to_install);
 
     println!(
         "Creating libvirt domain '{}' (install source container image: {})",

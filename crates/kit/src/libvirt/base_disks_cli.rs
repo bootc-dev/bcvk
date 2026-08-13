@@ -10,7 +10,7 @@ use serde_json;
 
 use super::base_disks::{find_or_create_base_disk, list_base_disks, prune_base_disks};
 use super::OutputFormat;
-use crate::images::get_image_digest;
+use crate::images::{get_image_digest, prepend_transport_to_img};
 use crate::install_options::InstallOptions;
 
 /// Options for base-disks command
@@ -76,6 +76,7 @@ pub fn run_create(
 ) -> Result<()> {
     let connect_uri = global_opts.connect.as_deref();
     let image_to_install = opts.image_to_install.unwrap_or(opts.source_image.clone());
+    let image_to_install = prepend_transport_to_img(&image_to_install);
     let image_digest = get_image_digest(&image_to_install)?;
 
     let path = find_or_create_base_disk(
