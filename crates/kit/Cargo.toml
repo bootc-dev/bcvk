@@ -43,7 +43,6 @@ oci-spec = "0.10.0"
 sha2 = "0.11"
 which = "8.0"
 cpio = "0.4"
-containers-image-proxy = "0.11.0"
 
 # Linux-only dependencies
 [target.'cfg(target_os = "linux")'.dependencies]

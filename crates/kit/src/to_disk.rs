@@ -208,9 +208,7 @@ impl ToDiskOpts {
             None => &format!("containers-storage:{}", self.source_image),
         };
 
-        let allow_network = containers_image_proxy::Transport::try_from(source_imgref.as_ref())
-            .context("Parsing source imgref transport")?
-            == containers_image_proxy::Transport::Registry;
+        let allow_network = source_imgref.starts_with("docker://");
 
         // Quote each bootc argument individually to prevent shell injection
         let mut quoted_bootc_args = Vec::new();

@@ -486,16 +486,14 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
 
     let image_to_install = opts.image_to_install.as_ref().unwrap_or(&opts.image);
 
-    let image_to_install =
-        match containers_image_proxy::Transport::try_from(image_to_install.as_str()) {
-            // image_to_install has Transport attached
-            Ok(_) => image_to_install,
-            // Assume it's "opts.image" so assume containers_storage
-            Err(_) => &format!(
-                "{}:{image_to_install}",
-                containers_image_proxy::Transport::ContainerStorage
-            ),
-        };
+    let has_transport = ["docker://", "containers-storage:", "oci:", "dir:"]
+        .iter()
+        .any(|t| image_to_install.starts_with(t));
+    let image_to_install = if has_transport {
+        image_to_install.clone()
+    } else {
+        format!("containers-storage:{image_to_install}")
+    };
 
     println!(
         "Creating libvirt domain '{}' (install source container image: {})",
@@ -503,7 +501,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
     );
 
     // Get the image digest for caching
-    let image_digest = get_image_digest(image_to_install)?;
+    let image_digest = get_image_digest(&image_to_install)?;
     debug!("Image digest: {}", image_digest);
 
     // Check Ignition support and validate config file path early
