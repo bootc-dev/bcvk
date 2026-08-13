@@ -76,6 +76,7 @@
 use std::io::IsTerminal;
 
 use crate::cache_metadata::DiskImageMetadata;
+use crate::images::get_image_digest;
 use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{run_detached, CommonVmOpts, RunEphemeralOpts};
 use crate::run_ephemeral_ssh::wait_for_ssh_ready;
@@ -161,6 +162,13 @@ pub struct ToDiskOpts {
     /// Container image to install
     pub source_image: String,
 
+    /// The image to use for creating the base disk
+    /// If None, the `image` cli option is used for installation
+    ///
+    /// Ex. docker://quay.io/fedora/fedora-bootc:44
+    #[clap(long)]
+    pub image_to_install: Option<String>,
+
     /// Target disk/device path
     pub target_disk: Utf8PathBuf,
 
@@ -199,7 +207,14 @@ impl ToDiskOpts {
         disk_size: u64,
         use_oci_layout: bool,
     ) -> Result<Vec<String>> {
-        let source_imgref = format!("containers-storage:{}", self.source_image);
+        let source_imgref = match &self.image_to_install {
+            Some(img_to_install) => img_to_install,
+            None => &format!("containers-storage:{}", self.source_image),
+        };
+
+        let allow_network = containers_image_proxy::Transport::try_from(source_imgref.as_ref())
+            .context("Parsing source imgref transport")?
+            == containers_image_proxy::Transport::Registry;
 
         // Quote each bootc argument individually to prevent shell injection
         let mut quoted_bootc_args = Vec::new();
@@ -216,7 +231,7 @@ impl ToDiskOpts {
             .to_string();
 
         // Quote the source image name for local storage operations
-        let quoted_source_image = shlex::try_quote(&self.source_image)
+        let quoted_src_img_wo_transport_prefix = shlex::try_quote(&self.source_image)
             .map_err(|e| {
                 eyre!(
                     "Failed to quote source image '{}': {}",
@@ -314,18 +329,19 @@ impl ToDiskOpts {
             # Mount /var/tmp into inner container to avoid cross-device link errors (issue #125)
             set +e  # Don't exit on error, we'll check for signature error and retry
             ERROR_LOG=$(mktemp)
-            podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
+            podman run --rm -i ${tty} --privileged --pid=host {NETWORK} -v /sys:/sys:ro \
                 -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
                 {OCI_VOLUME} \
                 --security-opt label=type:unconfined_t \
                 --env=STORAGE_OPTS \
                 {INSTALL_LOG} \
                 {EXTRA_PODMAN_ARGS} \
-                {SOURCE_IMGREF} \
+                {CONTAINER_IMAGE} \
                 bootc install to-disk \
                 --generic-image \
                 --skip-fetch-check \
                 {OCI_SOURCE_ARG} \
+                --source-imgref {SOURCE_IMGREF} \
                 {BOOTC_ARGS} \
                 /dev/disk/by-id/virtio-output 2> "$ERROR_LOG"
             BOOTC_EXIT=$?
@@ -352,10 +368,10 @@ impl ToDiskOpts {
 EOF
 
                 # Copy image without signatures
-                skopeo copy --remove-signatures {SOURCE_IMGREF} containers-storage:{SOURCE_IMAGE}
+                skopeo copy --remove-signatures {CONTAINER_IMAGE} containers-storage:{SOURCE_IMAGE}
 
                 # Retry bootc install with the unsigned local copy
-                podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
+                podman run --rm -i ${tty} --privileged --pid=host {NETWORK} -v /sys:/sys:ro \
                     -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
                     {OCI_VOLUME} \
                     --security-opt label=type:unconfined_t \
@@ -367,6 +383,7 @@ EOF
                     --generic-image \
                     --skip-fetch-check \
                     {OCI_SOURCE_ARG} \
+                    --source-imgref {SOURCE_IMGREF} \
                     {BOOTC_ARGS} \
                     /dev/disk/by-id/virtio-output
             elif [ $BOOTC_EXIT -ne 0 ]; then
@@ -385,10 +402,12 @@ EOF
         .replace("{OCI_VOLUME}", &oci_volume)
         .replace("{OCI_SOURCE_ARG}", &oci_source_arg)
         .replace("{SOURCE_IMGREF}", &quoted_source_imgref)
-        .replace("{SOURCE_IMAGE}", &quoted_source_image)
+        .replace("{SOURCE_IMAGE}", &quoted_src_img_wo_transport_prefix)
         .replace("{INSTALL_LOG}", &install_log)
         .replace("{EXTRA_PODMAN_ARGS}", &extra_podman_args)
-        .replace("{BOOTC_ARGS}", &bootc_args);
+        .replace("{BOOTC_ARGS}", &bootc_args)
+        .replace("{CONTAINER_IMAGE}", &quoted_src_img_wo_transport_prefix)
+        .replace("{NETWORK}", if allow_network { "--net=host" } else { "--net=none" });
 
         Ok(vec!["/bin/bash".to_string(), "-c".to_string(), script])
     }
@@ -486,14 +505,12 @@ fn export_to_oci_layout(source_image: &str) -> Result<tempfile::TempDir> {
 ///
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
-pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
-    // Normalize the source image name by stripping containers-storage: prefix if present.
-    // The containers-storage: prefix is a transport specifier used by some tools like skopeo,
-    // but podman commands (image inspect, run --mount=type=image) expect just the image name.
-    // We'll add it back where needed (e.g., in bootc install commands).
-    if let Some(stripped) = opts.source_image.strip_prefix("containers-storage:") {
-        opts.source_image = stripped.to_string();
-    }
+pub fn run(opts: ToDiskOpts) -> Result<RunOutcome> {
+    let image_to_install = opts
+        .image_to_install
+        .as_ref()
+        .unwrap_or(&opts.source_image)
+        .as_str();
 
     // Phase 0: Check for existing cached disk image
     let would_reuse = if opts.target_disk.exists() {
@@ -503,14 +520,13 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
         );
 
         // Get the image digest for comparison
-        let inspect = images::inspect(&opts.source_image)?;
-        let image_digest = inspect.digest.to_string();
+        let image_digest = get_image_digest(image_to_install)?;
 
         // Check if cached disk matches our requirements
         match crate::cache_metadata::check_cached_disk(
             opts.target_disk.as_std_path(),
             &image_digest,
-            &opts.source_image,
+            &image_to_install,
             &opts.install,
         )? {
             Ok(()) => {
@@ -600,10 +616,10 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
     // on the host. This preserves the correct manifest with compressed
     // layer digests, working around containers-storage additionalimagestore
     // reconstructing manifests with uncompressed digests via virtiofs (#307).
-    let use_oci_layout = opts.install.composefs_backend;
+    let use_oci_layout = opts.install.composefs_backend && opts.image_to_install.is_none();
     let oci_tmpdir = if use_oci_layout {
         tracing::info!("Exporting image to OCI layout...");
-        match export_to_oci_layout(&opts.source_image) {
+        match export_to_oci_layout(&image_to_install) {
             Ok(tmpdir) => Some(tmpdir),
             Err(e) => {
                 let _ = std::fs::remove_file(&opts.target_disk);
@@ -713,7 +729,7 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
             // Write metadata to the disk image for caching
             // Extract values before they're potentially moved
             let write_result = write_disk_metadata(
-                &opts.source_image,
+                &image_to_install,
                 &opts.target_disk,
                 &opts.install,
                 &opts.additional.format,
@@ -742,8 +758,7 @@ fn write_disk_metadata(
     // as they're stored in the filesystem metadata, not inside the disk image
 
     // Get the image digest
-    let inspect = images::inspect(source_image)?;
-    let digest = inspect.digest.to_string();
+    let digest = get_image_digest(source_image)?;
 
     // Prepare metadata using the new helper method
     let metadata = DiskImageMetadata::from(install_options, &digest, source_image);
@@ -777,6 +792,7 @@ mod tests {
         // Test with explicit disk size
         let opts = ToDiskOpts {
             source_image: "test:latest".to_string(),
+            image_to_install: Some("test:latest".to_string()),
             target_disk: "/tmp/test.img".into(),
             install: InstallOptions {
                 filesystem: Some("ext4".to_string()),
@@ -795,6 +811,7 @@ mod tests {
         // Test with another size format
         let opts2 = ToDiskOpts {
             source_image: "test:latest".to_string(),
+            image_to_install: Some("test:latest".into()),
             target_disk: "/tmp/test.img".into(),
             install: InstallOptions {
                 filesystem: Some("ext4".to_string()),

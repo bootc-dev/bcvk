@@ -4,6 +4,7 @@
 //! to libvirt storage pools, maintaining container image metadata as libvirt annotations.
 
 use crate::common_opts::MemoryOpts;
+use crate::images::get_image_digest;
 use crate::install_options::InstallOptions;
 use crate::to_disk::{run as to_disk, ToDiskAdditionalOpts, ToDiskOpts};
 use crate::{images, utils};
@@ -19,6 +20,13 @@ use tracing::debug;
 pub struct LibvirtUploadOpts {
     /// Container image to install and upload
     pub source_image: String,
+
+    /// The image to use for creating the base disk
+    /// If None, the `image` cli option is used for installation
+    ///
+    /// Ex. docker://quay.io/fedora/fedora-bootc:44
+    #[clap(long)]
+    pub image_to_install: Option<String>,
 
     /// Name for the libvirt volume (defaults to sanitized image name)
     #[clap(long)]
@@ -183,9 +191,10 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtUploadOpts
         opts.source_image
     );
 
+    let image_to_install = opts.image_to_install.as_ref().unwrap_or(&opts.source_image);
+
     // Phase 1: Extract image digest for caching
-    let inspect = images::inspect(&opts.source_image)?;
-    let image_digest = &inspect.digest.to_string();
+    let image_digest = get_image_digest(image_to_install)?;
     debug!("Container image digest: {}", image_digest);
 
     // Phase 2: Calculate disk size to use
@@ -194,6 +203,9 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtUploadOpts
         utils::parse_size(size_str)?
     } else {
         // Use same logic as to_disk: 2x source image size with 4GB minimum
+        // NOTE: Using opts.source_image to estimate the required size here
+        // as getting the size from registry images might not be always accurate
+        // as we will get the compressed size and not the final on-disk size
         let image_size = images::get_image_size(&opts.source_image)?;
 
         std::cmp::max(image_size * 2, 4u64 * 1024 * 1024 * 1024)
@@ -208,6 +220,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtUploadOpts
 
     let install_opts = ToDiskOpts {
         source_image: opts.source_image.clone(),
+        image_to_install: opts.image_to_install.clone(),
         target_disk: temp_disk_path.clone(),
         install: opts.install.clone(),
         additional: ToDiskAdditionalOpts {

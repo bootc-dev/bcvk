@@ -10,7 +10,7 @@ use serde_json;
 
 use super::base_disks::{find_or_create_base_disk, list_base_disks, prune_base_disks};
 use super::OutputFormat;
-use crate::images;
+use crate::images::get_image_digest;
 use crate::install_options::InstallOptions;
 
 /// Options for base-disks command
@@ -24,6 +24,12 @@ pub struct LibvirtBaseDisksOpts {
 #[derive(Debug, Parser)]
 pub struct CreateBaseDiskOpts {
     pub source_image: String,
+    /// The image to use for creating the base disk
+    /// If None, the `source_image` cli option is used for installation
+    ///
+    /// Ex. docker://quay.io/fedora/fedora-bootc:44
+    #[clap(long)]
+    pub image_to_install: Option<String>,
     #[clap(flatten)]
     pub install_options: InstallOptions,
 }
@@ -69,11 +75,12 @@ pub fn run_create(
     opts: CreateBaseDiskOpts,
 ) -> Result<()> {
     let connect_uri = global_opts.connect.as_deref();
-    let inspect = images::inspect(&opts.source_image)?;
-    let image_digest = inspect.digest.to_string();
+    let image_to_install = opts.image_to_install.unwrap_or(opts.source_image.clone());
+    let image_digest = get_image_digest(&image_to_install)?;
 
     let path = find_or_create_base_disk(
         &opts.source_image,
+        &image_to_install,
         &image_digest,
         &opts.install_options,
         connect_uri,

@@ -208,6 +208,15 @@ pub fn inspect(name: &str) -> Result<ImageInspect> {
     r.pop().ok_or_else(|| eyre!("No such image"))
 }
 
+pub fn get_image_digest(name: &str) -> Result<String> {
+    let r = Command::new("skopeo")
+        .args(["inspect", "--format", "{{.Digest}}", name])
+        .run_get_string()
+        .map_err(|e| eyre!("{e}"))?;
+
+    Ok(r.trim().into())
+}
+
 /// Get container image size in bytes for disk space planning.
 pub fn get_image_size(name: &str) -> Result<u64> {
     tracing::debug!("Getting size for image: {}", name);
