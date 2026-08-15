@@ -1681,7 +1681,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     let mut kernel_cmdline = [
         // This avoids having journald interact with the rootfs
         // at all, which lessens the I/O traffic for virtiofs
-        "systemd.journald.storage=volatile",
+        "systemd.mask=systemd-journal-flush.service",
         // See https://github.com/bootc-dev/bcvk/issues/22
         "selinux=0",
     ]
