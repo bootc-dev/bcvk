@@ -1696,7 +1696,7 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         // We don't provide any cloud-init datasource right now,
         // though in the future it would make sense to do so,
         // and switch over our SSH key injection.
-        kernel_cmdline.push("ds=iid-datasource-none".to_string());
+        kernel_cmdline.push("ds=None".to_string());
     }
 
     // Add Ignition platform kernel argument if Ignition config is specified
