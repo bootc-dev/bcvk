@@ -15,7 +15,9 @@ use tracing::{debug, info};
 
 use crate::common_opts::MemoryOpts;
 use crate::domain_list::DomainLister;
-use crate::images::{get_image_digest, prepend_transport_to_img};
+use crate::images::{
+    get_image_digest, img_from_containers_storage, img_has_transport, prepend_transport_to_img,
+};
 use crate::install_options::InstallOptions;
 use crate::libvirt::domain::VirtiofsFilesystem;
 use crate::utils::parse_memory_to_mb;
@@ -1116,9 +1118,20 @@ fn check_ignition_support(image: &str) -> Result<bool> {
     use std::collections::HashMap;
     use std::process::Stdio;
 
+    let mut args = vec!["inspect", "--format", "{{json .Labels}}"];
+
+    let cmd = if img_from_containers_storage(image) || !img_has_transport(image) {
+        args.insert(0, "image");
+        args.push(image.strip_prefix("containers-storage:").unwrap_or(image));
+        "podman"
+    } else {
+        args.push(image);
+        "skopeo"
+    };
+
     // Fetch all labels with a single podman inspect call
-    let output = std::process::Command::new("skopeo")
-        .args(["inspect", "--format", "{{json .Labels}}", image])
+    let output = std::process::Command::new(cmd)
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

@@ -113,6 +113,7 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
+use crate::images::{img_from_containers_storage, img_has_transport};
 use crate::qemu::{self, QemuConfigExt};
 use crate::{
     boot_progress,
@@ -195,7 +196,7 @@ impl std::str::FromStr for LogDir {
                 other => {
                     return Err(color_eyre::eyre::eyre!(
                         "--log-dir unknown stream name {other:?}; expected `journal` or `console`"
-                    ))
+                    ));
                 }
             }
         }
@@ -1239,9 +1240,20 @@ fn check_ignition_support(image: &str) -> Result<bool> {
     use std::collections::HashMap;
     use std::process::Stdio;
 
+    let mut args = vec!["inspect", "--format", "{{json .Labels}}"];
+
+    let cmd = if img_from_containers_storage(image) || !img_has_transport(image) {
+        args.insert(0, "image");
+        args.push(image.strip_prefix("containers-storage:").unwrap_or(image));
+        "podman"
+    } else {
+        args.push(image);
+        "skopeo"
+    };
+
     // Fetch all labels with a single podman inspect call
-    let output = Command::new("podman")
-        .args(["image", "inspect", "--format", "{{json .Labels}}", image])
+    let output = Command::new(cmd)
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -1994,7 +2006,9 @@ Options=
     if let Some(ref dns_servers) = opts.host_dns_servers {
         debug!("DNS servers configured for QEMU slirp: {:?}", dns_servers);
     } else {
-        warn!("No host DNS servers available, QEMU slirp will use container's resolv.conf which may not work");
+        warn!(
+            "No host DNS servers available, QEMU slirp will use container's resolv.conf which may not work"
+        );
     }
 
     if opts.common.ssh_keygen {
