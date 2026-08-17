@@ -19,6 +19,10 @@ Upload bootc disk images to libvirt with metadata annotations
 
     This argument is required.
 
+**--image-to-install**=*IMAGE_TO_INSTALL*
+
+    The image to use for creating the base disk If None, the `image` cli option is used for installation
+
 **--volume-name**=*VOLUME_NAME*
 
     Name for the libvirt volume (defaults to sanitized image name)
