@@ -311,7 +311,8 @@ fn test_run_ephemeral_ssh_broken_image_cleanup() -> TestResult {
 
     // Verify the error message indicates the problem
     assert!(
-        stderr.contains("Failed to read kernel modules directory")
+        stderr.contains("No kernel found")
+            || stderr.contains("Failed to read kernel modules directory")
             || stderr.contains("Container exited before SSH became available")
             || stderr.contains("Monitor process exited unexpectedly"),
         "Expected error about missing kernel or container failure, got: {}",
