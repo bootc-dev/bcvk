@@ -96,7 +96,7 @@ fn run_list(connect_uri: Option<&str>, opts: ListOpts) -> Result<()> {
             }
 
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec!["NAME", "SIZE", "REFS", "CREATED", "IMAGE DIGEST"]);
 
             for disk in &base_disks {

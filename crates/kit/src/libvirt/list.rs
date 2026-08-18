@@ -83,7 +83,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtListOpts) 
             }
 
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec!["NAME", "IMAGE", "STATUS", "MEMORY", "SSH"]);
 
             for domain in &domains {
