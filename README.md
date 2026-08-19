@@ -67,7 +67,7 @@ bcvk libvirt run --update-from-host --name devvm localhost/myimage
 
 #### Using and managing libvirt VMs
 
-After initializing a VM a common next step is `bcvk lbivirt ssh <vm name>`.
+After initializing a VM a common next step is `bcvk libvirt ssh <vm name>`.
 bcvk defaults to injecting SSH keys via [systemd credentials](https://systemd.io/CREDENTIALS/).
 The private key is specific to the VM and is stored in the domain metadata.
 
