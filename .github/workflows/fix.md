@@ -51,6 +51,14 @@ engine:
   id: claude
   model: claude-sonnet-4-5-20250929
 
+# bcvk is Rust; without this, cargo can't reach crates.io from behind
+# gh-aw's default egress firewall and build/test validation silently stalls
+# or fails (see "Repository setup checklist" in gh-agentic-workflows' README).
+network:
+  allowed:
+    - defaults
+    - rust
+
 tools:
   bash: ["*"]
   github:
