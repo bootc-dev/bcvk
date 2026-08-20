@@ -10,9 +10,14 @@ on:
 jobs:
   merge:
     if: |
+      false &&
       github.event.label.name == 'agent/lgtm' &&
       startsWith(github.event.pull_request.head.ref, 'agent/') &&
       github.event.pull_request.head.repo.id == github.repository_id
+    # Pilot rollout: auto-merge stays disabled (the `false &&` above) until
+    # reviewer/fixer judgment quality has been watched for a couple of weeks
+    # -- see gh-agentic-workflows' README Roadmap, "Pilot on one low-traffic
+    # repo". Once satisfied, delete the `false &&` line above to enable.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
