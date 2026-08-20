@@ -272,7 +272,7 @@ impl LibvirtListVolumesOpts {
 
         // Create table using comfy_table
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
+        table.load_style(UTF8_FULL);
 
         if self.detailed {
             table.set_header(vec![

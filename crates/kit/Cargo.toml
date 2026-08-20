@@ -29,14 +29,14 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 tempfile = "3"
 uuid = { version = "1.10", features = ["v4"] }
 xshell = { workspace = true }
-yaml-rust2 = "0.11"
+yaml-rust2 = "0.12"
 rand = { workspace = true }
 cfg-if = { workspace = true }
 indoc = "2.0.6"
 regex = "1.10"
 itertools = "0.15.0"
 camino = "1.1.12"
-comfy-table = "7.1"
+comfy-table = "8.0"
 strum = { version = "0.28", features = ["derive"] }
 quick-xml = "0.41"
 oci-spec = "0.10.0"
