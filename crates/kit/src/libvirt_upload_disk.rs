@@ -279,6 +279,7 @@ pub fn run(opts: LibvirtUploadDiskOpts) -> Result<()> {
 
     let install_opts = ToDiskOpts {
         source_image: opts.source_image.clone(),
+        image_to_install: None,
         target_disk: temp_disk.clone(),
         install: opts.install.clone(),
         additional: ToDiskAdditionalOpts {

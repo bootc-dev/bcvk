@@ -15,12 +15,13 @@ use tracing::{debug, info};
 /// Find or create a base disk for the given parameters
 pub fn find_or_create_base_disk(
     source_image: &str,
+    image_to_install: &str,
     image_digest: &str,
     install_options: &InstallOptions,
     connect_uri: Option<&str>,
     virtiofsd_binary: Option<&str>,
 ) -> Result<Utf8PathBuf> {
-    let metadata = DiskImageMetadata::from(install_options, image_digest, source_image);
+    let metadata = DiskImageMetadata::from(install_options, image_digest, image_to_install);
     let cache_hash = metadata.compute_cache_hash();
 
     // Extract short hash for filename (first 16 chars after "sha256:")
@@ -44,7 +45,7 @@ pub fn find_or_create_base_disk(
         if crate::cache_metadata::check_cached_disk(
             base_disk_path.as_std_path(),
             image_digest,
-            source_image,
+            image_to_install,
             install_options,
         )?
         .is_ok()
@@ -65,6 +66,7 @@ pub fn find_or_create_base_disk(
     create_base_disk(
         &base_disk_path,
         source_image,
+        image_to_install,
         image_digest,
         install_options,
         connect_uri,
@@ -78,6 +80,7 @@ pub fn find_or_create_base_disk(
 fn create_base_disk(
     base_disk_path: &Utf8Path,
     source_image: &str,
+    image_to_install: &str,
     image_digest: &str,
     install_options: &InstallOptions,
     connect_uri: Option<&str>,
@@ -107,6 +110,7 @@ fn create_base_disk(
     // Create the disk using to_disk at temporary location
     let to_disk_opts = ToDiskOpts {
         source_image: source_image.to_string(),
+        image_to_install: Some(image_to_install.to_string()),
         target_disk: temp_disk_path.clone(),
         install: install_options.clone(),
         additional: ToDiskAdditionalOpts {
@@ -135,7 +139,7 @@ fn create_base_disk(
     let metadata_valid = crate::cache_metadata::check_cached_disk(
         temp_disk_path.as_std_path(),
         image_digest,
-        source_image,
+        image_to_install,
         install_options,
     )
     .context("Querying cached disk")?;

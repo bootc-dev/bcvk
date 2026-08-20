@@ -76,6 +76,7 @@
 use std::io::IsTerminal;
 
 use crate::cache_metadata::DiskImageMetadata;
+use crate::images::get_image_digest;
 use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{run_detached, CommonVmOpts, RunEphemeralOpts};
 use crate::run_ephemeral_ssh::wait_for_ssh_ready;
@@ -161,6 +162,13 @@ pub struct ToDiskOpts {
     /// Container image to install
     pub source_image: String,
 
+    /// The image to use for creating the base disk
+    /// If None, the `image` cli option is used for installation
+    ///
+    /// Ex. docker://quay.io/fedora/fedora-bootc:44
+    #[clap(long)]
+    pub image_to_install: Option<String>,
+
     /// Target disk/device path
     pub target_disk: Utf8PathBuf,
 
@@ -194,12 +202,13 @@ impl ToDiskOpts {
     }
 
     /// Generate the complete bootc installation command arguments for SSH execution
-    fn generate_bootc_install_command(
-        &self,
-        disk_size: u64,
-        use_oci_layout: bool,
-    ) -> Result<Vec<String>> {
-        let source_imgref = format!("containers-storage:{}", self.source_image);
+    fn generate_bootc_install_command(&self, disk_size: u64) -> Result<Vec<String>> {
+        let source_imgref = match &self.image_to_install {
+            Some(img_to_install) => img_to_install,
+            None => &format!("containers-storage:{}", self.source_image),
+        };
+
+        let allow_network = source_imgref.starts_with("docker://");
 
         // Quote each bootc argument individually to prevent shell injection
         let mut quoted_bootc_args = Vec::new();
@@ -216,7 +225,7 @@ impl ToDiskOpts {
             .to_string();
 
         // Quote the source image name for local storage operations
-        let quoted_source_image = shlex::try_quote(&self.source_image)
+        let quoted_src_img_wo_transport_prefix = shlex::try_quote(&self.source_image)
             .map_err(|e| {
                 eyre!(
                     "Failed to quote source image '{}': {}",
@@ -255,27 +264,6 @@ impl ToDiskOpts {
             .map_err(|e| eyre!("Failed to quote tmpfs size: {}", e))?
             .to_string();
 
-        // For composefs-backend installs, mount the OCI layout in the VM
-        // and pass --source-imgref so bootc reads from it directly,
-        // preserving the correct manifest with compressed layer digests (#307).
-        let (oci_setup, oci_volume, oci_source_arg) = if use_oci_layout {
-            (
-                indoc! {r#"
-                    # Ensure OCI layout virtiofs mount is available (#307)
-                    OCI=/run/virtiofs-mnt-ociimage
-                    if ! mountpoint -q ${OCI} &>/dev/null; then
-                        mkdir -p ${OCI}
-                        mount -t virtiofs mount_ociimage ${OCI} -o ro
-                    fi
-                "#}
-                .to_string(),
-                "-v /run/virtiofs-mnt-ociimage:/run/virtiofs-mnt-ociimage:ro".to_string(),
-                "--source-imgref oci:/run/virtiofs-mnt-ociimage:latest".to_string(),
-            )
-        } else {
-            (String::new(), String::new(), String::new())
-        };
-
         let script = indoc! {r#"
             set -euo pipefail
 
@@ -295,8 +283,6 @@ impl ToDiskOpts {
                 mount -t virtiofs mount_hoststorage ${AIS} -o ro
             fi
 
-            {OCI_SETUP}
-
             echo "Starting bootc installation..."
             echo "Source image: {SOURCE_IMGREF}"
             echo "Additional args: {BOOTC_ARGS}"
@@ -314,18 +300,17 @@ impl ToDiskOpts {
             # Mount /var/tmp into inner container to avoid cross-device link errors (issue #125)
             set +e  # Don't exit on error, we'll check for signature error and retry
             ERROR_LOG=$(mktemp)
-            podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
+            podman run --rm -i ${tty} --privileged --pid=host {NETWORK} -v /sys:/sys:ro \
                 -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
-                {OCI_VOLUME} \
                 --security-opt label=type:unconfined_t \
                 --env=STORAGE_OPTS \
                 {INSTALL_LOG} \
                 {EXTRA_PODMAN_ARGS} \
-                {SOURCE_IMGREF} \
+                {CONTAINER_IMAGE} \
                 bootc install to-disk \
                 --generic-image \
                 --skip-fetch-check \
-                {OCI_SOURCE_ARG} \
+                --source-imgref {SOURCE_IMGREF} \
                 {BOOTC_ARGS} \
                 /dev/disk/by-id/virtio-output 2> "$ERROR_LOG"
             BOOTC_EXIT=$?
@@ -352,12 +337,11 @@ impl ToDiskOpts {
 EOF
 
                 # Copy image without signatures
-                skopeo copy --remove-signatures {SOURCE_IMGREF} containers-storage:{SOURCE_IMAGE}
+                skopeo copy --remove-signatures {CONTAINER_IMAGE} containers-storage:{SOURCE_IMAGE}
 
                 # Retry bootc install with the unsigned local copy
-                podman run --rm -i ${tty} --privileged --pid=host --net=none -v /sys:/sys:ro \
+                podman run --rm -i ${tty} --privileged --pid=host {NETWORK} -v /sys:/sys:ro \
                     -v /var/lib/containers:/var/lib/containers -v /var/tmp:/var/tmp -v /dev:/dev -v "${AIS}:${AIS}" \
-                    {OCI_VOLUME} \
                     --security-opt label=type:unconfined_t \
                     --env=STORAGE_OPTS \
                     {INSTALL_LOG} \
@@ -366,7 +350,7 @@ EOF
                     bootc install to-disk \
                     --generic-image \
                     --skip-fetch-check \
-                    {OCI_SOURCE_ARG} \
+                    --source-imgref {SOURCE_IMGREF} \
                     {BOOTC_ARGS} \
                     /dev/disk/by-id/virtio-output
             elif [ $BOOTC_EXIT -ne 0 ]; then
@@ -381,14 +365,13 @@ EOF
             echo "Installation completed successfully!"
         "#}
         .replace("{TMPFS_SIZE}", &tmpfs_size_quoted)
-        .replace("{OCI_SETUP}", &oci_setup)
-        .replace("{OCI_VOLUME}", &oci_volume)
-        .replace("{OCI_SOURCE_ARG}", &oci_source_arg)
         .replace("{SOURCE_IMGREF}", &quoted_source_imgref)
-        .replace("{SOURCE_IMAGE}", &quoted_source_image)
+        .replace("{SOURCE_IMAGE}", &quoted_src_img_wo_transport_prefix)
         .replace("{INSTALL_LOG}", &install_log)
         .replace("{EXTRA_PODMAN_ARGS}", &extra_podman_args)
-        .replace("{BOOTC_ARGS}", &bootc_args);
+        .replace("{BOOTC_ARGS}", &bootc_args)
+        .replace("{CONTAINER_IMAGE}", &quoted_src_img_wo_transport_prefix)
+        .replace("{NETWORK}", if allow_network { "--net=host" } else { "--net=none" });
 
         Ok(vec!["/bin/bash".to_string(), "-c".to_string(), script])
     }
@@ -436,64 +419,16 @@ pub enum RunOutcome {
     DryRunWouldRegenerate,
 }
 
-/// Export a container image to a temporary OCI layout directory.
-///
-/// This preserves the original manifest with correct compressed layer digests.
-/// The containers-storage `additionalimagestore` reconstructs manifests with
-/// uncompressed layer digests when layers are accessed via virtiofs, producing
-/// incorrect manifest digests.
-///
-/// Note: `podman push` to the `oci:` transport will convert Docker v2s2
-/// manifests to OCI format, changing the digest. Bootc images use OCI
-/// manifests natively, so this is not an issue in practice.
-///
-/// See <https://github.com/bootc-dev/bcvk/issues/307>
-fn export_to_oci_layout(source_image: &str) -> Result<tempfile::TempDir> {
-    // Use /var/tmp rather than /tmp because /tmp is often tmpfs (RAM-backed)
-    // on Fedora/RHEL, and OCI layouts for bootc images can be several GB.
-    let tmpdir = tempfile::Builder::new()
-        .prefix("bcvk-oci-")
-        .tempdir_in("/var/tmp")
-        .context("Failed to create temp directory in /var/tmp for OCI layout")?;
-
-    let dst = format!("oci:{}:latest", tmpdir.path().display());
-
-    debug!("Exporting image to OCI layout: {} -> {}", source_image, dst);
-
-    let output = std::process::Command::new("podman")
-        .args(["push", source_image, &dst])
-        .output()
-        .context("Failed to run 'podman push'")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(eyre!("Failed to export image to OCI layout: {}", stderr));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.is_empty() {
-        debug!("podman push stdout: {}", stdout);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.is_empty() {
-        debug!("podman push stderr: {}", stderr);
-    }
-
-    Ok(tmpdir)
-}
-
 /// Execute a bootc installation using an ephemeral VM with SSH
 ///
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
-pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
-    // Normalize the source image name by stripping containers-storage: prefix if present.
-    // The containers-storage: prefix is a transport specifier used by some tools like skopeo,
-    // but podman commands (image inspect, run --mount=type=image) expect just the image name.
-    // We'll add it back where needed (e.g., in bootc install commands).
-    if let Some(stripped) = opts.source_image.strip_prefix("containers-storage:") {
-        opts.source_image = stripped.to_string();
-    }
+pub fn run(opts: ToDiskOpts) -> Result<RunOutcome> {
+    let image_to_install = opts
+        .image_to_install
+        .as_ref()
+        .unwrap_or(&opts.source_image)
+        .as_str();
 
     // Phase 0: Check for existing cached disk image
     let would_reuse = if opts.target_disk.exists() {
@@ -503,14 +438,13 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
         );
 
         // Get the image digest for comparison
-        let inspect = images::inspect(&opts.source_image)?;
-        let image_digest = inspect.digest.to_string();
+        let image_digest = get_image_digest(image_to_install)?;
 
         // Check if cached disk matches our requirements
         match crate::cache_metadata::check_cached_disk(
             opts.target_disk.as_std_path(),
             &image_digest,
-            &opts.source_image,
+            &image_to_install,
             &opts.install,
         )? {
             Ok(()) => {
@@ -596,27 +530,9 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
         }
     }
 
-    // For composefs-backend installs, export the image to an OCI layout
-    // on the host. This preserves the correct manifest with compressed
-    // layer digests, working around containers-storage additionalimagestore
-    // reconstructing manifests with uncompressed digests via virtiofs (#307).
-    let use_oci_layout = opts.install.composefs_backend;
-    let oci_tmpdir = if use_oci_layout {
-        tracing::info!("Exporting image to OCI layout...");
-        match export_to_oci_layout(&opts.source_image) {
-            Ok(tmpdir) => Some(tmpdir),
-            Err(e) => {
-                let _ = std::fs::remove_file(&opts.target_disk);
-                return Err(e);
-            }
-        }
-    } else {
-        None
-    };
-
     // Phase 3: Installation command generation
     // Generate complete script including storage setup and bootc install
-    let bootc_install_command = opts.generate_bootc_install_command(disk_size, use_oci_layout)?;
+    let bootc_install_command = opts.generate_bootc_install_command(disk_size)?;
 
     // Phase 4: Ephemeral VM configuration
     let mut common_opts = opts.additional.common.clone();
@@ -630,10 +546,6 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
     // - Mount host storage read-only for image access
     // - Attach target disk via virtio-blk
     // - Disable networking (using local storage only)
-    let mut ro_bind_mounts = Vec::new();
-    if let Some(ref tmpdir) = oci_tmpdir {
-        ro_bind_mounts.push(format!("{}:ociimage", tmpdir.path().display()));
-    }
 
     let ephemeral_opts = RunEphemeralOpts {
         host_dns_servers: None,
@@ -651,7 +563,7 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
         // when fetching, so we need enough memory to do so.
         add_swap: Some(format!("{disk_size}")),
         bind_mounts: Vec::new(), // No additional bind mounts needed
-        ro_bind_mounts,
+        ro_bind_mounts: Vec::new(),
         systemd_units_dir: None, // No custom systemd units
         bind_storage_ro: true,   // Mount host container storage read-only
         mount_disk_files: vec![format!(
@@ -713,7 +625,7 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
             // Write metadata to the disk image for caching
             // Extract values before they're potentially moved
             let write_result = write_disk_metadata(
-                &opts.source_image,
+                &image_to_install,
                 &opts.target_disk,
                 &opts.install,
                 &opts.additional.format,
@@ -742,8 +654,7 @@ fn write_disk_metadata(
     // as they're stored in the filesystem metadata, not inside the disk image
 
     // Get the image digest
-    let inspect = images::inspect(source_image)?;
-    let digest = inspect.digest.to_string();
+    let digest = get_image_digest(source_image)?;
 
     // Prepare metadata using the new helper method
     let metadata = DiskImageMetadata::from(install_options, &digest, source_image);
@@ -777,6 +688,7 @@ mod tests {
         // Test with explicit disk size
         let opts = ToDiskOpts {
             source_image: "test:latest".to_string(),
+            image_to_install: Some("test:latest".to_string()),
             target_disk: "/tmp/test.img".into(),
             install: InstallOptions {
                 filesystem: Some("ext4".to_string()),
@@ -795,6 +707,7 @@ mod tests {
         // Test with another size format
         let opts2 = ToDiskOpts {
             source_image: "test:latest".to_string(),
+            image_to_install: Some("test:latest".into()),
             target_disk: "/tmp/test.img".into(),
             install: InstallOptions {
                 filesystem: Some("ext4".to_string()),

@@ -15,6 +15,9 @@ use tracing::{debug, info};
 
 use crate::common_opts::MemoryOpts;
 use crate::domain_list::DomainLister;
+use crate::images::{
+    get_image_digest, img_from_containers_storage, img_has_transport, prepend_transport_to_img,
+};
 use crate::install_options::InstallOptions;
 use crate::libvirt::domain::VirtiofsFilesystem;
 use crate::utils::parse_memory_to_mb;
@@ -340,6 +343,13 @@ pub struct LibvirtRunOpts {
     ///           `--log-dir=journal=/tmp/logs/`
     #[clap(long, value_name = "STREAMS=DIR")]
     pub log_dir: Option<crate::run_ephemeral::LogDir>,
+
+    /// The image to use for creating the base disk
+    /// If None, the `image` cli option is used for installation
+    ///
+    /// Ex. docker://quay.io/fedora/fedora-bootc:44
+    #[clap(long)]
+    pub image_to_install: Option<String>,
 }
 
 impl LibvirtRunOpts {
@@ -429,8 +439,6 @@ fn wait_for_ssh_ready(
 
 /// Execute the libvirt run command
 pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpts) -> Result<()> {
-    use crate::images;
-
     // Validate labels don't contain commas
     opts.validate_labels()?;
 
@@ -478,25 +486,27 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
         None => generate_unique_vm_name(&opts.image, &existing_domains),
     };
 
+    let image_to_install = opts.image_to_install.as_ref().unwrap_or(&opts.image);
+    let image_to_install = prepend_transport_to_img(&image_to_install);
+
     println!(
         "Creating libvirt domain '{}' (install source container image: {})",
-        vm_name, opts.image
+        vm_name, image_to_install,
     );
 
     // Get the image digest for caching
-    let inspect = images::inspect(&opts.image)?;
-    let image_digest = inspect.digest.to_string();
+    let image_digest = get_image_digest(&image_to_install)?;
     debug!("Image digest: {}", image_digest);
 
     // Check Ignition support and validate config file path early
     if let Some(ref ignition_path) = opts.ignition_config {
-        let has_ignition = check_ignition_support(&opts.image)?;
+        let has_ignition = check_ignition_support(&image_to_install)?;
         if !has_ignition {
             return Err(eyre!(
                 "Image does not support Ignition. See man bcvk-libvirt-run for details."
             ));
         }
-        debug!("Image {} supports Ignition", opts.image);
+        debug!("Image {} supports Ignition", image_to_install);
 
         // Validate that the Ignition config file exists before proceeding
         if !ignition_path.try_exists()? {
@@ -521,6 +531,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, mut opts: LibvirtRunOpt
     // Phase 1: Find or create a base disk image
     let base_disk_path = crate::libvirt::base_disks::find_or_create_base_disk(
         &opts.image,
+        &image_to_install,
         &image_digest,
         &opts.install,
         connect_uri,
@@ -1107,9 +1118,20 @@ fn check_ignition_support(image: &str) -> Result<bool> {
     use std::collections::HashMap;
     use std::process::Stdio;
 
+    let mut args = vec!["inspect", "--format", "{{json .Labels}}"];
+
+    let cmd = if img_from_containers_storage(image) || !img_has_transport(image) {
+        args.insert(0, "image");
+        args.push(image.strip_prefix("containers-storage:").unwrap_or(image));
+        "podman"
+    } else {
+        args.push(image);
+        "skopeo"
+    };
+
     // Fetch all labels with a single podman inspect call
-    let output = std::process::Command::new("podman")
-        .args(["image", "inspect", "--format", "{{json .Labels}}", image])
+    let output = std::process::Command::new(cmd)
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

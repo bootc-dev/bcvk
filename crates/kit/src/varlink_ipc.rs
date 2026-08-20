@@ -362,6 +362,7 @@ impl BcvkService {
 
             let opts = crate::to_disk::ToDiskOpts {
                 source_image,
+                image_to_install: None,
                 target_disk: Utf8PathBuf::from(&target_disk),
                 install: crate::install_options::InstallOptions {
                     filesystem,

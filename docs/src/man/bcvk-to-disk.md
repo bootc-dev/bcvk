@@ -35,6 +35,10 @@ The installation process:
 
     This argument is required.
 
+**--image-to-install**=*IMAGE_TO_INSTALL*
+
+    The image to use for creating the base disk If None, the `image` cli option is used for installation
+
 **--filesystem**=*FILESYSTEM*
 
     Root filesystem type (e.g. ext4, xfs, btrfs)

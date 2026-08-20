@@ -208,6 +208,40 @@ pub fn inspect(name: &str) -> Result<ImageInspect> {
     r.pop().ok_or_else(|| eyre!("No such image"))
 }
 
+pub fn get_image_digest(name: &str) -> Result<String> {
+    // Use podman to inspect if the image to be installed is from containers-storage
+    if !img_has_transport(name) || img_from_containers_storage(name) {
+        let name = name.strip_prefix("containers-storage:").unwrap_or(name);
+        let i = inspect(name)?;
+        return Ok(i.digest.to_string());
+    }
+
+    let r = Command::new("skopeo")
+        .args(["inspect", "--format", "{{.Digest}}", name])
+        .run_get_string()
+        .map_err(|e| eyre!("{e}"))?;
+
+    Ok(r.trim().into())
+}
+
+pub fn img_has_transport(name: &str) -> bool {
+    ["docker://", "containers-storage:", "oci:", "dir:"]
+        .iter()
+        .any(|t| name.starts_with(t))
+}
+
+pub fn img_from_containers_storage(name: &str) -> bool {
+    name.starts_with("containers-storage:")
+}
+
+pub fn prepend_transport_to_img(name: &str) -> String {
+    if img_has_transport(name) {
+        return name.into();
+    }
+
+    return format!("containers-storage:{name}");
+}
+
 /// Get container image size in bytes for disk space planning.
 pub fn get_image_size(name: &str) -> Result<u64> {
     tracing::debug!("Getting size for image: {}", name);
