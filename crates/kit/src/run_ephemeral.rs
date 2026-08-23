@@ -15,7 +15,7 @@
 //! The execution follows this chain:
 //! 1. **Host Process**: `bcvk run-ephemeral` invoked on host
 //! 2. **Container Launch**: Podman privileged container with KVM and host mounts
-//! 3. **Namespace Setup**: bwrap creates isolated namespace with hybrid rootfs  
+//! 3. **Namespace Setup**: the entrypoint changes root to the hybrid rootfs
 //! 4. **Binary Re-execution**: Same binary re-executes with `container-entrypoint`
 //! 5. **VM Launch**: QEMU starts with VirtioFS root and additional mounts
 //!
@@ -41,12 +41,12 @@
 //! └── [other dirs created empty for container compatibility]
 //! ```
 //!
-//! ### Phase 3: Namespace Isolation (bwrap)
-//! Uses bubblewrap to create isolated namespace:
+//! ### Phase 3: Namespace Isolation (`sandbox`)
+//! Unshares a mount namespace and changes root to the hybrid root:
 //! - New mount namespace with `/run/tmproot` as root
 //! - Shared `/run/inner-shared` for virtiofsd socket communication
 //! - Proper `/proc`, `/dev`, `/tmp` mounts
-//! - Re-executes binary: `bwrap ... -- /run/selfexe container-entrypoint`
+//! - Re-executes binary: `/run/selfexe container-entrypoint`
 //!
 //! ### Phase 4: VM Execution (`run_impl`)
 //! - Runs inside the container after namespace setup
@@ -104,7 +104,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, warn};
 
-const ENTRYPOINT: &str = "/var/lib/bcvk/entrypoint";
+pub(crate) const ENTRYPOINT: &str = "/run/bcvk-entrypoint";
 
 /// Get default vCPU count (number of available processors, or 2 as fallback)
 pub fn default_vcpus() -> u32 {
@@ -1208,8 +1208,6 @@ fn parse_service_exit_code(status_content: &str) -> Result<i32> {
 fn check_required_container_binaries() -> Result<()> {
     // systemctl: used for checking cloud-init and other systemd operations
     // objcopy: for UKI kernel extraction (when using UKI images)
-    // NOTE: bwrap is checked earlier in entrypoint.sh, not here, because by the
-    // time run_impl() executes we're already inside the bwrap namespace
     let required_binaries = ["systemctl", "objcopy"];
 
     let mut missing = Vec::new();
@@ -1833,7 +1831,7 @@ Options=
                 // Check if disk file exists and is accessible
                 if !Utf8Path::new(&disk_file).exists() {
                     return Err(eyre!(
-                        "Disk file does not exist in bwrap namespace: {} (serial: {})",
+                        "Disk file does not exist in the container: {} (serial: {})",
                         disk_file,
                         serial
                     ));

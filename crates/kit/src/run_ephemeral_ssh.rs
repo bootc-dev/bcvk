@@ -161,7 +161,7 @@ fn spawn_status_monitor(container_name: &str) -> Result<std::process::Child> {
         "exec",
         "--",
         container_name,
-        "/var/lib/bcvk/entrypoint",
+        crate::run_ephemeral::ENTRYPOINT,
         "monitor-status",
     ]);
     // SAFETY: This API is safe to call in a forked child.
