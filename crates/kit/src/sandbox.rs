@@ -1,13 +1,14 @@
-//! Namespace setup for the container entrypoint.
+//! Container-side setup for the VM supervisor.
 //!
 //! bcvk runs QEMU and virtiofsd from the host's `/usr`, which podman bind-mounts
 //! into the container at `/run/tmproot/usr`. Those processes need that hybrid
-//! tree as their root, so the entrypoint makes it this process's root with
-//! pivot_root(2) before running anything out of it.
+//! tree as their root, so the supervisor assembles it, makes it this process's
+//! root with pivot_root(2), and only then execs anything out of it.
 
 use std::path::Path;
+use std::process::Command;
 
-use color_eyre::eyre::{eyre, Context as _};
+use color_eyre::eyre::{self, eyre, Context as _};
 use color_eyre::Result;
 use rustix::mount::{
     mount, mount_bind_recursive, mount_change, unmount, MountFlags, MountPropagationFlags,
@@ -19,7 +20,84 @@ use tracing::debug;
 
 pub const TMPROOT: &str = "/run/tmproot";
 
-pub fn enter(newroot: &str) -> Result<()> {
+/// Holds the virtiofsd sockets, shared with processes outside this namespace.
+const SOCKETS: &str = "/run/inner-shared";
+
+/// The target image's systemd version, read before the root change puts the
+/// host's `/usr` in place of the image's.
+static SYSTEMD_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Assemble the hybrid root and make it this process's root.
+///
+/// Only the VM supervisor calls this. Anything else arrives later through
+/// `podman exec`, which joins the supervisor's namespaces and so is already in
+/// the hybrid root.
+pub fn setup() -> Result<()> {
+    init_tmproot().context("Assembling hybrid root")?;
+    let _ = SYSTEMD_VERSION.set(read_systemd_version());
+    enter(TMPROOT)
+}
+
+/// The target image's systemd version output, if it reported one.
+pub fn systemd_version() -> Option<&'static str> {
+    SYSTEMD_VERSION
+        .get()
+        .map(String::as_str)
+        .filter(|v| !v.is_empty())
+}
+
+fn init_tmproot() -> Result<()> {
+    let root = Path::new(TMPROOT);
+
+    for (target, source) in [
+        ("bin", "usr/bin"),
+        ("lib", "usr/lib"),
+        ("lib64", "usr/lib64"),
+        ("sbin", "usr/sbin"),
+    ] {
+        let target = root.join(target);
+        std::os::unix::fs::symlink(source, &target)
+            .with_context(|| format!("Creating {target:?}"))?;
+    }
+    for dir in ["etc", "var", "var/tmp", "dev", "proc", "run", "sys", "tmp"] {
+        std::fs::create_dir_all(root.join(dir))?;
+    }
+
+    // ssh-keygen wants /etc/passwd to exist.
+    let st = Command::new("systemd-sysusers")
+        .arg("--root")
+        .arg(root)
+        .output()
+        .context("Running systemd-sysusers")?;
+    eyre::ensure!(
+        st.status.success(),
+        "systemd-sysusers failed: {}",
+        String::from_utf8_lossy(&st.stderr).trim()
+    );
+
+    // QEMU's user-mode networking resolves DNS with the resolv.conf podman
+    // wrote for the container, which is outside the new root.
+    if Path::new("/etc/resolv.conf").exists() {
+        std::fs::copy("/etc/resolv.conf", root.join("etc/resolv.conf"))?;
+    }
+
+    std::fs::create_dir(SOCKETS)?;
+    Ok(())
+}
+
+/// Ask the image's systemctl for its version. An image that cannot report one
+/// yields an empty string, which callers treat as unknown.
+fn read_systemd_version() -> String {
+    Command::new("systemctl")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+fn enter(newroot: &str) -> Result<()> {
     let root = Path::new(newroot);
     if !root.join("usr").exists() {
         return Err(eyre!(
