@@ -275,8 +275,13 @@ fn main() -> Result<(), Report> {
     let cli = Cli::parse();
 
     #[cfg(target_os = "linux")]
-    if matches!(cli.command, Commands::ContainerEntrypoint(_)) {
-        sandbox::enter(sandbox::TMPROOT)?;
+    if let Commands::ContainerEntrypoint(opts) = &cli.command {
+        if matches!(
+            opts.command,
+            container_entrypoint::ContainerCommands::RunEphemeral
+        ) {
+            sandbox::setup()?;
+        }
     }
 
     #[cfg(target_os = "linux")]

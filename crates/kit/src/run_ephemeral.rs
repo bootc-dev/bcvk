@@ -28,11 +28,10 @@
 //!   - `/run/selfexe`: The bcvk binary itself (for re-execution)
 //!   - `/run/source-image`: Target container image via `--mount=type=image`
 //!   - `/run/hostusr`: Host `/usr` directory (read-only, for QEMU/tools)
-//!   - `/var/lib/bcvk/entrypoint`: Embedded entrypoint.sh script
 //! - Handles real-time output streaming for `--execute` commands
 //!
-//! ### Phase 2: Hybrid Rootfs Creation (entrypoint.sh)
-//! The entrypoint script creates a hybrid root filesystem at `/run/tmproot`:
+//! ### Phase 2: Hybrid Rootfs Creation (`sandbox`)
+//! The container entrypoint creates a hybrid root filesystem at `/run/tmproot`:
 //! ```text
 //! /run/tmproot/
 //! ├── usr/       → bind mount to /run/hostusr (host binaries)
@@ -45,8 +44,8 @@
 //! Unshares a mount namespace and changes root to the hybrid root:
 //! - New mount namespace with `/run/tmproot` as root
 //! - Shared `/run/inner-shared` for virtiofsd socket communication
-//! - Proper `/proc`, `/dev`, `/tmp` mounts
-//! - Re-executes binary: `/run/selfexe container-entrypoint`
+//! - Proper `/proc` and `/dev` mounts
+//! - Runs as `/run/selfexe container-entrypoint`
 //!
 //! ### Phase 4: VM Execution (`run_impl`)
 //! - Runs inside the container after namespace setup
@@ -88,7 +87,7 @@
 //! - Ensures perfect fidelity of user options across process boundaries
 
 use std::fs::File;
-use std::io::{BufWriter, IsTerminal, Seek, Write};
+use std::io::{IsTerminal, Seek};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -104,7 +103,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, warn};
 
-pub(crate) const ENTRYPOINT: &str = "/run/bcvk-entrypoint";
+pub(crate) const SELFEXE: &str = "/run/selfexe";
 
 /// Get default vCPU count (number of available processors, or 2 as fallback)
 pub fn default_vcpus() -> u32 {
@@ -630,10 +629,7 @@ fn read_host_dns_servers() -> Option<Vec<String>> {
 /// Launch privileged container with QEMU+KVM for ephemeral VM, spawning as subprocess.
 /// Returns the container ID instead of executing the command.
 pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
-    let (mut cmd, temp_dir, _journal_fds) = prepare_run_command_with_temp(opts)?;
-
-    // Leak the tempdir to keep it alive for the entire container lifetime.
-    std::mem::forget(temp_dir);
+    let (mut cmd, _journal_fds) = prepare_run_command(opts)?;
 
     debug!("Podman command: {:?}", cmd);
     let output = cmd.output().context("Failed to execute podman command")?;
@@ -661,23 +657,22 @@ pub fn run(opts: RunEphemeralOpts) -> Result<()> {
         }
     }
 
-    let (mut cmd, _temp_dir, _journal_fds) = prepare_run_command_with_temp(opts)?;
+    let (mut cmd, _journal_fds) = prepare_run_command(opts)?;
 
-    // Keep _temp_dir and _journal_fds alive until exec replaces our process.
+    // Keep _journal_fds alive until exec replaces our process.
     // The journal fds (if any) are inherited across execve and reach podman
     // via --preserve-fd; podman in turn passes them into the container.
     return Err(cmd.exec()).context("execve");
 }
 
-/// Returns `(cmd, tempdir, journal_fds)` where `journal_fds` holds open file
+/// Returns `(cmd, journal_fds)` where `journal_fds` holds open file
 /// descriptors for `journal.json` and `journal-initrd.json` (when
 /// `--log-dir=journal=…` was requested).  The caller must keep them alive until
 /// podman exits so the fds are not closed prematurely.
-fn prepare_run_command_with_temp(
+fn prepare_run_command(
     opts: RunEphemeralOpts,
 ) -> Result<(
     std::process::Command,
-    tempfile::TempDir,
     Vec<std::sync::Arc<rustix::fd::OwnedFd>>,
 )> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
@@ -691,22 +686,6 @@ fn prepare_run_command_with_temp(
             ));
         }
         debug!("Image {} supports Ignition", opts.image);
-    }
-
-    let script = include_str!("../scripts/entrypoint.sh");
-
-    let td = tempfile::tempdir()?;
-    let td_path = td.path().to_str().unwrap();
-
-    let entrypoint_path = &format!("{}/entrypoint", td_path);
-    {
-        let f = File::create(entrypoint_path)?;
-        let mut f = BufWriter::new(f);
-        f.write_all(script.as_bytes())?;
-        use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-        let f = f.into_inner()?;
-        let perms = Permissions::from_mode(0o755);
-        f.set_permissions(perms)?;
     }
 
     let self_exe = std::env::current_exe()?;
@@ -847,9 +826,7 @@ fn prepare_run_command_with_temp(
         // library locations in the mounted /usr
         "/etc/ld.so.cache:/run/tmproot/etc/ld.so.cache:ro",
         "-v",
-        &format!("{}:{}", entrypoint_path, ENTRYPOINT),
-        "-v",
-        &format!("{self_exe}:/run/selfexe:ro"),
+        &format!("{self_exe}:{SELFEXE}:ro"),
         // Since we run as init by default
         "--stop-signal=SIGKILL",
         // And bind mount in the pristine image (without any mounts on top)
@@ -1022,10 +999,14 @@ fn prepare_run_command_with_temp(
         cmd.args(["-e", &format!("BOOTC_DISK_FILES={}", disk_specs)]);
     }
 
-    let entrypoint = opts.debug_entrypoint.as_deref().unwrap_or(ENTRYPOINT);
-    cmd.args(["--", &opts.image, entrypoint]);
+    cmd.args(["--", &opts.image]);
+    if let Some(entrypoint) = opts.debug_entrypoint.as_deref() {
+        cmd.arg(entrypoint);
+    } else {
+        cmd.args([SELFEXE, "container-entrypoint", "run-ephemeral"]);
+    }
 
-    Ok((cmd, td, journal_fds))
+    Ok((cmd, journal_fds))
 }
 
 /// Process --mount-disk-file specs: parse file:name format, create sparse files if needed (2x image size),
@@ -1297,14 +1278,11 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
     let status_writer = StatusWriter::new("/run/supervisor-status.json");
     status_writer.update_state(SupervisorState::WaitingForSystemd)?;
 
-    // Check systemd version from the container image
-    let systemd_version = {
-        Some(std::env::var("SYSTEMD_VERSION")?)
-            .filter(|v| !v.is_empty())
-            .as_deref()
-            .map(systemd::SystemdVersion::from_version_output)
-            .transpose()?
-    };
+    // Read before the root change, so this is the container image's systemd, not
+    // the host's.
+    let systemd_version = crate::sandbox::systemd_version()
+        .map(systemd::SystemdVersion::from_version_output)
+        .transpose()?;
     debug!("Container image systemd version: {systemd_version:?}");
 
     // Check if we need to handle cloud-init
@@ -1985,7 +1963,7 @@ Options=
         });
     }
 
-    // DNS is configured via podman --dns flags (see prepare_run_command_with_temp)
+    // DNS is configured via podman --dns flags (see prepare_run_command)
     // This fixes DNS resolution issues when QEMU runs inside containers.
     // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
     // and podman properly sets it up using --dns instead of relying on bridge DNS.
