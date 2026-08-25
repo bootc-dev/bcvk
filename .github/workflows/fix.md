@@ -47,10 +47,9 @@ permissions:
   issues: read
   pull-requests: read
 
+model: claude-sonnet-4-5-20250929
 engine:
   id: claude
-  model: claude-sonnet-4-5-20250929
-
 # bcvk is Rust; without this, cargo can't reach crates.io from behind
 # gh-aw's default egress firewall and build/test validation silently stalls
 # or fails (see "Repository setup checklist" in gh-agentic-workflows' README).
@@ -110,7 +109,7 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ vars.GH_AW_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_AW_APP_PRIVATE_KEY }}
@@ -148,7 +147,7 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ vars.GH_AW_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_AW_APP_PRIVATE_KEY }}
