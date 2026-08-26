@@ -35,7 +35,8 @@ static SYSTEMD_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new()
 pub fn setup() -> Result<()> {
     init_tmproot().context("Assembling hybrid root")?;
     let _ = SYSTEMD_VERSION.set(read_systemd_version());
-    enter(TMPROOT)
+    enter(TMPROOT)?;
+    create_users()
 }
 
 /// The target image's systemd version output, if it reported one.
@@ -63,18 +64,6 @@ fn init_tmproot() -> Result<()> {
         std::fs::create_dir_all(root.join(dir))?;
     }
 
-    // ssh-keygen wants /etc/passwd to exist.
-    let st = Command::new("systemd-sysusers")
-        .arg("--root")
-        .arg(root)
-        .output()
-        .context("Running systemd-sysusers")?;
-    eyre::ensure!(
-        st.status.success(),
-        "systemd-sysusers failed: {}",
-        String::from_utf8_lossy(&st.stderr).trim()
-    );
-
     // QEMU's user-mode networking resolves DNS with the resolv.conf podman
     // wrote for the container, which is outside the new root.
     if Path::new("/etc/resolv.conf").exists() {
@@ -95,6 +84,25 @@ fn read_systemd_version() -> String {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
+}
+
+/// Populate /etc/passwd in the hybrid root, which ssh-keygen wants to exist.
+///
+/// This runs after the root change so that it is the host's systemd-sysusers,
+/// loaded against the host's libc and reading the host's sysusers.d, that
+/// creates the passwd the host's ssh-keygen consumes. It also means the image
+/// does not have to ship systemd-sysusers, or have it be executable on this
+/// architecture.
+fn create_users() -> Result<()> {
+    let st = Command::new("systemd-sysusers")
+        .output()
+        .context("Running systemd-sysusers")?;
+    eyre::ensure!(
+        st.status.success(),
+        "systemd-sysusers failed: {}",
+        String::from_utf8_lossy(&st.stderr).trim()
+    );
+    Ok(())
 }
 
 fn enter(newroot: &str) -> Result<()> {
