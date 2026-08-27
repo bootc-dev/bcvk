@@ -78,6 +78,10 @@ pub fn create_initramfs_units_cpio() -> io::Result<Vec<u8>> {
             "usr/lib/systemd/system/bcvk-journal-stream.service",
             include_bytes!("units/bcvk-journal-stream.service"),
         ),
+        File(
+            "usr/lib/systemd/system/bcvk-root-ssh-overlay.service",
+            include_bytes!("units/bcvk-root-ssh-overlay.service"),
+        ),
         // Drop-in to pull sysroot.mount into initrd-root-fs.target.  Without
         // this, nothing in the dependency graph actually requests the mount;
         // dracut-rootfs-generator normally creates an
@@ -99,6 +103,10 @@ pub fn create_initramfs_units_cpio() -> io::Result<Vec<u8>> {
         File(
             "usr/lib/systemd/system/initrd-fs.target.d/bcvk-copy-units.conf",
             b"[Unit]\nWants=bcvk-copy-units.service\n",
+        ),
+        File(
+            "usr/lib/systemd/system/initrd-fs.target.d/bcvk-root-ssh-overlay.conf",
+            b"[Unit]\nWants=bcvk-root-ssh-overlay.service\n",
         ),
     ];
 
@@ -195,6 +203,7 @@ mod tests {
         assert!(names.contains(&"usr/lib/systemd/system/bcvk-var-ephemeral.service"));
         assert!(names.contains(&"usr/lib/systemd/system/bcvk-copy-units.service"));
         assert!(names.contains(&"usr/lib/systemd/system/bcvk-journal-stream.service"));
+        assert!(names.contains(&"usr/lib/systemd/system/bcvk-root-ssh-overlay.service"));
 
         // initrd-root-fs.target drop-in
         assert!(names.contains(&"usr/lib/systemd/system/initrd-root-fs.target.d/bcvk-sysroot.conf"));
@@ -205,6 +214,9 @@ mod tests {
             names.contains(&"usr/lib/systemd/system/initrd-fs.target.d/bcvk-var-ephemeral.conf")
         );
         assert!(names.contains(&"usr/lib/systemd/system/initrd-fs.target.d/bcvk-copy-units.conf"));
+        assert!(
+            names.contains(&"usr/lib/systemd/system/initrd-fs.target.d/bcvk-root-ssh-overlay.conf")
+        );
 
         // Verify file modes: all entries are either regular files (0644) or directories
         for (name, _size, mode) in &entries {
