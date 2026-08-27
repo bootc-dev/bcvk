@@ -1,0 +1,20 @@
+[Unit]
+Description=Setup ephemeral /root/.ssh overlay
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+ConditionPathIsSymbolicLink=!/sysroot/root
+Before=initrd-fs.target
+# Must run after sysroot.mount and initrd-parse-etc.service
+After=sysroot.mount initrd-parse-etc.service
+Requires=sysroot.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=30
+# Bind-mount /sysroot/root/.ssh to a separate location first, then use that as lowerdir.
+# Using /sysroot/root/.ssh as both lowerdir and mount destination can hang on older kernels.
+ExecStart=/usr/bin/mkdir -m 0700 -p /run/root-ssh-lower /run/root-ssh-upper /run/root-ssh-work
+ExecStart=/usr/bin/mount --bind /sysroot/root/.ssh /run/root-ssh-lower
+# Use index=off,metacopy=off to avoid extended attr operations on virtiofs
+ExecStart=/usr/bin/mount -t overlay overlay -o lowerdir=/run/root-ssh-lower,upperdir=/run/root-ssh-upper,workdir=/run/root-ssh-work,index=off,metacopy=off /sysroot/root/.ssh
