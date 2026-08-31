@@ -49,7 +49,7 @@ cpio = "0.4"
 bcvk-qemu = { path = "../bcvk-qemu" }
 cap-std-ext = { workspace = true }
 bootc-mount = { package = "bootc-internal-mount", git = "https://github.com/bootc-dev/bootc", rev = "54768712ee0308c51ccd27e8d7772d9c9f9aad39" }
-bootc-utils = { package = "bootc-internal-utils", git = "https://github.com/bootc-dev/bootc", rev = "534c76ea474a356aa288f6767635e579ea2614d5" }
+bootc-utils = { package = "bootc-internal-utils", git = "https://github.com/bootc-dev/bootc", rev = "e92d5afda29367ff6d691c1e462664ab2dd0c709" }
 rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 vsock = "0.5"
 nix = { version = "0.31", features = ["socket"] }

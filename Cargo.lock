@@ -191,7 +191,7 @@ dependencies = [
  "base64 0.23.1",
  "bcvk-qemu",
  "bootc-internal-mount",
- "bootc-internal-utils 1.16.9",
+ "bootc-internal-utils 1.16.10",
  "camino",
  "cap-std-ext",
  "cfg-if",
@@ -326,8 +326,8 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-utils"
-version = "1.16.9"
-source = "git+https://github.com/bootc-dev/bootc?rev=534c76ea474a356aa288f6767635e579ea2614d5#534c76ea474a356aa288f6767635e579ea2614d5"
+version = "1.16.10"
+source = "git+https://github.com/bootc-dev/bootc?rev=e92d5afda29367ff6d691c1e462664ab2dd0c709#e92d5afda29367ff6d691c1e462664ab2dd0c709"
 dependencies = [
  "anstream",
  "anyhow",
