@@ -101,7 +101,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
           git commit -m "$title"
-          git push --force-with-lease origin "$branch"
+          git push --force origin "$branch"
 
           existing=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
