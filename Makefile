@@ -6,10 +6,16 @@ TAR_REPRODUCIBLE = tar --mtime="@${SOURCE_DATE_EPOCH}" --sort=name --owner=0 --g
 
 all: bin manpages
 
+# bcvk is bind-mounted and ran inside the container it starts. We build it statically
+# so that it does not depend on the image's loader or its libc. An explicit --target
+# is required because proc-macros cannot be built statically.
+CARGO_BUILD_TARGET := $(shell rustc -vV | sed -n 's/^host: //p')
+
 .PHONY: bin
 bin:
 	cargo check --workspace
-	cargo build --release
+	RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target $(CARGO_BUILD_TARGET)
+	install -D -m755 target/$(CARGO_BUILD_TARGET)/release/bcvk target/release/bcvk
 
 # Generate man pages from markdown sources
 MAN8_SOURCES := $(wildcard docs/src/man/*.md)

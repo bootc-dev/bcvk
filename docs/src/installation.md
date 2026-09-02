@@ -34,8 +34,6 @@ Optional:
 
 For `bcvk ephemeral` operations, the bootc container images you run must contain:
 - systemctl (systemd)
-- objcopy (binutils)
-- bwrap (bubblewrap)
 - ssh, ssh-keygen (openssh-clients)
 
 ## Development Binaries
