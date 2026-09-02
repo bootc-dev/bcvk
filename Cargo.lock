@@ -288,11 +288,11 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-mount"
-version = "1.16.3"
-source = "git+https://github.com/bootc-dev/bootc?rev=54768712ee0308c51ccd27e8d7772d9c9f9aad39#54768712ee0308c51ccd27e8d7772d9c9f9aad39"
+version = "1.16.8"
+source = "git+https://github.com/bootc-dev/bootc?rev=bb674f115fd9f23ec2c4ca4f186e6f65f9111c26#bb674f115fd9f23ec2c4ca4f186e6f65f9111c26"
 dependencies = [
  "anyhow",
- "bootc-internal-utils 1.16.3",
+ "bootc-internal-utils 1.16.8",
  "camino",
  "cap-std-ext",
  "fn-error-context",
@@ -305,8 +305,8 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-utils"
-version = "1.16.3"
-source = "git+https://github.com/bootc-dev/bootc?rev=54768712ee0308c51ccd27e8d7772d9c9f9aad39#54768712ee0308c51ccd27e8d7772d9c9f9aad39"
+version = "1.16.8"
+source = "git+https://github.com/bootc-dev/bootc?rev=bb674f115fd9f23ec2c4ca4f186e6f65f9111c26#bb674f115fd9f23ec2c4ca4f186e6f65f9111c26"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2791,7 +2791,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.3",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.1",
