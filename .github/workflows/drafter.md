@@ -138,7 +138,7 @@ jobs:
         run: |
           gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label agent/draft-working || true
 
-timeout-minutes: 15
+timeout-minutes: 30
 source: bootc-dev/gh-agentic-workflows@c198cfb31a783dd6e372775c9ceb32f31c216b5e
 ---
 
