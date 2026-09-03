@@ -288,11 +288,11 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-mount"
-version = "1.16.8"
-source = "git+https://github.com/bootc-dev/bootc?rev=bb674f115fd9f23ec2c4ca4f186e6f65f9111c26#bb674f115fd9f23ec2c4ca4f186e6f65f9111c26"
+version = "1.16.11"
+source = "git+https://github.com/bootc-dev/bootc?rev=add7a909584c832c563bdc3a45c61e42f736ecf2#add7a909584c832c563bdc3a45c61e42f736ecf2"
 dependencies = [
  "anyhow",
- "bootc-internal-utils 1.16.8",
+ "bootc-internal-utils 1.16.11",
  "camino",
  "cap-std-ext",
  "fn-error-context",
@@ -305,8 +305,8 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-utils"
-version = "1.16.8"
-source = "git+https://github.com/bootc-dev/bootc?rev=bb674f115fd9f23ec2c4ca4f186e6f65f9111c26#bb674f115fd9f23ec2c4ca4f186e6f65f9111c26"
+version = "1.16.10"
+source = "git+https://github.com/bootc-dev/bootc?rev=e92d5afda29367ff6d691c1e462664ab2dd0c709#e92d5afda29367ff6d691c1e462664ab2dd0c709"
 dependencies = [
  "anstream",
  "anyhow",
@@ -326,8 +326,8 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-utils"
-version = "1.16.10"
-source = "git+https://github.com/bootc-dev/bootc?rev=e92d5afda29367ff6d691c1e462664ab2dd0c709#e92d5afda29367ff6d691c1e462664ab2dd0c709"
+version = "1.16.11"
+source = "git+https://github.com/bootc-dev/bootc?rev=add7a909584c832c563bdc3a45c61e42f736ecf2#add7a909584c832c563bdc3a45c61e42f736ecf2"
 dependencies = [
  "anstream",
  "anyhow",
