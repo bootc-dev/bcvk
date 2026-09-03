@@ -12,29 +12,15 @@ bin:
 	cargo build --release
 
 # Generate man pages from markdown sources
-MAN8_SOURCES := $(wildcard docs/src/man/*.md)
-TARGETMAN := target/man
-MAN8_TARGETS := $(patsubst docs/src/man/%.md,$(TARGETMAN)/%.8,$(MAN8_SOURCES))
-
-# Single rule for generating man pages
-$(TARGETMAN)/%.8: docs/src/man/%.md
-	@mkdir -p $(TARGETMAN)
-	@# Create temp file with synced content
-	@cp $< $<.tmp
-	@# Generate man page using go-md2man
-	@go-md2man -in $<.tmp -out $@
-	@# Fix apostrophe handling
-	@sed -i -e "1i .ds Aq \\\\(aq" -e "/\\.g \\.ds Aq/d" -e "/.el .ds Aq \'/d" $@
-	@rm -f $<.tmp
-	@echo "Generated $@"
-
-# Sync CLI options before generating man pages
+# This delegates to the xtask which handles:
+# - Syncing CLI options into markdown
+# - Flexible section number handling
+# - Version placeholder replacement
+# - go-md2man conversion
+# - Apostrophe handling fixes
 .PHONY: manpages
-manpages: sync-cli-options $(MAN8_TARGETS)
-
-# Hidden target to sync CLI options once
-sync-cli-options:
-	@cargo xtask sync-manpages >/dev/null 2>&1 || true
+manpages:
+	cargo xtask manpages
 
 # This gates CI by default. Note that for clippy, we gate on
 # only the clippy correctness and suspicious lints, plus a select
@@ -51,8 +37,12 @@ validate:
 
 install:
 	install -D -m 0755 -t $(DESTDIR)$(prefix)/bin target/release/bcvk
-	if [ -n "$(MAN8_TARGETS)" ]; then \
-	  install -D -m 0644 -t $(DESTDIR)$(prefix)/share/man/man8 $(MAN8_TARGETS); \
+	@# Install all generated man pages to their appropriate sections
+	@if [ -d target/man ]; then \
+	  for manpage in target/man/*.[1-9]; do \
+	    section=$$(echo $$manpage | sed 's/.*\.\([0-9]\)$$/\1/'); \
+	    install -D -m 0644 $$manpage -t $(DESTDIR)$(prefix)/share/man/man$$section/; \
+	  done; \
 	fi
 
 makesudoinstall:
@@ -67,4 +57,4 @@ update-manpages:
 
 update-generated: sync-manpages manpages
 
-.PHONY: all bin install manpages update-generated makesudoinstall sync-manpages update-manpages sync-cli-options
+.PHONY: all bin install manpages update-generated makesudoinstall sync-manpages update-manpages
