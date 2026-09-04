@@ -82,6 +82,10 @@ For longer-running VMs where you need to reconnect multiple times, use
 
     Generate SSH keypair and inject via systemd credentials
 
+**--network-isolation**
+
+    Isolate the VM from the network. SSH access from the host is preserved, but the VM cannot reach the internet or other hosts
+
 **--virtiofsd**=*VIRTIOFSD_BINARY*
 
     Path to virtiofsd binary (overrides auto-detection)
@@ -226,6 +230,15 @@ Mount source code for testing:
 
     bcvk ephemeral run-ssh --bind /home/user/project:src localhost/mybootc
     # Inside VM: ls /run/virtiofs-mnt-src
+
+## Network Isolation
+
+Run tests in a network-isolated VM to avoid flakes from external services:
+
+    bcvk ephemeral run-ssh --network-isolation localhost/mybootc -- make test
+
+SSH connectivity from the host is preserved; only outbound traffic from
+within the guest is blocked.
 
 ## Debugging
 

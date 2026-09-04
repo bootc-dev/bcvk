@@ -437,6 +437,11 @@ pub struct CommonVmOpts {
     )]
     pub ssh_keygen: bool,
 
+    /// Isolate the VM from the network. SSH access from the host is
+    /// preserved, but the VM cannot reach the internet or other hosts.
+    #[clap(long)]
+    pub network_isolation: bool,
+
     #[clap(
         long = "virtiofsd",
         env = "VIRTIOFSD_BIN",
@@ -905,21 +910,28 @@ fn prepare_run_command_with_temp(
         ]);
     }
 
-    // Read host DNS servers and configure them via podman --dns flags
+    // Read host DNS servers and configure them via podman --dns flags.
     // This fixes DNS resolution issues when QEMU runs inside containers.
     // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
     // which would otherwise contain unreachable bridge DNS servers (e.g., 169.254.1.1).
     // Using --dns properly configures /etc/resolv.conf in the container.
-    let host_dns_servers = read_host_dns_servers();
-
-    if let Some(ref dns) = host_dns_servers {
-        debug!("Using DNS servers for ephemeral VM: {:?}", dns);
-        // Configure DNS servers for the container using --dns flags
-        // This properly sets up /etc/resolv.conf in the container's network namespace
-        for server in dns {
-            cmd.args(["--dns", server]);
+    //
+    // Skip DNS injection when network isolation is enabled: the guest
+    // cannot reach external DNS servers anyway, and the unreachable
+    // entries would only cause unnecessary timeouts.
+    let host_dns_servers = if opts.common.network_isolation {
+        debug!("Network isolation enabled, skipping DNS server injection");
+        None
+    } else {
+        let servers = read_host_dns_servers();
+        if let Some(ref dns) = servers {
+            debug!("Using DNS servers for ephemeral VM: {:?}", dns);
+            for server in dns {
+                cmd.args(["--dns", server]);
+            }
         }
-    }
+        servers
+    };
 
     // Pass configuration as JSON via BCK_CONFIG environment variable
     // Include host DNS servers in the config so they're available inside the container
@@ -1991,10 +2003,12 @@ Options=
     // This fixes DNS resolution issues when QEMU runs inside containers.
     // QEMU's slirp reads /etc/resolv.conf from the container's network namespace,
     // and podman properly sets it up using --dns instead of relying on bridge DNS.
-    if let Some(ref dns_servers) = opts.host_dns_servers {
-        debug!("DNS servers configured for QEMU slirp: {:?}", dns_servers);
-    } else {
-        warn!("No host DNS servers available, QEMU slirp will use container's resolv.conf which may not work");
+    if !opts.common.network_isolation {
+        if let Some(ref dns_servers) = opts.host_dns_servers {
+            debug!("DNS servers configured for QEMU slirp: {:?}", dns_servers);
+        } else {
+            warn!("No host DNS servers available, QEMU slirp will use container's resolv.conf which may not work");
+        }
     }
 
     if opts.common.ssh_keygen {
@@ -2004,6 +2018,11 @@ Options=
         // We need to extract the public key from the SSH credential to inject it via SMBIOS
         // For now, the credential is already being passed via kernel cmdline
         // TODO: Add proper SMBIOS credential injection if needed
+    }
+
+    if opts.common.network_isolation {
+        qemu_config.set_network_restrict(true);
+        debug!("Network isolation enabled: guest outbound traffic blocked (QEMU restrict=on)");
     }
 
     // Set main virtiofs configuration for root filesystem (will be spawned by QEMU)
