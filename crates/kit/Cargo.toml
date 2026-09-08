@@ -12,7 +12,7 @@ color-eyre = { workspace = true }
 clap = { version = "4.4", features = ["derive", "env"] }
 clap_mangen = { version = "0.3.0", optional = true }
 data-encoding = { version = "2.9" }
-dirs = "6.0"
+dirs = "7.0"
 fn-error-context = { version = "0.2" }
 indicatif = "0.18"
 notify = "8.0"

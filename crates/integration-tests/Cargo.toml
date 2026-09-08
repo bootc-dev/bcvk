@@ -21,7 +21,7 @@ itest = { path = "../itest" }
 bcvk = { path = "../kit" }
 anyhow = "1"
 linkme = "0.3"
-dirs = "6.0"
+dirs = "7.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-error = { workspace = true }
