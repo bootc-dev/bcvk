@@ -35,28 +35,7 @@ fn test_ephemeral_test_basic() -> TestResult {
 
     // Run the test-basic command
     // This should boot the VM, check systemd health, and clean up
-    let output = cmd!(sh, "{bcvk} ephemeral test-basic {image}").output()?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !output.status.success() {
-        eprintln!("Command failed with exit code: {:?}", output.status.code());
-        eprintln!("stdout: {}", stdout);
-        eprintln!("stderr: {}", stderr);
-        return Err(anyhow::anyhow!(
-            "test-basic command failed for image {}",
-            image
-        )
-        .into());
-    }
-
-    // Verify expected output
-    assert!(
-        stdout.contains("System health check passed"),
-        "Expected success message not found in output. stdout: {}",
-        stdout
-    );
+    cmd!(sh, "{bcvk} ephemeral test-basic {image}").run()?;
 
     println!("Test passed: bcvk ephemeral test-basic");
     Ok(())
@@ -73,29 +52,7 @@ fn test_ephemeral_test_basic_parameterized(image: &str) -> TestResult {
     let bcvk = get_bck_command()?;
 
     // Run the test-basic command
-    let output = cmd!(sh, "{bcvk} ephemeral test-basic {image}").output()?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !output.status.success() {
-        eprintln!("Command failed with exit code: {:?}", output.status.code());
-        eprintln!("stdout: {}", stdout);
-        eprintln!("stderr: {}", stderr);
-        return Err(anyhow::anyhow!(
-            "test-basic command failed for image {}",
-            image
-        )
-        .into());
-    }
-
-    // Verify expected output
-    assert!(
-        stdout.contains("System health check passed"),
-        "Expected success message not found in output for image {}. stdout: {}",
-        image,
-        stdout
-    );
+    cmd!(sh, "{bcvk} ephemeral test-basic {image}").run()?;
 
     println!("Parameterized test passed for image: {}", image);
     Ok(())

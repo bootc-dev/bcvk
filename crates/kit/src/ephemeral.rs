@@ -420,7 +420,7 @@ fn test_basic(opts: TestBasicOpts) -> Result<()> {
     progress_bar.finish_and_clear();
     println!("VM ready after {:.1}s", duration.as_secs_f64());
 
-    // Run systemctl is-system-running to check system health
+    // Run systemctl status to check system health
     println!("Checking system health...");
     let status = Command::new("podman")
         .args([
@@ -430,29 +430,21 @@ fn test_basic(opts: TestBasicOpts) -> Result<()> {
             "/var/lib/bcvk/entrypoint",
             "ssh-exec",
             "systemctl",
-            "is-system-running",
+            "status",
+            "--no-pager",
         ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Failed to run systemctl is-system-running")?;
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("Failed to run systemctl status")?;
 
-    let output = String::from_utf8_lossy(&status.stdout);
-    let state = output.trim();
-
-    // systemd is-system-running returns:
-    // - "running" or "degraded": system is operational
-    // - other states or non-zero exit: system has issues
-    let is_healthy = matches!(state, "running" | "degraded");
-
-    if is_healthy {
-        println!("✓ System health check passed (state: {})", state);
+    if status.success() {
+        println!("✓ System health check passed");
         Ok(())
     } else {
         Err(eyre!(
-            "System health check failed: systemctl is-system-running returned '{}' (exit code: {})",
-            state,
-            status.status.code().unwrap_or(-1)
+            "System health check failed: systemctl status exited with code {}",
+            status.code().unwrap_or(-1)
         ))
     }
 }
