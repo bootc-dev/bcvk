@@ -19,6 +19,34 @@ use crate::ssh;
 /// Label used to identify bcvk ephemeral containers
 const EPHEMERAL_LABEL: &str = "bcvk.ephemeral=1";
 
+/// RAII guard for ephemeral container cleanup
+/// Ensures container is removed when dropped, even on error paths
+pub(crate) struct ContainerCleanup {
+    container_id: String,
+}
+
+impl ContainerCleanup {
+    pub(crate) fn new(container_id: String) -> Self {
+        Self { container_id }
+    }
+}
+
+impl Drop for ContainerCleanup {
+    fn drop(&mut self) {
+        use std::process::Stdio;
+        tracing::debug!("Cleaning up ephemeral container {}", self.container_id);
+        let result = Command::new("podman")
+            .args(["rm", "-f", "--", &self.container_id])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if let Err(e) = result {
+            tracing::warn!("Failed to remove container {}: {}", self.container_id, e);
+        }
+    }
+}
+
 /// SSH connection options for accessing running VMs.
 ///
 /// Provides secure shell access to VMs running within containers,
@@ -384,7 +412,7 @@ fn test_basic(opts: TestBasicOpts) -> Result<()> {
     println!("Started ephemeral VM: {}", container_id);
 
     // Ensure cleanup on any exit path
-    let _cleanup = ContainerCleanup { container_id: container_id.clone() };
+    let _cleanup = ContainerCleanup::new(container_id.clone());
 
     // Wait for SSH to be ready
     let progress_bar = crate::boot_progress::create_boot_progress_bar();
@@ -429,18 +457,3 @@ fn test_basic(opts: TestBasicOpts) -> Result<()> {
     }
 }
 
-/// RAII guard for ephemeral container cleanup
-struct ContainerCleanup {
-    container_id: String,
-}
-
-impl Drop for ContainerCleanup {
-    fn drop(&mut self) {
-        use std::process::Stdio;
-        let _ = Command::new("podman")
-            .args(["rm", "-f", "--", &self.container_id])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-}
