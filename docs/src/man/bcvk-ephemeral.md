@@ -54,6 +54,10 @@ bcvk-ephemeral-ps(8)
 
 :   List running ephemeral VMs
 
+bcvk-ephemeral-test-basic(8)
+
+:   Boot an ephemeral VM and verify systemd is healthy
+
 bcvk-ephemeral-rm-all(8)
 
 :   Remove all ephemeral VM containers
@@ -123,7 +127,7 @@ Or use instance types:
 # SEE ALSO
 
 **bcvk**(8), **bcvk-ephemeral-run**(8), **bcvk-ephemeral-run-ssh**(8),
-**bcvk-ephemeral-ssh**(8), **bcvk-libvirt**(8)
+**bcvk-ephemeral-test-basic**(8), **bcvk-ephemeral-ssh**(8), **bcvk-libvirt**(8)
 
 # VERSION
 
