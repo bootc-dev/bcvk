@@ -39,6 +39,17 @@ pub struct SshOpts {
     pub args: Vec<String>,
 }
 
+/// Options for the test-basic subcommand
+#[derive(clap::Parser, Debug)]
+pub struct TestBasicOpts {
+    /// Container image to test
+    #[clap(help = "Container image to run basic smoke test on")]
+    pub image: String,
+
+    #[clap(flatten)]
+    pub common: crate::run_ephemeral::CommonVmOpts,
+}
+
 /// Container list entry for ephemeral VMs
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -155,6 +166,15 @@ pub enum EphemeralCommands {
         #[clap(short, long)]
         force: bool,
     },
+
+    /// Run basic smoke test on a bootc container image
+    ///
+    /// Boots an ephemeral VM from the specified container image and verifies
+    /// that systemd reaches a healthy state via `systemctl is-system-running`.
+    /// This provides a quick sanity check to validate that a bootc container
+    /// image can successfully boot and reach a working state.
+    #[clap(name = "test-basic")]
+    TestBasic(TestBasicOpts),
 }
 
 impl EphemeralCommands {
@@ -216,6 +236,7 @@ impl EphemeralCommands {
                 Ok(())
             }
             EphemeralCommands::RmAll { force } => remove_all_ephemeral_containers(force),
+            EphemeralCommands::TestBasic(opts) => test_basic(opts),
         }
     }
 }
@@ -334,4 +355,92 @@ fn remove_all_ephemeral_containers(force: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run basic smoke test on a bootc container image
+///
+/// Boots an ephemeral VM and verifies systemd reaches a healthy state
+fn test_basic(opts: TestBasicOpts) -> Result<()> {
+    use crate::run_ephemeral::{run_detached, CommonPodmanOptions, RunEphemeralOpts};
+    use std::process::Stdio;
+
+    println!("Running basic smoke test on {}", opts.image);
+
+    // Build ephemeral VM options
+    let ephemeral_opts = RunEphemeralOpts {
+        image: opts.image.clone(),
+        common: opts.common,
+        podman: CommonPodmanOptions {
+            detach: true,
+            ..Default::default()
+        },
+        debug_entrypoint: None,
+        bind_mounts: Vec::new(),
+        mount_disk_files: Vec::new(),
+    };
+
+    // Start the ephemeral VM
+    let container_id = run_detached(ephemeral_opts)?;
+    println!("Started ephemeral VM: {}", container_id);
+
+    // Ensure cleanup on any exit path
+    let _cleanup = ContainerCleanup { container_id: container_id.clone() };
+
+    // Wait for SSH to be ready
+    let progress_bar = crate::boot_progress::create_boot_progress_bar();
+    let (duration, progress_bar) = run_ephemeral_ssh::wait_for_ssh_ready(&container_id, None, progress_bar)?;
+    progress_bar.finish_and_clear();
+    println!("VM ready after {:.1}s", duration.as_secs_f64());
+
+    // Run systemctl is-system-running to check system health
+    println!("Checking system health...");
+    let status = Command::new("podman")
+        .args([
+            "exec",
+            "--",
+            &container_id,
+            "/var/lib/bcvk/entrypoint",
+            "ssh-exec",
+            "systemctl",
+            "is-system-running",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to run systemctl is-system-running")?;
+
+    let output = String::from_utf8_lossy(&status.stdout);
+    let state = output.trim();
+
+    // systemd is-system-running returns:
+    // - "running" or "degraded": system is operational
+    // - other states or non-zero exit: system has issues
+    let is_healthy = matches!(state, "running" | "degraded");
+
+    if is_healthy {
+        println!("✓ System health check passed (state: {})", state);
+        Ok(())
+    } else {
+        Err(eyre!(
+            "System health check failed: systemctl is-system-running returned '{}' (exit code: {})",
+            state,
+            status.status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+/// RAII guard for ephemeral container cleanup
+struct ContainerCleanup {
+    container_id: String,
+}
+
+impl Drop for ContainerCleanup {
+    fn drop(&mut self) {
+        use std::process::Stdio;
+        let _ = Command::new("podman")
+            .args(["rm", "-f", "--", &self.container_id])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }

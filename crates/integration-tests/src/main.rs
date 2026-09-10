@@ -22,6 +22,7 @@ mod tests {
     pub mod run_ephemeral;
     pub mod run_ephemeral_ignition;
     pub mod run_ephemeral_ssh;
+    pub mod run_ephemeral_test_basic;
     pub mod to_disk;
     pub mod varlink;
 }
