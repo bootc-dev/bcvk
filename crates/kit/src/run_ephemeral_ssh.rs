@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tracing::debug;
 
+use crate::ephemeral::ContainerCleanup;
 use crate::run_ephemeral::{run_detached, RunEphemeralOpts};
 use crate::ssh;
 use crate::supervisor_status::{SupervisorState, SupervisorStatus};
@@ -91,33 +92,6 @@ fn show_container_logs(container_name: &str) {
         eprintln!("----------------------------------------\n");
     } else {
         eprintln!("(Container produced no output)");
-    }
-}
-
-/// RAII guard for ephemeral container cleanup
-/// Ensures container is removed when dropped, even on error paths
-struct ContainerCleanup {
-    container_id: String,
-}
-
-impl ContainerCleanup {
-    fn new(container_id: String) -> Self {
-        Self { container_id }
-    }
-}
-
-impl Drop for ContainerCleanup {
-    fn drop(&mut self) {
-        debug!("Cleaning up ephemeral container {}", self.container_id);
-        let result = Command::new("podman")
-            .args(["rm", "-f", "--", &self.container_id])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-
-        if let Err(e) = result {
-            tracing::warn!("Failed to remove container {}: {}", self.container_id, e);
-        }
     }
 }
 
