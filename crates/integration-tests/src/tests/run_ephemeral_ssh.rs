@@ -70,6 +70,22 @@ fn build_broken_image() -> anyhow::Result<String> {
     Ok(image_name)
 }
 
+/// Test the `ephemeral test-basic` subcommand
+///
+/// Verifies that `bcvk ephemeral test-basic` boots a VM and confirms
+/// systemd reached a healthy "running" state via `systemctl is-system-running`.
+fn test_ephemeral_test_basic() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+
+    cmd!(sh, "{bck} ephemeral test-basic --label {label} {image}").run()?;
+
+    Ok(())
+}
+integration_test!(test_ephemeral_test_basic);
+
 /// Test running a non-interactive command via SSH
 fn test_run_ephemeral_ssh_command() -> TestResult {
     let sh = shell()?;
