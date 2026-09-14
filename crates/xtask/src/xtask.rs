@@ -3,6 +3,7 @@
 
 use std::process::Command;
 
+use camino::Utf8Path;
 use color_eyre::eyre::{eyre, Context, Report};
 use color_eyre::Result;
 use xshell::Shell;
@@ -18,6 +19,9 @@ const TASKS: &[(&str, fn(&Shell) -> Result<()>)] = &[
     ("package-srpm", package_srpm),
     ("spec", spec),
 ];
+
+/// File used to identify the bcvk source tree toplevel.
+const TOPLEVEL_MARKER: &str = "contrib/packaging/bcvk.spec";
 
 fn install_tracing() {
     use tracing_error::ErrorLayer;
@@ -37,11 +41,23 @@ fn install_tracing() {
         .init();
 }
 
+/// Check if we're in a bcvk source tree by looking for [`TOPLEVEL_MARKER`].
+fn in_bcvk_source_tree() -> Result<bool> {
+    Utf8Path::new(TOPLEVEL_MARKER)
+        .try_exists()
+        .context("Checking for toplevel")
+}
+
 fn main() -> Result<(), Report> {
     install_tracing();
     color_eyre::install()?;
-    // Ensure our working directory is the toplevel
-    {
+
+    // Ensure our working directory is the bcvk source toplevel.
+    // First check if we're already there (e.g. when invoked from extracted
+    // tarball during RPM build). Only try git if we're not already in the
+    // right place - this avoids issues when building inside a different
+    // git repository.
+    if !in_bcvk_source_tree()? {
         let toplevel_path = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .output()
