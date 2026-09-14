@@ -20,7 +20,7 @@ bin:
 # - Apostrophe handling fixes
 .PHONY: manpages
 manpages:
-	cargo xtask manpages
+	cargo run --release --package xtask -- manpages
 
 # This gates CI by default. Note that for clippy, we gate on
 # only the clippy correctness and suspicious lints, plus a select
@@ -50,10 +50,10 @@ makesudoinstall:
 	sudo make install
 
 sync-manpages:
-	cargo xtask sync-manpages
+	cargo run --release --package xtask -- sync-manpages
 
 update-manpages:
-	cargo xtask update-manpages
+	cargo run --release --package xtask -- update-manpages
 
 update-generated: sync-manpages manpages
 
