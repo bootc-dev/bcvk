@@ -99,12 +99,18 @@ pub enum NetworkMode {
     User {
         /// Port forwarding rules: "tcp::2222-:22" format.
         hostfwd: Vec<String>,
+        /// When true, block all guest-initiated outbound traffic except
+        /// explicit hostfwd rules (QEMU slirp `restrict=on`).
+        restrict: bool,
     },
 }
 
 impl Default for NetworkMode {
     fn default() -> Self {
-        NetworkMode::User { hostfwd: vec![] }
+        NetworkMode::User {
+            hostfwd: vec![],
+            restrict: false,
+        }
     }
 }
 
@@ -449,12 +455,31 @@ impl QemuConfig {
     }
 
     /// Enable SSH access by configuring port forwarding.
+    ///
+    /// Preserves the current `restrict` setting so that callers can
+    /// enable isolation and SSH in either order.
     pub fn enable_ssh_access(&mut self, host_port: Option<u16>) -> &mut Self {
         let port = host_port.unwrap_or(2222); // Default to port 2222 on host
         let hostfwd = format!("tcp::{}-:22", port); // Forward host port to guest port 22
+        let restrict =
+            matches!(&self.network_mode, NetworkMode::User { restrict, .. } if *restrict);
         self.network_mode = NetworkMode::User {
             hostfwd: vec![hostfwd],
+            restrict,
         };
+        self
+    }
+
+    /// Enable or disable network isolation (QEMU slirp `restrict=on`).
+    ///
+    /// When enabled, the guest cannot initiate outbound connections
+    /// except through explicit `hostfwd` rules (e.g. SSH).
+    pub fn set_network_restrict(&mut self, restrict: bool) -> &mut Self {
+        match &mut self.network_mode {
+            NetworkMode::User {
+                restrict: current, ..
+            } => *current = restrict,
+        }
         self
     }
 
@@ -679,8 +704,12 @@ fn spawn(
 
     // Configure network (only User mode supported now)
     match &config.network_mode {
-        NetworkMode::User { hostfwd } => {
+        NetworkMode::User { hostfwd, restrict } => {
             let mut netdev_parts = vec!["user".to_string(), "id=net0".to_string()];
+
+            if *restrict {
+                netdev_parts.push("restrict=on".to_string());
+            }
 
             // Add port forwarding rules
             for fwd in hostfwd {
@@ -1050,5 +1079,52 @@ mod tests {
         assert_eq!(config.fw_cfg_entries.len(), 1);
         assert_eq!(config.fw_cfg_entries[0].0, "opt/com.coreos/config");
         assert_eq!(config.fw_cfg_entries[0].1.as_str(), "/test/ignition.json");
+    }
+
+    #[test]
+    fn test_network_mode_default_no_restrict() {
+        let config = QemuConfig::default();
+        assert!(
+            matches!(&config.network_mode, NetworkMode::User { restrict, .. } if !restrict),
+            "Default network mode should not restrict"
+        );
+    }
+
+    #[test]
+    fn test_network_mode_restrict() {
+        let mut config = QemuConfig::default();
+        config.set_network_restrict(true);
+        assert!(matches!(&config.network_mode, NetworkMode::User { restrict, .. } if *restrict),);
+
+        config.set_network_restrict(false);
+        assert!(matches!(&config.network_mode, NetworkMode::User { restrict, .. } if !restrict),);
+    }
+
+    #[test]
+    fn test_enable_ssh_preserves_restrict() {
+        let mut config = QemuConfig::default();
+        config.set_network_restrict(true);
+        config.enable_ssh_access(Some(2222));
+
+        match &config.network_mode {
+            NetworkMode::User { hostfwd, restrict } => {
+                assert!(restrict, "enable_ssh_access should preserve restrict=true");
+                assert_eq!(hostfwd, &["tcp::2222-:22"]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_enable_ssh_then_restrict() {
+        let mut config = QemuConfig::default();
+        config.enable_ssh_access(Some(3000));
+        config.set_network_restrict(true);
+
+        match &config.network_mode {
+            NetworkMode::User { hostfwd, restrict } => {
+                assert!(restrict);
+                assert_eq!(hostfwd, &["tcp::3000-:22"]);
+            }
+        }
     }
 }

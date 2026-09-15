@@ -84,6 +84,10 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Generate SSH keypair and inject via systemd credentials
 
+**--network-isolation**
+
+    Isolate the VM from the network. SSH access from the host is preserved, but the VM cannot reach the internet or other hosts
+
 **--virtiofsd**=*VIRTIOFSD_BINARY*
 
     Path to virtiofsd binary (overrides auto-detection)
@@ -271,6 +275,22 @@ For network-level port forwarding via podman, configure slirp4netns:
     bcvk ephemeral run -d --rm -K \
         --network slirp4netns:port_handler=slirp4netns,allow_host_loopback=true \
         --name webvm localhost/mybootc
+
+## Network Isolation
+
+Block all outbound network access from the VM while preserving SSH
+connectivity from the host.  This is useful for CI/CD pipelines where test
+execution should not depend on external network resources:
+
+    bcvk ephemeral run -d --rm -K \
+        --network-isolation \
+        --bind-storage-ro \
+        --name testvm localhost/mybootc
+
+The VM can still be reached via **bcvk ephemeral ssh**, but processes inside
+the guest cannot connect to the internet or other external hosts.  Pre-stage
+any required resources (container images, packages) on the host and share
+them into the VM using **--bind**, **--ro-bind**, or **--bind-storage-ro**.
 
 ## Instance Types
 
