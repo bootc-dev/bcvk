@@ -18,25 +18,15 @@ permissions:
 model: claude-sonnet-4-5-20250929
 engine:
   id: claude
-# bcvk is Rust; without this, cargo can't reach crates.io from behind
-# gh-aw's default egress firewall and build/test validation silently stalls
-# or fails (see "Repository setup checklist" in gh-agentic-workflows' README).
-network:
-  allowed:
-    - defaults
-    - rust
-
 tools:
   bash: ["*"]
   github:
     toolsets: [issues]
-    # Without this, content authored by our own bot (e.g. the fallback issue
-    # it files when a push is rejected) defaults to `unapproved`/`none`
-    # integrity on this public repo and gets filtered from the agent's view
-    # before it can read it - see "Trusting the pipeline's own bot" in
-    # README.md.
-    min-integrity: approved
-    trusted-users: ["${{ vars.GH_AW_APP_BOT_SLUG }}"]
+
+network:
+  allowed:
+    - defaults
+    - rust
 
 safe-outputs:
   github-app:
@@ -91,7 +81,7 @@ jobs:
         with:
           client-id: ${{ vars.GH_AW_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_AW_APP_PRIVATE_KEY }}
-      - name: Add agent/draft-working label
+      - name: Add agent/drafter-working label
         # ISSUE_NUMBER/REPO must be passed via env: rather than inlined
         # directly into the run: script below (as `${{ github.* }}`): gh-aw's
         # compiler sanitizes any inline `${{ github.* }}` expressions it
@@ -108,7 +98,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label agent/draft-working || true
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label agent/drafter-working || true
   remove_working_label:
     needs: [pre_activation, activation, agent, detection, safe_outputs]
     # Only tear down the label this same run put up: gating on this run's own
@@ -128,18 +118,18 @@ jobs:
         with:
           client-id: ${{ vars.GH_AW_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_AW_APP_PRIVATE_KEY }}
-      - name: Remove agent/draft-working label (best-effort)
-        # See the "Add agent/draft-working label" step above for why
+      - name: Remove agent/drafter-working label (best-effort)
+        # See the "Add agent/drafter-working label" step above for why
         # ISSUE_NUMBER/REPO are passed via env: instead of inlined in run:.
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |
-          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label agent/draft-working || true
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label agent/drafter-working || true
 
-timeout-minutes: 30
-source: bootc-dev/gh-agentic-workflows@c198cfb31a783dd6e372775c9ceb32f31c216b5e
+timeout-minutes: 15
+source: bootc-dev/gh-agentic-workflows@8b8fddc621b42cc44f82f93bc2970dafaeda113a
 ---
 
 # Drafter
@@ -165,9 +155,15 @@ implementation.
    lockfiles before opening the pull request: run `just setup && just
    compile` (this recompiles *all* workflows, not just the one you touched —
    every `.lock.yml` must stay in sync with its `.md` source).
-6. Once validation passes, open a pull request via the `create-pull-request`
+6. Check if the originating issue #${{ github.event.issue.number }} has the
+   `agent/workflow-edits-allowed` label by reading its labels. If it does,
+   you must propagate this label to the pull request so that subsequent
+   fix iterations (via `fix.md`) can also push changes to protected files.
+7. Once validation passes, open a pull request via the `create-pull-request`
    safe-output. The PR description should summarize the change and state
-   how it was validated.
+   how it was validated. If the originating issue has the
+   `agent/workflow-edits-allowed` label (checked in step 6), pass it in the
+   `labels` parameter when creating the PR.
 
 ## Constraints
 
