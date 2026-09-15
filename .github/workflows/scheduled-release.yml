@@ -100,7 +100,7 @@ jobs:
               echo "Error: Invalid version format. Expected X.Y.Z (e.g., 0.2.0)"
               exit 1
             fi
-            cargo set-version --manifest-path crates/kit/Cargo.toml --package bcvk "$VERSION"
+            cargo set-version --manifest-path crates/kit/Cargo.toml --package bcvk --package bcvk-qemu "$VERSION"
           else
             # default to bump the minor since that is most common
             cargo set-version --manifest-path crates/kit/Cargo.toml --package bcvk --bump minor
