@@ -47,6 +47,8 @@ mod run_ephemeral;
 #[cfg(target_os = "linux")]
 mod run_ephemeral_ssh;
 #[cfg(target_os = "linux")]
+mod sandbox;
+#[cfg(target_os = "linux")]
 mod ssh;
 #[cfg(target_os = "linux")]
 mod status_monitor;
@@ -271,6 +273,16 @@ fn main() -> Result<(), Report> {
     }
 
     let cli = Cli::parse();
+
+    #[cfg(target_os = "linux")]
+    if let Commands::ContainerEntrypoint(opts) = &cli.command {
+        if matches!(
+            opts.command,
+            container_entrypoint::ContainerCommands::RunEphemeral
+        ) {
+            sandbox::setup()?;
+        }
+    }
 
     #[cfg(target_os = "linux")]
     let rt = tokio::runtime::Builder::new_multi_thread()
