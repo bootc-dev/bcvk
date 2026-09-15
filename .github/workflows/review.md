@@ -101,12 +101,12 @@ jobs:
           gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label agent/review-working || true
 
 timeout-minutes: 15
-source: bootc-dev/gh-agentic-workflows@c198cfb31a783dd6e372775c9ceb32f31c216b5e
+source: bootc-dev/gh-agentic-workflows@8b8fddc621b42cc44f82f93bc2970dafaeda113a
 ---
 
 # PR Review Agent
 
-The code agent has opened or updated pull request
+The code agent has opened or updated a pull request
 #${{ github.event.pull_request.number }}.
 
 ## Your task
