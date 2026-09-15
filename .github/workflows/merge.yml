@@ -14,10 +14,8 @@ jobs:
       github.event.label.name == 'agent/lgtm' &&
       startsWith(github.event.pull_request.head.ref, 'agent/') &&
       github.event.pull_request.head.repo.id == github.repository_id
-    # Pilot rollout: auto-merge stays disabled (the `false &&` above) until
-    # reviewer/fixer judgment quality has been watched for a couple of weeks
-    # -- see gh-agentic-workflows' README Roadmap, "Pilot on one low-traffic
-    # repo". Once satisfied, delete the `false &&` line above to enable.
+    # Pilot rollout: delete the `false &&` line above once reviewer/fixer
+    # judgment quality has been watched for a couple of weeks.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -58,8 +56,11 @@ jobs:
           deadline=$((SECONDS + 1800))
           empty_polls=0
           while :; do
-            checks=$(gh pr checks "$pr" --repo "$repo" \
-              --json name,bucket,workflow,link 2>/dev/null || echo '[]')
+            if ! checks=$(gh pr checks "$pr" --repo "$repo" \
+              --json name,bucket,workflow,link 2>&1); then
+              echo "::error::Failed to query PR checks: $checks"
+              exit 1
+            fi
             other=$(jq --arg self "$self_workflow" \
               '[.[] | select(.workflow != $self)]' <<<"$checks")
             total=$(jq 'length' <<<"$other")
