@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "bcvk-qemu"
-version = "0.1.0"
+version = "0.20.0"
 dependencies = [
  "camino",
  "cap-std-ext",
