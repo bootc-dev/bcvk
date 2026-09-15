@@ -2,5 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>bootc-dev/infra:renovate-shared-config.json"
+  ],
+  "packageRules": [
+    {
+      "description": ["Group bootc crates so they stay in sync"],
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["bootc-mount", "bootc-utils"],
+      "groupName": "bootc crates"
+    }
   ]
 }
