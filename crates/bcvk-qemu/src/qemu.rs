@@ -27,6 +27,9 @@ use crate::VirtiofsConfig;
 /// The device path for vsock allocation.
 pub const VHOST_VSOCK: &str = "/dev/vhost-vsock";
 
+/// Default path for the QMP (QEMU Machine Protocol) Unix socket.
+pub const QMP_SOCKET_PATH: &str = "/run/bcvk-qmp.sock";
+
 /// VirtIO-FS mount point configuration.
 #[derive(Debug, Clone)]
 pub struct VirtiofsMount {
@@ -46,6 +49,23 @@ pub struct VirtioSerialOut {
     pub output_file: String,
     /// Whether to append to the file (needed for fdsets).
     pub append: bool,
+}
+
+/// Bidirectional VirtIO-Serial device backed by a Unix socket.
+///
+/// Unlike [`VirtioSerialOut`] which uses a write-only `chardev file` backend,
+/// this uses a `chardev socket` backend for full bidirectional communication.
+/// The guest sees `/dev/virtio-ports/{name}` as a read-write character device.
+/// The host connects to the Unix socket to exchange data in both directions.
+///
+/// Used by the shell relay feature to provide interactive shell access to
+/// VMs without requiring SSH.
+#[derive(Debug, Clone)]
+pub struct VirtioSerialBidir {
+    /// Device name (becomes /dev/virtio-ports/{name}).
+    pub name: String,
+    /// Unix socket path on the host for bidirectional communication.
+    pub socket_path: String,
 }
 
 /// Disk image format for virtio-blk devices.
@@ -100,6 +120,9 @@ pub enum NetworkMode {
         /// Port forwarding rules: "tcp::2222-:22" format.
         hostfwd: Vec<String>,
     },
+    /// No network device. Useful for fully isolated VMs where
+    /// all host-guest communication happens over virtio-serial.
+    None,
 }
 
 impl Default for NetworkMode {
@@ -202,8 +225,10 @@ pub struct QemuConfig {
     fdset: Vec<Arc<OwnedFd>>,
     /// Additional VirtIO-FS mounts.
     pub additional_mounts: Vec<VirtiofsMount>,
-    /// Virtio-serial output devices.
+    /// Virtio-serial output devices (unidirectional, guest -> host).
     pub virtio_serial_devices: Vec<VirtioSerialOut>,
+    /// Virtio-serial bidirectional devices (backed by Unix sockets).
+    pub virtio_serial_bidir_devices: Vec<VirtioSerialBidir>,
     /// Virtio-blk block devices.
     pub virtio_blk_devices: Vec<VirtioBlkDevice>,
     /// Display/console mode.
@@ -229,6 +254,12 @@ pub struct QemuConfig {
 
     /// fw_cfg entries for passing config files to the guest
     fw_cfg_entries: Vec<(String, Utf8PathBuf)>,
+
+    /// Path for the QMP (QEMU Machine Protocol) Unix socket.
+    ///
+    /// QMP is always enabled. If not explicitly set, defaults to
+    /// [`QMP_SOCKET_PATH`] at spawn time.
+    pub qmp_socket_path: Option<String>,
 }
 
 impl QemuConfig {
@@ -440,6 +471,24 @@ impl QemuConfig {
         // Use append=true for fdsets to avoid truncation issues
         self.add_virtio_serial_out(name, fdset, true);
         Ok(read_fd)
+    }
+
+    /// Add a bidirectional virtio-serial device backed by a Unix socket.
+    ///
+    /// QEMU creates a listening Unix socket at `socket_path`. The guest sees
+    /// the device as `/dev/virtio-ports/{name}` and can read/write it.
+    /// The host connects to the socket for bidirectional byte-stream
+    /// communication with the guest.
+    ///
+    /// Unlike [`add_virtio_serial_out`] (which uses a write-only `chardev file`),
+    /// this uses `chardev socket` with `server=on,wait=off` so QEMU doesn't
+    /// block waiting for a host-side connection at startup.
+    pub fn add_virtio_serial_bidir(&mut self, name: &str, socket_path: String) -> &mut Self {
+        self.virtio_serial_bidir_devices.push(VirtioSerialBidir {
+            name: name.to_owned(),
+            socket_path,
+        });
+        self
     }
 
     /// Add SMBIOS credential for systemd credential passing.
@@ -677,7 +726,24 @@ fn spawn(
         ]);
     }
 
-    // Configure network (only User mode supported now)
+    // Add bidirectional virtio-serial devices (chardev socket backend)
+    for (idx, bidir_device) in config.virtio_serial_bidir_devices.iter().enumerate() {
+        let char_id = format!("bidir_char{}", idx);
+        cmd.args([
+            "-chardev",
+            &format!(
+                "socket,id={},path={},server=on,wait=off",
+                char_id, bidir_device.socket_path
+            ),
+            "-device",
+            &format!(
+                "virtserialport,chardev={},name={}",
+                char_id, bidir_device.name
+            ),
+        ]);
+    }
+
+    // Configure network
     match &config.network_mode {
         NetworkMode::User { hostfwd } => {
             let mut netdev_parts = vec!["user".to_string(), "id=net0".to_string()];
@@ -695,6 +761,10 @@ fn spawn(
                 "virtio-net-pci,netdev=net0",
             ]);
         }
+        NetworkMode::None => {
+            // No network device at all. Host-guest communication
+            // happens exclusively over virtio-serial.
+        }
     }
 
     // No GUI; serial console either to a log file or disabled.
@@ -705,10 +775,19 @@ fn spawn(
     }
     cmd.args(["-nographic", "-display", "none"]);
 
+    // QMP socket for runtime control (hot-plug, etc.) -- always enabled.
+    let qmp_path = config.qmp_socket_path.as_deref().unwrap_or(QMP_SOCKET_PATH);
+    cmd.args([
+        "-chardev",
+        &format!("socket,id=qmp0,path={qmp_path},server=on,wait=off"),
+        "-mon",
+        "chardev=qmp0,mode=control",
+    ]);
+
     match &config.display_mode {
         DisplayMode::None => {
-            // Disable monitor in non-console mode
-            cmd.args(["-monitor", "none"]);
+            // QMP monitor is already configured above; no need for
+            // an additional human monitor.
         }
         DisplayMode::Console => {
             cmd.args(["-device", "virtconsole,chardev=console0"]);
@@ -804,6 +883,8 @@ pub struct RunningQemu {
     pub virtiofsd_processes: Vec<Pin<Box<dyn Future<Output = std::io::Result<Output>>>>>,
     #[allow(dead_code)]
     sd_notification: Option<VsockCopier>,
+    /// Path to the QMP socket (always available).
+    pub qmp_socket_path: String,
 }
 
 impl std::fmt::Debug for RunningQemu {
@@ -971,6 +1052,11 @@ impl RunningQemu {
             })
             .unwrap_or_default();
 
+        let qmp_socket_path = config
+            .qmp_socket_path
+            .clone()
+            .unwrap_or_else(|| QMP_SOCKET_PATH.to_string());
+
         // Spawn QEMU process with additional VSOCK credential if needed
         let qemu_process = spawn(&config, &creds, vsockdata)?;
 
@@ -978,6 +1064,7 @@ impl RunningQemu {
             qemu_process,
             virtiofsd_processes,
             sd_notification,
+            qmp_socket_path,
         })
     }
 
@@ -1030,6 +1117,25 @@ mod tests {
     fn test_disk_format() {
         assert_eq!(DiskFormat::Raw.as_str(), "raw");
         assert_eq!(DiskFormat::Qcow2.as_str(), "qcow2");
+    }
+
+    #[test]
+    fn test_virtio_serial_bidir_device_creation() {
+        let mut config = QemuConfig::new_direct_boot(
+            1024,
+            1,
+            "/test/kernel".to_string(),
+            "/test/initramfs".to_string(),
+            "/test/socket".into(),
+        );
+        config.add_virtio_serial_bidir("org.bcvk.ssh.0", "/run/bcvk-ssh-0.sock".to_string());
+
+        assert_eq!(config.virtio_serial_bidir_devices.len(), 1);
+        assert_eq!(config.virtio_serial_bidir_devices[0].name, "org.bcvk.ssh.0");
+        assert_eq!(
+            config.virtio_serial_bidir_devices[0].socket_path,
+            "/run/bcvk-ssh-0.sock"
+        );
     }
 
     #[test]
