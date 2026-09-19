@@ -1,0 +1,24 @@
+# Test fixture: Bootc image with a quadlet that starts at boot
+#
+# This creates an image with an example service that starts at boot
+# at the default.target that would normally break the bootc to-disk process.
+# We use this test to confirm that we are booting into our custom target
+# where only required services are started.
+#
+# Usage:
+#   podman build -f Dockerfile.quadlet -t localhost/bcvk-test-quadlet:latest \
+#     --build-arg BASE_IMAGE=quay.io/centos-bootc/centos-bootc:stream10 .
+
+ARG BASE_IMAGE=quay.io/centos-bootc/centos-bootc:stream10
+
+FROM ${BASE_IMAGE}
+
+COPY --chown=0:0 <<EOF /etc/containers/systemd/sleep.container
+[Container]
+Image=docker.io/library/alpine:latest
+Exec=sleep 600
+
+[Install]
+# Triggers the container to start automatically when the system boots normally
+WantedBy=default.target
+EOF

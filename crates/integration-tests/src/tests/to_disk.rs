@@ -19,7 +19,7 @@ use std::process::Output;
 use camino::Utf8PathBuf;
 use integration_tests::{integration_test, parameterized_integration_test};
 use itest::TestResult;
-use xshell::cmd;
+use xshell::{cmd, Shell};
 
 use tempfile::TempDir;
 
@@ -284,3 +284,65 @@ fn test_to_disk_for_image(image: &str) -> TestResult {
     Ok(())
 }
 parameterized_integration_test!(test_to_disk_for_image);
+
+/// Tag of the quadlet fixture image built by [`build_quadlet_image`]
+///
+/// Fully qualified so skopeo inside the install VM resolves it from
+/// containers-storage instead of trying docker.io/library/.
+const QUADLET_IMAGE: &str = "localhost/bcvk-test-quadlet:latest";
+
+/// Build the quadlet fixture image and verify it contains the quadlet unit
+fn build_quadlet_image(sh: &Shell) -> TestResult {
+    let base_image = get_test_image();
+    let fixture_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/Dockerfile.quadlet");
+    let fixture_dir = fixture_path.parent().unwrap();
+
+    cmd!(
+        sh,
+        "podman build -f {fixture_path} -t {QUADLET_IMAGE} --build-arg BASE_IMAGE={base_image} {fixture_dir}"
+    )
+    .run()?;
+
+    // Verify the quadlet unit is present in the image
+    let verify_stdout = cmd!(
+        sh,
+        "podman run --rm {QUADLET_IMAGE} sh -c 'ls /etc/containers/systemd/*.container'"
+    )
+    .read()?;
+    assert!(
+        verify_stdout.contains("sleep.container"),
+        "Quadlet fixture image should contain sleep.container: {}",
+        verify_stdout
+    );
+
+    Ok(())
+}
+
+/// Test that to-disk succeeds on an image containing a quadlet that starts at boot
+///
+/// The to-disk install VM reuses the target image as its environment. If the VM
+/// booted the full default.target, the quadlet's container would start and open
+/// files under /var/lib/containers, making `rm -rf /var/lib/containers` in the
+/// install script fail with EBUSY. The VM must instead boot to
+/// bcvk-to-disk.target, which does not pull in default.target units.
+fn test_to_disk_quadlet() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    build_quadlet_image(&sh)?;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
+        .expect("temp path is not UTF-8");
+
+    let output = cmd!(
+        sh,
+        "{bck} to-disk --label {label} --filesystem ext4 {QUADLET_IMAGE} {disk_path}"
+    )
+    .output()?;
+
+    validate_disk_image(&disk_path, &output, "test_to_disk_quadlet")?;
+    Ok(())
+}
+integration_test!(test_to_disk_quadlet);

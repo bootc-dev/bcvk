@@ -86,6 +86,7 @@ use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
 use indicatif::HumanDuration;
 use indoc::indoc;
+use tempfile::TempDir;
 use tracing::debug;
 
 /// Supported disk image formats
@@ -528,11 +529,26 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
 
     let tty = std::io::stdout().is_terminal();
 
+    // Boot the install VM to a minimal target instead of default.target.
+    // This is to prevent user-created services in the image (such as quadlets)
+    // from interfering with the to-disk install process.
+    //
+    // bcvk-to-disk.target starts only what the install needs:
+    // basic.target, network-online + sshd (the host drives
+    // the install over SSH), and remote-fs (virtiofs host-storage mounts).
+    let units_dir = TempDir::new()?;
+    let units_system_dir = units_dir.path().join("system");
+    std::fs::create_dir_all(&units_system_dir)?;
+    std::fs::write(
+        units_system_dir.join("bcvk-to-disk.target"),
+        include_str!("units/bcvk-to-disk.target"),
+    )?;
+
     // Configure VM for installation:
     // - Use source image as installer environment
     // - Mount host storage read-only for image access
     // - Attach target disk via virtio-blk
-    // - Disable networking (using local storage only)
+    // - Boot to bcvk-to-disk.target instead of default.target
     let ephemeral_opts = RunEphemeralOpts {
         host_dns_servers: None,
         image: opts.get_installer_image().to_string(),
@@ -550,14 +566,14 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
         add_swap: Some(format!("{disk_size}")),
         bind_mounts: Vec::new(),    // No additional bind mounts needed
         ro_bind_mounts: Vec::new(), // No additional ro bind mounts needed
-        systemd_units_dir: None,    // No custom systemd units
-        bind_storage_ro: true,      // Mount host container storage read-only
+        systemd_units_dir: Some(units_dir.path().to_string_lossy().to_string()),
+        bind_storage_ro: true, // Mount host container storage read-only
         mount_disk_files: vec![format!(
             "{}:output:{}",
             opts.target_disk,
             opts.additional.format.as_str()
         )], // Attach target disk
-        kernel_args: Default::default(),
+        kernel_args: vec!["systemd.unit=bcvk-to-disk.target".to_string()],
         ignition_config: None,
         debug_entrypoint: None,
     };
