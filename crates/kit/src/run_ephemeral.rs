@@ -1141,12 +1141,15 @@ fn inject_systemd_units() -> Result<()> {
     fs::create_dir_all(&format!("{}/default.target.wants", target_units))?;
     fs::create_dir_all(&format!("{}/remote-fs.target.wants", target_units))?;
 
-    // Copy all .service and .mount files
+    // Copy all .service, .mount and .target files
     for entry in fs::read_dir(source_units)? {
         let entry = entry?;
         let path = entry.path();
         let extension = path.extension().map(|ext| ext.to_string_lossy());
-        if matches!(extension.as_deref(), Some("service") | Some("mount")) {
+        if matches!(
+            extension.as_deref(),
+            Some("service") | Some("mount") | Some("target")
+        ) {
             let filename = path.file_name().unwrap().to_string_lossy();
             let target_path = format!("{}/{}", target_units, filename);
             fs::copy(&path, &target_path)?;

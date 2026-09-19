@@ -1,0 +1,14 @@
+# Boot target for bcvk to-disk ephemeral install VMs.
+#
+# The to-disk flow reuses the target image as the installer environment.
+# Booting the full default.target could start user services (e.g. quadlets)
+# that can interfere with the installation, e.g. by opening files under
+# /var/lib/containers. This target starts only what the install needs:
+# - basic.target (pulls in sysinit.target: udevd, journald, ...)
+# - network-online.target and sshd.service (the host drives the install over SSH)
+# - remote-fs.target (virtiofs host-storage mounts are wired here via SMBIOS creds)
+[Unit]
+Description=bcvk to-disk install target
+Requires=basic.target network-online.target sshd.service
+Wants=remote-fs.target
+After=basic.target network-online.target sshd.service remote-fs.target
