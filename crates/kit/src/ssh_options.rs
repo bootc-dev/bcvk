@@ -3,6 +3,25 @@
 //! Extracted from ssh.rs to allow macOS and Windows backends to share
 //! SSH option types without pulling in Linux-specific dependencies.
 
+/// Default `ConnectTimeout` (seconds) for SSH sessions to a VM.
+///
+/// OpenSSH applies this to the SSH banner exchange as well as the TCP
+/// connect. Behind QEMU's user-mode hostfwd the TCP connect completes
+/// immediately, so this really bounds how long the guest's sshd may take to
+/// send its banner, which on a loaded host while the guest is still booting
+/// can exceed a second or two.
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: u32 = 30;
+
+/// `ConnectTimeout` (seconds) for each attempt of the readiness probe; shorter
+/// than [`DEFAULT_CONNECT_TIMEOUT_SECS`] so a stuck attempt is retried
+/// promptly, but long enough that a slow sshd still counts as ready.
+pub const CONNECTIVITY_TEST_CONNECT_TIMEOUT_SECS: u32 = 10;
+
+// The session must allow at least as much time as the probe that declared
+// the guest ready; the reverse is what caused
+// https://github.com/bootc-dev/bcvk/issues/153
+const _: () = assert!(CONNECTIVITY_TEST_CONNECT_TIMEOUT_SECS <= DEFAULT_CONNECT_TIMEOUT_SECS);
+
 /// Common SSH options that can be shared between different SSH implementations
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -23,7 +42,7 @@ impl Default for CommonSshOptions {
     fn default() -> Self {
         Self {
             strict_host_keys: false,
-            connect_timeout: 1,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT_SECS,
             server_alive_interval: 60,
             log_level: "ERROR".to_string(),
             extra_options: vec![],
@@ -91,7 +110,7 @@ impl SshConnectionOptions {
         Self {
             common: CommonSshOptions {
                 strict_host_keys: false,
-                connect_timeout: 2,
+                connect_timeout: CONNECTIVITY_TEST_CONNECT_TIMEOUT_SECS,
                 server_alive_interval: 60,
                 log_level: "ERROR".to_string(),
                 extra_options: vec![],
@@ -110,7 +129,7 @@ mod tests {
     fn test_common_ssh_options_default() {
         let opts = CommonSshOptions::default();
         assert!(!opts.strict_host_keys);
-        assert_eq!(opts.connect_timeout, 1);
+        assert_eq!(opts.connect_timeout, DEFAULT_CONNECT_TIMEOUT_SECS);
         assert_eq!(opts.server_alive_interval, 60);
         assert_eq!(opts.log_level, "ERROR");
         assert!(opts.extra_options.is_empty());
@@ -120,7 +139,10 @@ mod tests {
     fn test_ssh_connection_options() {
         // Test default options
         let default_opts = SshConnectionOptions::default();
-        assert_eq!(default_opts.common.connect_timeout, 1);
+        assert_eq!(
+            default_opts.common.connect_timeout,
+            DEFAULT_CONNECT_TIMEOUT_SECS
+        );
         assert!(default_opts.allocate_tty);
         assert_eq!(default_opts.common.log_level, "ERROR");
         assert!(default_opts.common.extra_options.is_empty());
@@ -128,7 +150,10 @@ mod tests {
 
         // Test connectivity test options
         let test_opts = SshConnectionOptions::for_connectivity_test();
-        assert_eq!(test_opts.common.connect_timeout, 2);
+        assert_eq!(
+            test_opts.common.connect_timeout,
+            CONNECTIVITY_TEST_CONNECT_TIMEOUT_SECS
+        );
         assert!(!test_opts.allocate_tty);
         assert_eq!(test_opts.common.log_level, "ERROR");
         assert!(test_opts.common.extra_options.is_empty());
@@ -166,6 +191,6 @@ mod tests {
         assert!(args.contains(&"IdentitiesOnly=yes".to_string()));
         assert!(args.contains(&"PasswordAuthentication=no".to_string()));
         assert!(args.contains(&"StrictHostKeyChecking=no".to_string()));
-        assert!(args.contains(&"ConnectTimeout=1".to_string()));
+        assert!(args.contains(&format!("ConnectTimeout={DEFAULT_CONNECT_TIMEOUT_SECS}")));
     }
 }
