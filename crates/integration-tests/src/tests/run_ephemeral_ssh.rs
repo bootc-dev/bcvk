@@ -166,16 +166,19 @@ fn test_run_ephemeral_ssh_cross_distro_compatibility(image: &str) -> TestResult 
         sh,
         "{bck} ephemeral run-ssh --label {label} {image} -- systemctl --version"
     )
+    // Let the assertion below report the output; otherwise xshell returns an
+    // error on a non-zero exit and the reason for the failure is lost.
+    .ignore_status()
     .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
+    // With a TTY allocated, ssh's own errors end up on stdout, so show both.
     assert!(
         output.status.success(),
-        "SSH test failed for image {}: {}",
-        image,
-        stderr
+        "SSH test failed for image {image} ({}):\nstdout: {stdout}\nstderr: {stderr}",
+        output.status
     );
 
     assert!(
