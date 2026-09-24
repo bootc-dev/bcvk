@@ -20,8 +20,8 @@ use crate::libvirt::domain::VirtiofsFilesystem;
 use crate::utils::parse_memory_to_mb;
 use crate::xml_utils;
 
-/// SSH wait timeout in seconds
-const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
+/// SSH wait timeout in seconds, for a domain that is booting
+pub(crate) const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
 
 /// Transport type for updating from host container storage
 const UPDATE_FROM_HOST_TRANSPORT: &str = "containers-storage";

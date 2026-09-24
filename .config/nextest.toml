@@ -46,7 +46,7 @@ filter = '''
   test(/to_?disk/)
   | test(/^test_to_base_disk_/)
   | test(/^test_libvirt_run/)
-  | test(/^test_libvirt_(comprehensive|ssh_integration|port_forward_(xml|connectivity))/)
+  | test(/^test_libvirt_(comprehensive|ssh_integration|ssh_autostart|port_forward_(xml|connectivity))/)
   | test(/^test_base_disk_creation/)
   | test(=test_varlink_ephemeral_run_ps_and_ssh)
 '''
