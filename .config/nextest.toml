@@ -44,6 +44,7 @@ store-failure-output = true
 [[profile.integration.overrides]]
 filter = '''
   test(/to_?disk/)
+  | test(/^test_to_base_disk_/)
   | test(/^test_libvirt_run/)
   | test(/^test_libvirt_(comprehensive|ssh_integration|port_forward_(xml|connectivity))/)
   | test(/^test_base_disk_creation/)
