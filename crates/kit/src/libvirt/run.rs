@@ -374,7 +374,7 @@ impl LibvirtRunOpts {
 ///
 /// Uses the same `wait_for_readiness` polling loop as the ephemeral path
 /// and `run_ssh_impl`, just with a longer timeout for initial VM boot.
-fn wait_for_ssh_ready(
+pub(crate) fn wait_for_ssh_ready(
     global_opts: &crate::libvirt::LibvirtOptions,
     domain_name: &str,
     timeout_secs: u64,
