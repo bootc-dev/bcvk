@@ -41,6 +41,8 @@ mod libvirt_upload_disk;
 #[allow(dead_code)]
 mod podman;
 #[cfg(target_os = "linux")]
+mod podman_hint;
+#[cfg(target_os = "linux")]
 mod qemu;
 #[cfg(target_os = "linux")]
 mod run_ephemeral;
