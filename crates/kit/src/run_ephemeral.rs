@@ -647,7 +647,8 @@ pub fn run_detached(opts: RunEphemeralOpts) -> Result<String> {
     let output = cmd.output().context("Failed to execute podman command")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(color_eyre::eyre::eyre!("Podman command failed: {}", stderr));
+        let err = eyre!("Podman command failed: {}", stderr);
+        return Err(crate::podman_hint::with_podman_failure_hint(err, &stderr));
     }
 
     // Return the container ID from stdout
