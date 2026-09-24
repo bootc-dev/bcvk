@@ -40,11 +40,23 @@ even though there won't be any block devices (by default).
 At the current time there is not a dedicated way to detect `bcvk ephemeral`, but `ConditionKernelCommandLine=!rootfstype=virtiofs`
 should work reliably in the future.
 
+## Network Isolation
+
+Use `--network-isolation` to block all outbound network access from the VM.
+SSH from the host is preserved, but processes inside the guest cannot reach
+the internet.  This is useful for hermetic CI/CD testing where all inputs
+should be pre-staged:
+
+```bash
+bcvk ephemeral run-ssh --network-isolation --bind-storage-ro \
+  localhost/mybootc -- make test
+```
+
 ## Use Cases
 
 - Quick testing of bootc images
 - Development environments
 - CI/CD integration
-- Isolated experimentation
+- Hermetic testing with `--network-isolation`
 
 See [ephemeral-ssh](./ephemeral-ssh.md) for SSH access details.
