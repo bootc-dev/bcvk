@@ -113,18 +113,24 @@ fn test_run_ephemeral_ssh_cleanup() -> TestResult {
 }
 integration_test!(test_run_ephemeral_ssh_cleanup);
 
-/// Test running system commands via SSH
+/// Test running system commands via SSH, and that the ephemeral VM boots
+/// without failed units (e.g. bootloader-update.service, which bcvk masks)
 fn test_run_ephemeral_ssh_system_command() -> TestResult {
     let sh = shell()?;
     let bck = get_bck_command()?;
     let image = get_test_image();
     let label = INTEGRATION_TEST_LABEL;
 
-    cmd!(
+    let state = cmd!(
         sh,
-        "{bck} ephemeral run-ssh --label {label} {image} -- /bin/sh -c 'systemctl is-system-running || true'"
+        "{bck} ephemeral run-ssh --label {label} {image} -- /bin/sh -c 'systemctl is-system-running --wait || SYSTEMD_COLORS=0 systemctl --failed --plain --no-legend --no-pager'"
     )
-    .run()?;
+    .read()?;
+    assert_eq!(
+        state.trim(),
+        "running",
+        "Ephemeral VM did not reach the running state"
+    );
     Ok(())
 }
 integration_test!(test_run_ephemeral_ssh_system_command);
