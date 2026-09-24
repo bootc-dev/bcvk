@@ -19,6 +19,34 @@ use crate::ssh;
 /// Label used to identify bcvk ephemeral containers
 const EPHEMERAL_LABEL: &str = "bcvk.ephemeral=1";
 
+/// RAII guard for ephemeral container cleanup
+/// Ensures container is removed when dropped, even on error paths
+pub(crate) struct ContainerCleanup {
+    container_id: String,
+}
+
+impl ContainerCleanup {
+    pub(crate) fn new(container_id: String) -> Self {
+        Self { container_id }
+    }
+}
+
+impl Drop for ContainerCleanup {
+    fn drop(&mut self) {
+        use std::process::Stdio;
+        tracing::debug!("Cleaning up ephemeral container {}", self.container_id);
+        let result = Command::new("podman")
+            .args(["rm", "-f", "--", &self.container_id])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if let Err(e) = result {
+            tracing::warn!("Failed to remove container {}: {}", self.container_id, e);
+        }
+    }
+}
+
 /// SSH connection options for accessing running VMs.
 ///
 /// Provides secure shell access to VMs running within containers,
@@ -37,6 +65,17 @@ pub struct SshOpts {
     /// port forwarding, or -o for SSH options.
     #[clap(allow_hyphen_values = true, help = "SSH arguments like -v, -L, -o")]
     pub args: Vec<String>,
+}
+
+/// Options for the test-basic subcommand
+#[derive(clap::Parser, Debug)]
+pub struct TestBasicOpts {
+    /// Container image to test
+    #[clap(help = "Container image to run basic smoke test on")]
+    pub image: String,
+
+    #[clap(flatten)]
+    pub common: crate::run_ephemeral::CommonVmOpts,
 }
 
 /// Container list entry for ephemeral VMs
@@ -155,6 +194,15 @@ pub enum EphemeralCommands {
         #[clap(short, long)]
         force: bool,
     },
+
+    /// Run basic smoke test on a bootc container image
+    ///
+    /// Boots an ephemeral VM from the specified container image and verifies
+    /// that systemd reaches a healthy state via `systemctl is-system-running`.
+    /// This provides a quick sanity check to validate that a bootc container
+    /// image can successfully boot and reach a working state.
+    #[clap(name = "test-basic")]
+    TestBasic(TestBasicOpts),
 }
 
 impl EphemeralCommands {
@@ -216,6 +264,7 @@ impl EphemeralCommands {
                 Ok(())
             }
             EphemeralCommands::RmAll { force } => remove_all_ephemeral_containers(force),
+            EphemeralCommands::TestBasic(opts) => test_basic(opts),
         }
     }
 }
@@ -335,3 +384,68 @@ fn remove_all_ephemeral_containers(force: bool) -> Result<()> {
 
     Ok(())
 }
+
+/// Run basic smoke test on a bootc container image
+///
+/// Boots an ephemeral VM and verifies systemd reaches a healthy state
+fn test_basic(opts: TestBasicOpts) -> Result<()> {
+    use crate::run_ephemeral::{run_detached, CommonPodmanOptions, RunEphemeralOpts};
+    use std::process::Stdio;
+
+    println!("Running basic smoke test on {}", opts.image);
+
+    // Build ephemeral VM options
+    let ephemeral_opts = RunEphemeralOpts {
+        image: opts.image.clone(),
+        common: opts.common,
+        podman: CommonPodmanOptions {
+            detach: true,
+            ..Default::default()
+        },
+        debug_entrypoint: None,
+        bind_mounts: Vec::new(),
+        mount_disk_files: Vec::new(),
+    };
+
+    // Start the ephemeral VM
+    let container_id = run_detached(ephemeral_opts)?;
+    println!("Started ephemeral VM: {}", container_id);
+
+    // Ensure cleanup on any exit path
+    let _cleanup = ContainerCleanup::new(container_id.clone());
+
+    // Wait for SSH to be ready
+    let progress_bar = crate::boot_progress::create_boot_progress_bar();
+    let (duration, progress_bar) = run_ephemeral_ssh::wait_for_ssh_ready(&container_id, None, progress_bar)?;
+    progress_bar.finish_and_clear();
+    println!("VM ready after {:.1}s", duration.as_secs_f64());
+
+    // Run systemctl status to check system health
+    println!("Checking system health...");
+    let status = Command::new("podman")
+        .args([
+            "exec",
+            "--",
+            &container_id,
+            "/var/lib/bcvk/entrypoint",
+            "ssh-exec",
+            "systemctl",
+            "status",
+            "--no-pager",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("Failed to run systemctl status")?;
+
+    if status.success() {
+        println!("✓ System health check passed");
+        Ok(())
+    } else {
+        Err(eyre!(
+            "System health check failed: systemctl status exited with code {}",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
