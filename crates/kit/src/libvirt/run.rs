@@ -1211,10 +1211,10 @@ fn create_libvirt_domain_from_disk(
 
         eyre::ensure!(opts.firmware == FirmwareType::UefiSecure);
 
-        // Place the OVMF vars file in the libvirt storage pool so it's lifecycled with the VM
+        // The VARS file is the domain's NVRAM, so `virsh undefine --nvram` removes it
         let pool_path = get_libvirt_storage_pool_path(global_opts.connect.as_deref())
             .context("Failed to get libvirt storage pool path for secure boot vars")?;
-        let vars_output_path = pool_path.join(format!("{}_OVMF_VARS.fd", domain_name));
+        let vars_output_path = pool_path.join(secureboot::vars_filename(domain_name));
 
         info!("Setting up secure boot configuration from {}", keys);
         let config = secureboot::setup_secure_boot(&keys, &vars_output_path)
@@ -1281,14 +1281,14 @@ fn create_libvirt_domain_from_disk(
         let firmware_info = crate::libvirt::secureboot::find_secure_boot_firmware()
             .context("Failed to find secure boot firmware")?;
         let sb_vars_path = sb_config
-            .vars_template
+            .vars_path
             .canonicalize_utf8()
             .context("Canonicalizing secureboot vars path")?;
 
         // Use the formats from the firmware descriptors
         domain_builder = domain_builder
             .with_ovmf_code_path(firmware_info.code_path.as_str(), &firmware_info.code_format)
-            .with_nvram_template(sb_vars_path.as_str(), &sb_config.vars_format);
+            .with_nvram(sb_vars_path.as_str(), &sb_config.vars_format);
 
         // Add secure boot keys path to metadata for reference
         domain_builder =

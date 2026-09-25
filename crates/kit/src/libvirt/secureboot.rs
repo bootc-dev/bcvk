@@ -128,9 +128,9 @@ pub struct FirmwareInfo {
 pub struct SecureBootConfig {
     /// Directory containing the secure boot keys
     pub key_dir: Utf8PathBuf,
-    /// Path to custom OVMF_VARS template with enrolled keys
-    pub vars_template: Utf8PathBuf,
-    /// Format of the NVRAM template file (raw, qcow2)
+    /// Path to the domain's OVMF_VARS with enrolled keys
+    pub vars_path: Utf8PathBuf,
+    /// Format of the OVMF_VARS file (raw, qcow2)
     pub vars_format: String,
     /// GUID for the key owner
     #[allow(dead_code)]
@@ -260,10 +260,17 @@ pub fn customize_ovmf_vars(
     Ok(())
 }
 
+/// File name of the per-domain OVMF_VARS with enrolled keys, which is kept in
+/// the libvirt storage pool.
+pub(crate) fn vars_filename(domain_name: &str) -> String {
+    format!("{domain_name}_OVMF_VARS.fd")
+}
+
 /// Load and setup secure boot configuration from existing keys
 ///
-/// The `vars_output_path` should be in the libvirt storage pool so that
-/// the OVMF vars file is lifecycled with the VM (e.g., deleted with `--nvram`).
+/// The `vars_output_path` becomes the domain's NVRAM, so libvirt removes it
+/// when the domain is undefined with `--nvram`. It is always regenerated: a
+/// file left behind (e.g. by a transient VM) may have different keys enrolled.
 pub fn setup_secure_boot(
     key_dir: &Utf8Path,
     vars_output_path: &Utf8Path,
@@ -274,19 +281,16 @@ pub fn setup_secure_boot(
     // Find the system firmware (includes format info)
     let firmware_info = find_firmware_from_descriptors(true)?;
 
-    // Check if custom vars template already exists at the output path
-    if !vars_output_path.exists() {
-        tracing::info!(
-            "Creating custom OVMF_VARS template with enrolled keys at {}",
-            vars_output_path
-        );
-        customize_ovmf_vars(&keys, &firmware_info.vars_path, vars_output_path)?;
-    }
+    tracing::info!(
+        "Creating OVMF_VARS with enrolled keys at {}",
+        vars_output_path
+    );
+    customize_ovmf_vars(&keys, &firmware_info.vars_path, vars_output_path)?;
 
     // virt-fw-vars preserves the input format, so the output has the same format as the input
     Ok(SecureBootConfig {
         key_dir: key_dir.to_owned(),
-        vars_template: vars_output_path.to_owned(),
+        vars_path: vars_output_path.to_owned(),
         vars_format: firmware_info.vars_format,
         guid: keys.guid,
     })
