@@ -1696,10 +1696,16 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         kernel_cmdline.push("console=hvc0".to_string());
     }
     if cloudinit {
-        // We don't provide any cloud-init datasource right now,
-        // though in the future it would make sense to do so,
-        // and switch over our SSH key injection.
-        kernel_cmdline.push("ds=None".to_string());
+        // Fully disable cloud-init in ephemeral VMs. We don't provide any
+        // cloud-init datasource, and using `ds=None` (which tells cloud-init
+        // to use DataSourceNone) causes problems: the cloud-init generator
+        // still creates its activation symlink, which triggers a systemd
+        // drop-in condition (disable-sshd-keygen-if-cloud-init-active.conf)
+        // that prevents sshd-keygen from generating host keys. Since
+        // cloud-init itself never runs in the ephemeral VM (the boot target
+        // doesn't pull in multi-user.target), sshd ends up with no host
+        // keys and fails to start.
+        kernel_cmdline.push("cloud-init=disabled".to_string());
     }
 
     // Add Ignition platform kernel argument if Ignition config is specified
