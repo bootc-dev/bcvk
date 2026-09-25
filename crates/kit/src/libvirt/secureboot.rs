@@ -262,8 +262,9 @@ pub fn customize_ovmf_vars(
 
 /// Load and setup secure boot configuration from existing keys
 ///
-/// The `vars_output_path` should be in the libvirt storage pool so that
-/// the OVMF vars file is lifecycled with the VM (e.g., deleted with `--nvram`).
+/// The `vars_output_path` should be in the libvirt storage pool. It is
+/// always regenerated: a file left behind by an earlier VM with the same
+/// name may have different keys enrolled.
 pub fn setup_secure_boot(
     key_dir: &Utf8Path,
     vars_output_path: &Utf8Path,
@@ -274,14 +275,11 @@ pub fn setup_secure_boot(
     // Find the system firmware (includes format info)
     let firmware_info = find_firmware_from_descriptors(true)?;
 
-    // Check if custom vars template already exists at the output path
-    if !vars_output_path.exists() {
-        tracing::info!(
-            "Creating custom OVMF_VARS template with enrolled keys at {}",
-            vars_output_path
-        );
-        customize_ovmf_vars(&keys, &firmware_info.vars_path, vars_output_path)?;
-    }
+    tracing::info!(
+        "Creating custom OVMF_VARS template with enrolled keys at {}",
+        vars_output_path
+    );
+    customize_ovmf_vars(&keys, &firmware_info.vars_path, vars_output_path)?;
 
     // virt-fw-vars preserves the input format, so the output has the same format as the input
     Ok(SecureBootConfig {
