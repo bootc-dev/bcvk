@@ -3,9 +3,10 @@
 //! This module provides functionality to permanently remove libvirt domains
 //! and their associated disk images that were created from bootc container images.
 
+use camino::Utf8PathBuf;
 use clap::Parser;
 use color_eyre::Result;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Check if a domain is persistent (vs transient)
 ///
@@ -42,6 +43,49 @@ fn is_domain_persistent(
     Ok(true)
 }
 
+/// Files bcvk created for a domain outside of its libvirt-managed storage:
+/// the persistent Ignition config and the secure boot VARS template.
+///
+/// Best effort: returns nothing if the domain XML can't be read.
+pub(crate) fn domain_owned_files(
+    global_opts: &crate::libvirt::LibvirtOptions,
+    vm_name: &str,
+) -> Vec<Utf8PathBuf> {
+    let Ok(output) = global_opts
+        .virsh_command()
+        .args(&["dumpxml", vm_name])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let Some(dom) = String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|xml| crate::xml_utils::parse_xml_dom(&xml).ok())
+    else {
+        return Vec::new();
+    };
+
+    let ignition = dom
+        .find("bootc:ignition-persistent-path")
+        .map(|n| n.text_content().trim())
+        .filter(|p| !p.is_empty())
+        .map(Utf8PathBuf::from);
+    let vars = crate::libvirt::secureboot::owned_vars_template(&dom, vm_name);
+    ignition.into_iter().chain(vars).collect()
+}
+
+/// Remove files returned by [`domain_owned_files`], warning on failure.
+pub(crate) fn remove_files(files: &[Utf8PathBuf]) {
+    for path in files {
+        debug!("Removing {path}");
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("Failed to remove {path}: {e}"),
+        }
+    }
+}
+
 /// Options for removing a libvirt domain
 #[derive(Debug, Parser)]
 pub struct LibvirtRmOpts {
@@ -71,6 +115,9 @@ fn remove_vm_impl(
 ) -> Result<()> {
     use color_eyre::eyre::Context;
 
+    // Read these before the domain can go away (transient ones vanish on destroy)
+    let owned_files = domain_owned_files(global_opts, vm_name);
+
     // Check if VM is running
     if state == "running" {
         if stop_if_running {
@@ -91,6 +138,7 @@ fn remove_vm_impl(
 
             // Transient VMs disappear after destroy, so we're done
             if !is_persistent {
+                remove_files(&owned_files);
                 return Ok(());
             }
         } else {
@@ -109,26 +157,6 @@ fn remove_vm_impl(
         }
     }
 
-    // Remove Ignition config file if it exists (stored in metadata)
-    // Parse domain XML to get the ignition persistent path
-    if let Ok(xml_output) = global_opts
-        .virsh_command()
-        .args(&["dumpxml", vm_name])
-        .output()
-    {
-        if let Ok(xml_str) = String::from_utf8(xml_output.stdout) {
-            if let Ok(dom) = crate::xml_utils::parse_xml_dom(&xml_str) {
-                if let Some(ignition_path_node) = dom.find("bootc:ignition-persistent-path") {
-                    let ignition_path = ignition_path_node.text_content().trim();
-                    if !ignition_path.is_empty() && std::path::Path::new(ignition_path).exists() {
-                        debug!("Removing Ignition config file: {}", ignition_path);
-                        let _ = std::fs::remove_file(ignition_path); // Don't fail if this fails
-                    }
-                }
-            }
-        }
-    }
-
     // Remove libvirt domain with nvram and storage
     let output = global_opts
         .virsh_command()
@@ -143,6 +171,7 @@ fn remove_vm_impl(
             stderr
         ));
     }
+    remove_files(&owned_files);
 
     Ok(())
 }

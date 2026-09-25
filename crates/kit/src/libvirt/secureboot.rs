@@ -260,6 +260,23 @@ pub fn customize_ovmf_vars(
     Ok(())
 }
 
+/// File name of the per-domain OVMF_VARS template with enrolled keys, which
+/// is kept in the libvirt storage pool.
+pub(crate) fn vars_template_filename(domain_name: &str) -> String {
+    format!("{domain_name}_OVMF_VARS.fd")
+}
+
+/// Returns the per-domain VARS template bcvk created for `domain_name`, if its
+/// domain XML uses one. A system template (e.g. from edk2) is never returned.
+pub(crate) fn owned_vars_template(
+    dom: &crate::xml_utils::XmlNode,
+    domain_name: &str,
+) -> Option<Utf8PathBuf> {
+    let template = Utf8PathBuf::from(dom.find("nvram")?.attributes.get("template")?);
+    let expected = vars_template_filename(domain_name);
+    (template.file_name() == Some(expected.as_str())).then_some(template)
+}
+
 /// Load and setup secure boot configuration from existing keys
 ///
 /// The `vars_output_path` should be in the libvirt storage pool. It is
@@ -500,6 +517,41 @@ mod tests {
     use tempfile::TempDir;
 
     // Note: These tests use direct command execution
+
+    #[test]
+    fn test_owned_vars_template() {
+        let domain = |nvram: &str| {
+            crate::xml_utils::parse_xml_dom(&format!(
+                "<domain><name>vm1</name><os>{nvram}</os></domain>"
+            ))
+            .unwrap()
+        };
+        let cases = [
+            (
+                r#"<nvram template="/pool/vm1_OVMF_VARS.fd" format="raw"/>"#,
+                Some("/pool/vm1_OVMF_VARS.fd"),
+            ),
+            // Another domain's template
+            (r#"<nvram template="/pool/vm2_OVMF_VARS.fd"/>"#, None),
+            // The system template is never ours to delete
+            (
+                r#"<nvram template="/usr/share/edk2/ovmf/OVMF_VARS.secboot.fd"/>"#,
+                None,
+            ),
+            (
+                r#"<nvram>/var/lib/libvirt/qemu/nvram/vm1_VARS.fd</nvram>"#,
+                None,
+            ),
+            ("", None),
+        ];
+        for (nvram, expected) in cases {
+            assert_eq!(
+                owned_vars_template(&domain(nvram), "vm1").as_deref(),
+                expected.map(Utf8Path::new),
+                "{nvram}"
+            );
+        }
+    }
 
     #[test]
     fn test_load_missing_directory() {

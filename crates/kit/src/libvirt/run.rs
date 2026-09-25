@@ -1214,7 +1214,7 @@ fn create_libvirt_domain_from_disk(
         // Place the OVMF vars file in the libvirt storage pool so it's lifecycled with the VM
         let pool_path = get_libvirt_storage_pool_path(global_opts.connect.as_deref())
             .context("Failed to get libvirt storage pool path for secure boot vars")?;
-        let vars_output_path = pool_path.join(format!("{}_OVMF_VARS.fd", domain_name));
+        let vars_output_path = pool_path.join(secureboot::vars_template_filename(domain_name));
 
         info!("Setting up secure boot configuration from {}", keys);
         let config = secureboot::setup_secure_boot(&keys, &vars_output_path)

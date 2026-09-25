@@ -81,6 +81,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRmAllOpts)
 
     for domain in &domains {
         println!("Removing VM '{}'...", domain.name);
+        let owned_files = crate::libvirt::rm::domain_owned_files(global_opts, &domain.name);
 
         // Stop if running
         if domain.is_running() {
@@ -131,6 +132,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRmAllOpts)
             .with_context(|| format!("Failed to undefine domain '{}'", domain.name))?;
 
         if output.status.success() {
+            crate::libvirt::rm::remove_files(&owned_files);
             println!("  VM '{}' removed successfully", domain.name);
             removed_count += 1;
         } else {
