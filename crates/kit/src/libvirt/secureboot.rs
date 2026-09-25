@@ -260,10 +260,28 @@ pub fn customize_ovmf_vars(
     Ok(())
 }
 
+/// File name of the per-domain OVMF_VARS template with enrolled keys, which
+/// is kept in the libvirt storage pool.
+pub(crate) fn vars_template_filename(domain_name: &str) -> String {
+    format!("{domain_name}_OVMF_VARS.fd")
+}
+
+/// Returns the per-domain VARS template bcvk created for `domain_name`, if its
+/// domain XML uses one. A system template (e.g. from edk2) is never returned.
+pub(crate) fn owned_vars_template(
+    dom: &crate::xml_utils::XmlNode,
+    domain_name: &str,
+) -> Option<Utf8PathBuf> {
+    let template = Utf8PathBuf::from(dom.find("nvram")?.attributes.get("template")?);
+    let expected = vars_template_filename(domain_name);
+    (template.file_name() == Some(expected.as_str())).then_some(template)
+}
+
 /// Load and setup secure boot configuration from existing keys
 ///
-/// The `vars_output_path` should be in the libvirt storage pool so that
-/// the OVMF vars file is lifecycled with the VM (e.g., deleted with `--nvram`).
+/// The `vars_output_path` should be in the libvirt storage pool. It is
+/// always regenerated: a file left behind by an earlier VM with the same
+/// name may have different keys enrolled.
 pub fn setup_secure_boot(
     key_dir: &Utf8Path,
     vars_output_path: &Utf8Path,
@@ -274,14 +292,11 @@ pub fn setup_secure_boot(
     // Find the system firmware (includes format info)
     let firmware_info = find_firmware_from_descriptors(true)?;
 
-    // Check if custom vars template already exists at the output path
-    if !vars_output_path.exists() {
-        tracing::info!(
-            "Creating custom OVMF_VARS template with enrolled keys at {}",
-            vars_output_path
-        );
-        customize_ovmf_vars(&keys, &firmware_info.vars_path, vars_output_path)?;
-    }
+    tracing::info!(
+        "Creating custom OVMF_VARS template with enrolled keys at {}",
+        vars_output_path
+    );
+    customize_ovmf_vars(&keys, &firmware_info.vars_path, vars_output_path)?;
 
     // virt-fw-vars preserves the input format, so the output has the same format as the input
     Ok(SecureBootConfig {
@@ -502,6 +517,41 @@ mod tests {
     use tempfile::TempDir;
 
     // Note: These tests use direct command execution
+
+    #[test]
+    fn test_owned_vars_template() {
+        let domain = |nvram: &str| {
+            crate::xml_utils::parse_xml_dom(&format!(
+                "<domain><name>vm1</name><os>{nvram}</os></domain>"
+            ))
+            .unwrap()
+        };
+        let cases = [
+            (
+                r#"<nvram template="/pool/vm1_OVMF_VARS.fd" format="raw"/>"#,
+                Some("/pool/vm1_OVMF_VARS.fd"),
+            ),
+            // Another domain's template
+            (r#"<nvram template="/pool/vm2_OVMF_VARS.fd"/>"#, None),
+            // The system template is never ours to delete
+            (
+                r#"<nvram template="/usr/share/edk2/ovmf/OVMF_VARS.secboot.fd"/>"#,
+                None,
+            ),
+            (
+                r#"<nvram>/var/lib/libvirt/qemu/nvram/vm1_VARS.fd</nvram>"#,
+                None,
+            ),
+            ("", None),
+        ];
+        for (nvram, expected) in cases {
+            assert_eq!(
+                owned_vars_template(&domain(nvram), "vm1").as_deref(),
+                expected.map(Utf8Path::new),
+                "{nvram}"
+            );
+        }
+    }
 
     #[test]
     fn test_load_missing_directory() {

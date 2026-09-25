@@ -1201,3 +1201,101 @@ fn test_libvirt_run_journal_output() -> TestResult {
     Ok(())
 }
 integration_test!(test_libvirt_run_journal_output);
+
+/// Generate a secure boot key set (PK, KEK, db, GUID.txt) whose certificates
+/// have `CN=<name>-<key>`.
+fn generate_secure_boot_keys(sh: &xshell::Shell, dir: &std::path::Path, name: &str) -> TestResult {
+    std::fs::create_dir_all(dir)?;
+    for key in ["PK", "KEK", "db"] {
+        let keyfile = dir.join(format!("{key}.key"));
+        let crtfile = dir.join(format!("{key}.crt"));
+        let subject = format!("/CN={name}-{key}/");
+        cmd!(
+            sh,
+            "openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj {subject} -keyout {keyfile} -out {crtfile}"
+        )
+        .quiet()
+        .ignore_stderr()
+        .run()?;
+    }
+    std::fs::write(dir.join("GUID.txt"), uuid::Uuid::new_v4().to_string())?;
+    Ok(())
+}
+
+/// Recreating a VM under the same name must enroll the new secure boot keys
+/// rather than reuse the old VM's OVMF_VARS template, and `libvirt rm` must
+/// remove that template.
+fn test_libvirt_secure_boot_vars_not_reused() -> TestResult {
+    let sh = shell()?;
+    if cmd!(sh, "virt-fw-vars --help")
+        .quiet()
+        .ignore_stdout()
+        .ignore_stderr()
+        .run()
+        .is_err()
+    {
+        println!("Skipping test: virt-fw-vars not found");
+        return Ok(());
+    }
+    let bck = get_bck_command()?;
+    let test_image = &get_test_image();
+    let label = LIBVIRT_INTEGRATION_TEST_LABEL;
+    let domain_name = format!("test-sb-vars-{}", random_suffix());
+    let tmp = tempfile::TempDir::new()?;
+    let (keys_a, keys_b) = (tmp.path().join("a"), tmp.path().join("b"));
+    generate_secure_boot_keys(&sh, &keys_a, "bcvk-test-a")?;
+    generate_secure_boot_keys(&sh, &keys_b, "bcvk-test-b")?;
+
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
+    let run_with_keys = |keys: &std::path::Path| {
+        cmd!(
+            sh,
+            "{bck} libvirt run --filesystem ext4 --name {domain_name} --label {label} --secure-boot-keys {keys} {test_image}"
+        )
+        .run()
+    };
+    // Returns the VARS template path and the enrolled PK's subject
+    let enrolled_pk = || -> anyhow::Result<(String, String)> {
+        let xml = cmd!(sh, "virsh dumpxml {domain_name}").read()?;
+        let dom = parse_xml_dom(&xml).map_err(|e| anyhow::anyhow!("parsing domain XML: {e}"))?;
+        let template = dom
+            .find("nvram")
+            .and_then(|n| n.attributes.get("template"))
+            .ok_or_else(|| anyhow::anyhow!("no nvram template in domain XML"))?
+            .clone();
+        let vars = cmd!(sh, "virt-fw-vars -i {template} --print --verbose")
+            .ignore_stderr()
+            .read()?;
+        let subject = vars
+            .lines()
+            .skip_while(|l| !l.starts_with("name=PK "))
+            .find_map(|l| l.trim().strip_prefix("subject "))
+            .ok_or_else(|| anyhow::anyhow!("no PK enrolled in {template}"))?
+            .to_owned();
+        Ok((template, subject))
+    };
+
+    run_with_keys(&keys_a)?;
+    let (template, subject) = enrolled_pk()?;
+    assert_eq!(subject, "CN=bcvk-test-a-PK");
+    let stale = tmp.path().join("stale_VARS.fd");
+    std::fs::copy(&template, &stale)?;
+
+    cmd!(sh, "{bck} libvirt rm --force --stop {domain_name}").run()?;
+    assert!(
+        !std::path::Path::new(&template).exists(),
+        "libvirt rm left {template} behind"
+    );
+
+    // Put the old template back, as a bcvk without this fix would have left it
+    std::fs::copy(&stale, &template)?;
+    run_with_keys(&keys_b)?;
+    let (_, subject) = enrolled_pk()?;
+    assert_eq!(subject, "CN=bcvk-test-b-PK");
+
+    Ok(())
+}
+integration_test!(test_libvirt_secure_boot_vars_not_reused);
