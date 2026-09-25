@@ -52,8 +52,8 @@ pub struct DomainBuilder {
     tpm: bool,
     ovmf_code_path: Option<String>, // Custom OVMF_CODE path for secure boot
     ovmf_code_format: Option<String>, // Format of OVMF_CODE (raw, qcow2)
-    nvram_template: Option<String>, // Custom NVRAM template with enrolled keys
-    nvram_format: Option<String>,   // Format of NVRAM template (raw, qcow2)
+    nvram_path: Option<String>,     // NVRAM file with enrolled keys
+    nvram_format: Option<String>,   // Format of the NVRAM file (raw, qcow2)
     firmware_log: Option<FirmwareLogOutput>, // OVMF debug log output via isa-debugcon
     virtio_console_log: Option<String>, // Virtio console log file path (hvc0 — OS/journald)
     serial_console_log: Option<String>, // Serial console log file path (ttyS0 — UEFI/bootloader)
@@ -89,7 +89,7 @@ impl DomainBuilder {
             tpm: true,      // Default to enabled
             ovmf_code_path: None,
             ovmf_code_format: None,
-            nvram_template: None,
+            nvram_path: None,
             nvram_format: None,
             firmware_log: None,
             virtio_console_log: None,
@@ -190,12 +190,13 @@ impl DomainBuilder {
         self
     }
 
-    /// Set custom NVRAM template path and format with enrolled secure boot keys
+    /// Set the NVRAM file path and format, e.g. with enrolled secure boot keys
     ///
+    /// The file is used as is, and removed by `virsh undefine --nvram`.
     /// Format must be specified (either "raw" or "qcow2") and should come from
     /// the QEMU firmware interop JSON descriptors.
-    pub fn with_nvram_template(mut self, path: &str, format: &str) -> Self {
-        self.nvram_template = Some(path.to_string());
+    pub fn with_nvram(mut self, path: &str, format: &str) -> Self {
+        self.nvram_path = Some(path.to_string());
         self.nvram_format = Some(format.to_string());
         self
     }
@@ -340,21 +341,17 @@ impl DomainBuilder {
                 }
                 writer.write_text_element_with_attrs("loader", ovmf_code, &loader_attrs)?;
 
-                // Add NVRAM element if template is specified
-                if let Some(ref nvram_template) = self.nvram_template {
+                // Add NVRAM element if a path is specified
+                if let Some(ref nvram_path) = self.nvram_path {
                     // Format is required and comes from QEMU firmware interop JSON descriptors
                     let nvram_fmt = self
                         .nvram_format
                         .as_deref()
-                        .expect("nvram_format must be set when nvram_template is set");
+                        .expect("nvram_format must be set when nvram_path is set");
                     writer.write_text_element_with_attrs(
                         "nvram",
-                        "", // Empty content, template attr provides the source
-                        &[
-                            ("template", nvram_template),
-                            ("templateFormat", nvram_fmt),
-                            ("format", nvram_fmt),
-                        ],
+                        nvram_path,
+                        &[("format", nvram_fmt)],
                     )?;
                 }
             } else if secure_boot {
@@ -847,16 +844,18 @@ mod tests {
             .with_name("test-custom-secboot")
             .with_firmware(FirmwareType::UefiSecure)
             .with_ovmf_code_path("/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd", "raw")
-            .with_nvram_template("/var/lib/libvirt/qemu/nvram/custom_VARS.fd", "raw")
+            .with_nvram("/var/lib/libvirt/images/custom_VARS.fd", "raw")
             .build_xml()
             .unwrap();
 
         // Should have custom loader path
         assert!(xml.contains("/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd"));
 
-        // Should have nvram template
-        assert!(xml.contains("nvram"));
-        assert!(xml.contains("template=\"/var/lib/libvirt/qemu/nvram/custom_VARS.fd\""));
+        // The NVRAM is the custom file itself, not a template libvirt copies
+        assert!(
+            xml.contains(r#"<nvram format="raw">/var/lib/libvirt/images/custom_VARS.fd</nvram>"#)
+        );
+        assert!(!xml.contains("template="));
 
         // Should have secure loader attributes
         assert!(xml.contains("readonly=\"yes\""));
