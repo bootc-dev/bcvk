@@ -191,7 +191,7 @@ dependencies = [
  "base64 0.23.1",
  "bcvk-qemu",
  "bootc-internal-mount",
- "bootc-internal-utils 1.16.13",
+ "bootc-internal-utils",
  "camino",
  "cap-std-ext",
  "cfg-if",
@@ -292,7 +292,7 @@ version = "1.16.14"
 source = "git+https://github.com/bootc-dev/bootc?rev=83d15891428cda862c5c732397f5dd7c81dc4a23#83d15891428cda862c5c732397f5dd7c81dc4a23"
 dependencies = [
  "anyhow",
- "bootc-internal-utils 1.16.14",
+ "bootc-internal-utils",
  "camino",
  "cap-std-ext",
  "fn-error-context",
@@ -301,26 +301,6 @@ dependencies = [
  "serde",
  "tempfile",
  "tracing",
-]
-
-[[package]]
-name = "bootc-internal-utils"
-version = "1.16.13"
-source = "git+https://github.com/bootc-dev/bootc?rev=65321aed7998985bd44ec8e4a4cc6e184de2e150#65321aed7998985bd44ec8e4a4cc6e184de2e150"
-dependencies = [
- "anstream",
- "anyhow",
- "cap-std-ext",
- "chrono",
- "owo-colors",
- "rustix",
- "serde",
- "serde_json",
- "shlex",
- "tokio",
- "tracing",
- "tracing-journald",
- "tracing-subscriber",
 ]
 
 [[package]]
