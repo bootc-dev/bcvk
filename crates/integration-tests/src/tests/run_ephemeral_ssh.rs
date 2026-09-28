@@ -54,11 +54,12 @@ fn wait_for_container_removal(container_name: &str) -> anyhow::Result<()> {
     }
 }
 
-/// Build a test fixture image with the kernel removed
-fn build_broken_image() -> anyhow::Result<String> {
+/// Build the test fixture image `fixtures/Dockerfile.{name}` on top of the
+/// primary test image
+fn build_fixture_image(name: &str) -> anyhow::Result<String> {
     let sh = shell()?;
-    let fixture_path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/Dockerfile.no-kernel");
-    let image_name = format!("localhost/bcvk-test-no-kernel:{}", std::process::id());
+    let fixture_path = format!("{}/fixtures/Dockerfile.{name}", env!("CARGO_MANIFEST_DIR"));
+    let image_name = format!("localhost/bcvk-test-{name}:{}", std::process::id());
     let build_arg = format!("BASE_IMAGE={}", get_test_image());
 
     cmd!(
@@ -294,7 +295,7 @@ integration_test!(test_run_tmpfs);
 fn test_run_ephemeral_ssh_broken_image_cleanup() -> TestResult {
     // Build a broken test image (bootc image with kernel removed)
     eprintln!("Building broken test image...");
-    let broken_image = build_broken_image()?;
+    let broken_image = build_fixture_image("no-kernel")?;
     eprintln!("Built broken image: {}", broken_image);
 
     let sh = shell()?;
@@ -340,6 +341,50 @@ fn test_run_ephemeral_ssh_broken_image_cleanup() -> TestResult {
     Ok(())
 }
 integration_test!(test_run_ephemeral_ssh_broken_image_cleanup);
+
+/// Test that `test-basic` passes on a healthy image
+fn test_ephemeral_test_basic() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+
+    cmd!(sh, "{bck} ephemeral test-basic --label {label} {image}").run()?;
+    Ok(())
+}
+integration_test!(test_ephemeral_test_basic);
+
+/// Test that `test-basic` fails on an image that boots degraded, naming the
+/// failed unit
+fn test_ephemeral_test_basic_degraded() -> TestResult {
+    const FAILING_UNIT: &str = "bcvk-test-failing.service";
+    let image = build_fixture_image("failing-unit")?;
+
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+
+    let output = cmd!(sh, "{bck} ephemeral test-basic --label {label} {image}")
+        .ignore_status()
+        .output()?;
+
+    let _ = cmd!(sh, "podman rmi -f {image}")
+        .ignore_status()
+        .quiet()
+        .run();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "test-basic succeeded on a degraded image. Output: {stdout}"
+    );
+    assert!(
+        stdout.lines().next() == Some("degraded") && stdout.contains(FAILING_UNIT),
+        "Expected the degraded state and {FAILING_UNIT} in the output. Got: {stdout}"
+    );
+    Ok(())
+}
+integration_test!(test_ephemeral_test_basic_degraded);
 
 /// Test ephemeral VM network and DNS
 ///
