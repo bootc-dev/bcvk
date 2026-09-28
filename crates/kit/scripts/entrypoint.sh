@@ -67,7 +67,9 @@ trap 'kill -TERM $BWRAP_PID 2>/dev/null; exit 0' INT TERM
 # Run bwrap in background so we can handle signals; xref
 # https://github.com/containers/bubblewrap/pull/586
 # But probably really we should switch to systemd
-bwrap --as-pid-1 --unshare-pid "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@" &
+# Bash normally gives a background command /dev/null on stdin, so
+# keep stdin attached so QEMU can receive input.
+bwrap --as-pid-1 --unshare-pid "${BWRAP_ARGS[@]}" --bind /run /run -- ${SELFEXE} container-entrypoint "$@" <&0 &
 BWRAP_PID=$!
 
 # Wait for bwrap to complete
