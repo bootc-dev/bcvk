@@ -22,6 +22,7 @@ Requires: virtiofsd
 # Extraction and initramfs tools are needed for some ephemeral boot images.
 Recommends: binutils
 Recommends: kernel-tools
+Recommends: android-tools
 # libvirt-client is optional but recommended for 'bcvk libvirt' commands
 Recommends: libvirt-client
 

@@ -1219,10 +1219,9 @@ fn parse_service_exit_code(status_content: &str) -> Result<i32> {
 /// not the guest bootc image that gets booted inside the VM.
 fn check_required_container_binaries() -> Result<()> {
     // systemctl: used for checking cloud-init and other systemd operations
-    // objcopy: for UKI kernel extraction (when using UKI images)
     // NOTE: mount and chroot are checked earlier in entrypoint.sh, not here, because by the
     // time run_impl() executes we're already inside the hybrid root
-    let required_binaries = ["systemctl", "objcopy"];
+    let required_binaries = ["systemctl"];
 
     let mut missing = Vec::new();
 
@@ -1409,66 +1408,74 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         .ok_or_else(|| {
             eyre!(
                 "No kernel found. Checked:\n\
+                 - /boot/aboot-*.img (ukiboot or Android boot)\n\
                  - /boot/EFI/Linux/*.efi (UKI)\n\
                  - /usr/lib/modules/<version>/<version>.efi (UKI)\n\
                  - /usr/lib/modules/<version>/vmlinuz + initramfs.img"
             )
         })?;
-
     // Add the source-image prefix to get absolute paths
     let kernel_info =
         crate::kernel::with_root_prefix(kernel_info, Utf8Path::new("/run/source-image"));
 
     debug!(
-        "Found kernel: {:?} (UKI: {})",
-        kernel_info.kernel_path, kernel_info.is_uki
+        "Found kernel: {:?} ({:?})",
+        kernel_info.kernel_path, kernel_info.kind
     );
 
     let kernel_mount = "/run/qemu/kernel";
     let initramfs_mount = "/run/qemu/initramfs";
 
-    // Extract from UKI if found, otherwise use traditional kernel
-    if kernel_info.is_uki {
-        debug!(
-            "Extracting kernel and initramfs from UKI: {:?}",
-            kernel_info.kernel_path
-        );
+    match kernel_info.kind {
+        crate::kernel::KernelKind::Uki => {
+            require_binary("objcopy")?;
+            debug!(
+                "Extracting kernel and initramfs from UKI: {:?}",
+                kernel_info.kernel_path
+            );
+            for (section, output) in [(".linux", kernel_mount), (".initrd", initramfs_mount)] {
+                Command::new("objcopy")
+                    .args([
+                        "--dump-section",
+                        &format!("{section}={output}"),
+                        kernel_info.kernel_path.as_str(),
+                    ])
+                    .run_capture_stderr()
+                    .map_err(|e| eyre!("Failed to extract {section} from UKI: {e}"))?;
+            }
+        }
+        crate::kernel::KernelKind::AndroidBoot => {
+            require_binary("unpack_bootimg")?;
+            let unpacked = "/run/qemu/aboot-unpacked";
+            fs::create_dir_all(unpacked)?;
+            Command::new("unpack_bootimg")
+                .args([
+                    "--boot_img",
+                    kernel_info.kernel_path.as_str(),
+                    "--out",
+                    unpacked,
+                ])
+                .stdout(Stdio::null())
+                .run_capture_stderr()
+                .map_err(|e| eyre!("Failed to unpack Android boot image: {e}"))?;
+            fs::rename(format!("{unpacked}/kernel"), kernel_mount)
+                .context("Getting kernel from Android boot image")?;
+            fs::rename(format!("{unpacked}/ramdisk"), initramfs_mount)
+                .context("Getting ramdisk from Android boot image")?;
+        }
+        crate::kernel::KernelKind::Traditional => {
+            let source_initramfs_path = kernel_info
+                .initramfs_path
+                .as_ref()
+                .ok_or_else(|| eyre!("Traditional kernel found but no initramfs path"))?;
 
-        // Extract .linux section (kernel) from UKI
-        Command::new("objcopy")
-            .args([
-                "--dump-section",
-                &format!(".linux={}", kernel_mount),
-                kernel_info.kernel_path.as_str(),
-            ])
-            .run_capture_stderr()
-            .map_err(|e| eyre!("Failed to extract kernel from UKI: {e}"))?;
-        debug!("Extracted kernel from UKI to {}", kernel_mount);
-
-        // Extract .initrd section (initramfs) from UKI
-        Command::new("objcopy")
-            .args([
-                "--dump-section",
-                &format!(".initrd={}", initramfs_mount),
-                kernel_info.kernel_path.as_str(),
-            ])
-            .run_capture_stderr()
-            .map_err(|e| eyre!("Failed to extract initramfs from UKI: {e}"))?;
-        debug!("Extracted initramfs from UKI to {}", initramfs_mount);
-    } else {
-        let source_initramfs_path = kernel_info
-            .initramfs_path
-            .as_ref()
-            .ok_or_else(|| eyre!("Traditional kernel found but no initramfs path"))?;
-
-        // Copy kernel; a bind mount would be slightly cheaper but can fail with
-        // EPERM on newer kernels due to locked-mount restrictions in user namespaces.
-        fs::copy(&kernel_info.kernel_path, kernel_mount)
-            .map_err(|e| eyre!("Failed to copy kernel: {e}"))?;
-
-        // Copy initramfs so we can append to it
-        fs::copy(source_initramfs_path, initramfs_mount)
-            .map_err(|e| eyre!("Failed to copy initramfs: {e}"))?;
+            // A bind mount can fail with EPERM on newer kernels due to
+            // locked-mount restrictions in user namespaces.
+            fs::copy(&kernel_info.kernel_path, kernel_mount)
+                .map_err(|e| eyre!("Failed to copy kernel: {e}"))?;
+            fs::copy(source_initramfs_path, initramfs_mount)
+                .map_err(|e| eyre!("Failed to copy initramfs: {e}"))?;
+        }
     }
 
     // ARM64 kernels have no built-in decompressors, which means Qemu has to decompress
@@ -1486,6 +1493,11 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
             .run_capture_stderr()
             .map_err(|e| eyre!("Unwrapping ARM64 zstd EFI zboot kernel: {e}"))?;
         fs::rename(unwrapped, kernel_mount)?;
+    }
+    for path in [kernel_mount, initramfs_mount] {
+        if fs::metadata(path)?.len() == 0 {
+            return Err(eyre!("Extracted boot file is empty: {path}"));
+        }
     }
 
     remove_bootconfig(initramfs_mount)?;
