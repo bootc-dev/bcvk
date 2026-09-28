@@ -19,6 +19,9 @@ Requires: podman
 Requires: qemu-img
 Requires: qemu-kvm
 Requires: virtiofsd
+# Extraction and initramfs tools are needed for some ephemeral boot images.
+Recommends: binutils
+Recommends: kernel-tools
 # libvirt-client is optional but recommended for 'bcvk libvirt' commands
 Recommends: libvirt-client
 
