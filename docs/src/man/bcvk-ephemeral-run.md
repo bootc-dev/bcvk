@@ -67,6 +67,7 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 **--console**
 
     Connect the QEMU console to the container's stdio (visible via podman logs/attach)
+    Add **-i -t** to send keyboard input to the guest console.
 
 **--debug**
 
@@ -216,7 +217,7 @@ run and SSH into one command with automatic cleanup.
 
 **Debugging boot issues**:
 
-    bcvk ephemeral run --console --name debugvm localhost/mybootc
+    bcvk ephemeral run --console -it --name debugvm localhost/mybootc
 
 ## Understanding the Flags
 
