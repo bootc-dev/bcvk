@@ -27,6 +27,8 @@ use crate::VirtiofsConfig;
 /// The device path for vsock allocation.
 pub const VHOST_VSOCK: &str = "/dev/vhost-vsock";
 
+const SYSTEMD_CREDENTIAL_FW_CFG_PREFIX: &str = "opt/io.systemd.credentials/";
+
 /// VirtIO-FS mount point configuration.
 #[derive(Debug, Clone)]
 pub struct VirtiofsMount {
@@ -463,6 +465,19 @@ impl QemuConfig {
     pub fn add_fw_cfg(&mut self, name: String, file_path: Utf8PathBuf) -> &mut Self {
         self.fw_cfg_entries.push((name, file_path));
         self
+    }
+
+    /// Pass a systemd system credential through QEMU's fw_cfg interface.
+    /// Only the file path, not its contents, appears in QEMU's arguments.
+    pub fn add_systemd_credential_file(
+        &mut self,
+        credential_name: &str,
+        file_path: Utf8PathBuf,
+    ) -> &mut Self {
+        self.add_fw_cfg(
+            format!("{SYSTEMD_CREDENTIAL_FW_CFG_PREFIX}{credential_name}"),
+            file_path,
+        )
     }
 }
 
@@ -1103,10 +1118,16 @@ mod tests {
             "opt/com.coreos/config".to_string(),
             "/test/ignition.json".into(),
         );
+        config.add_systemd_credential_file("tmpfiles.extra", "/test/ssh-credential".into());
 
         // Test that the fw_cfg entry is created correctly
-        assert_eq!(config.fw_cfg_entries.len(), 1);
+        assert_eq!(config.fw_cfg_entries.len(), 2);
         assert_eq!(config.fw_cfg_entries[0].0, "opt/com.coreos/config");
         assert_eq!(config.fw_cfg_entries[0].1.as_str(), "/test/ignition.json");
+        assert_eq!(
+            config.fw_cfg_entries[1].0,
+            "opt/io.systemd.credentials/tmpfiles.extra"
+        );
+        assert_eq!(config.fw_cfg_entries[1].1.as_str(), "/test/ssh-credential");
     }
 }

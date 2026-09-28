@@ -183,20 +183,6 @@ pub fn smbios_cred_for_root_ssh(pubkey: &str) -> Result<String> {
     Ok(r)
 }
 
-/// Generate kernel command-line argument for root SSH access.
-///
-/// Creates a systemd credential for kernel command-line delivery. Less secure
-/// than SMBIOS method as credentials are visible in /proc/cmdline and boot logs.
-///
-/// Returns a string for use in kernel boot parameters.
-#[allow(dead_code)]
-pub fn karg_for_root_ssh(pubkey: &str) -> Result<String> {
-    let k = key_to_root_tmpfiles_d(pubkey);
-    let encoded = data_encoding::BASE64.encode(k.as_bytes());
-    let r = format!("systemd.set_credential_binary=tmpfiles.extra:{encoded}");
-    Ok(r)
-}
-
 /// Convert SSH public key to systemd tmpfiles.d configuration.
 ///
 /// Generates configuration to create `/root/.ssh` directory (0750) and
