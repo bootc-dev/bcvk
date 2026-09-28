@@ -22,6 +22,7 @@ For running bcvk:
 - virtiofsd
 - Podman
 - openssh-clients (for libvirt SSH operations)
+- kernel-tools (for removing bootconfig before appending to the initramfs)
 
 Optional:
 - libvirt (for persistent VM features)

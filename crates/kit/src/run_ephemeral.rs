@@ -131,6 +131,9 @@ const IGNITION_SERIAL_NAME: &str = "ignition";
 /// Mount path for Ignition config inside the container
 const IGNITION_CONFIG_MOUNT_PATH: &str = "/run/ignition-config.json";
 
+/// Kernel initramfs magic marker for bootconfig trailer.
+const BOOTCONFIG_MAGIC: &[u8; 12] = b"#BOOTCONFIG\n";
+
 // ---------------------------------------------------------------------------
 // Journal / output mode types
 // ---------------------------------------------------------------------------
@@ -1231,6 +1234,38 @@ fn check_required_container_binaries() -> Result<()> {
     Ok(())
 }
 
+fn require_binary(binary: &str) -> Result<()> {
+    which::which(binary).map_err(|_| eyre!("Missing required executable: {binary}"))?;
+    Ok(())
+}
+
+fn has_bootconfig_trailer(path: &str) -> Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path)?;
+    if file.metadata()?.len() < BOOTCONFIG_MAGIC.len() as u64 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-(BOOTCONFIG_MAGIC.len() as i64)))?;
+    let mut magic = [0u8; BOOTCONFIG_MAGIC.len()];
+    file.read_exact(&mut magic)?;
+    Ok(&magic == BOOTCONFIG_MAGIC)
+}
+
+/// Remove a bootconfig trailer before modifying an initramfs. Without this,
+/// appending CPIO would leave the trailer in the middle of the initramfs.
+fn remove_bootconfig(initramfs: &str) -> Result<()> {
+    if !has_bootconfig_trailer(initramfs)? {
+        return Ok(());
+    }
+    require_binary("bootconfig")?;
+    Command::new("bootconfig")
+        .args(["-d", initramfs])
+        .run_capture_stderr()
+        .map_err(|e| eyre!("Removing bootconfig before appending initramfs units: {e}"))?;
+    Ok(())
+}
+
 /// Check if the container image has Ignition support
 ///
 /// Checks for labels indicating Ignition support:
@@ -1408,6 +1443,8 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         fs::copy(source_initramfs_path, initramfs_mount)
             .map_err(|e| eyre!("Failed to copy initramfs: {e}"))?;
     }
+
+    remove_bootconfig(initramfs_mount)?;
 
     // Append bcvk units to initramfs
     // This includes:
@@ -2153,6 +2190,26 @@ Options=
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_has_bootconfig_trailer() -> Result<()> {
+        use std::io::Write;
+
+        for (contents, expected) in [
+            (b"".as_slice(), false),
+            (b"short".as_slice(), false),
+            (b"initrd#BOOTCONFIG\n".as_slice(), true),
+            (b"initrd#BOOTCONFIG\ncpio".as_slice(), false),
+        ] {
+            let mut file = tempfile::NamedTempFile::new()?;
+            file.write_all(contents)?;
+            assert_eq!(
+                has_bootconfig_trailer(file.path().to_str().unwrap())?,
+                expected
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_journal_json_to_text() {
