@@ -505,6 +505,63 @@ fn allocate_vsock_cid(vhost_fd: File) -> Result<(OwnedFd, u32)> {
     Err(eyre!("Could not find available VSOCK CID (tried 3-10000)"))
 }
 
+/// Resolve the QEMU executable used to launch the VM.
+fn qemu_binary() -> Result<String> {
+    std::env::var("QEMU_BIN")
+        .ok()
+        .map(Ok)
+        .unwrap_or_else(|| -> Result<_> {
+            // RHEL only supports non-emulated, and qemu is an implementation detail
+            // of higher level virt.
+            let libexec_qemu = Utf8Path::new("/usr/libexec/qemu-kvm");
+            if libexec_qemu.try_exists()? {
+                Ok(libexec_qemu.to_string())
+            } else {
+                let arch = std::env::consts::ARCH;
+                Ok(format!("qemu-system-{arch}"))
+            }
+        })
+        .context("Checking for qemu")
+}
+
+/// Parse the major, minor, and patch version from QEMU's `--version` output.
+fn parse_qemu_version(output: &str) -> Option<(u32, u32, u32)> {
+    let version = output
+        .lines()
+        .next()?
+        .strip_prefix("QEMU emulator version ")?
+        .split_whitespace()
+        .next()?;
+    let numeric = version.split_once('-').map_or(version, |(base, _)| base);
+    let mut parts = numeric.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+/// Query the version of the same QEMU executable used to launch VMs.
+pub fn qemu_version() -> Result<Option<(u32, u32, u32)>> {
+    let binary = qemu_binary()?;
+    let output = Command::new(&binary)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("Checking version of {binary}"))?;
+    if !output.status.success() {
+        warn!("Could not get {binary} version");
+        return Ok(None);
+    }
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    let version = parse_qemu_version(&version_output);
+    if version.is_none() {
+        warn!("Could not parse {binary} version");
+    }
+    Ok(version)
+}
+
 /// Spawn QEMU VM process with given configuration and optional extra credential.
 /// Uses KVM acceleration, memory-backend-memfd for VirtIO-FS compatibility.
 fn spawn(
@@ -520,23 +577,7 @@ fn spawn(
         config.memory_mb
     );
 
-    let qemu = std::env::var("QEMU_BIN")
-        .ok()
-        .map(Ok)
-        .unwrap_or_else(|| -> Result<_> {
-            // RHEL only supports non-emulated, and qemu is an implementation detail
-            // of higher level virt.
-            let libexec_qemu = Utf8Path::new("/usr/libexec/qemu-kvm");
-            if libexec_qemu.try_exists()? {
-                Ok(libexec_qemu.to_string())
-            } else {
-                let arch = std::env::consts::ARCH;
-                Ok(format!("qemu-system-{arch}"))
-            }
-        })
-        .context("Checking for qemu")?;
-
-    let mut cmd = Command::new(qemu);
+    let mut cmd = Command::new(qemu_binary()?);
     // SAFETY: This API is safe to call in a forked child.
     #[allow(unsafe_code)]
     unsafe {
@@ -991,6 +1032,23 @@ impl RunningQemu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_qemu_version() {
+        for (output, expected) in [
+            (
+                "QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)",
+                Some((10, 2, 2)),
+            ),
+            ("QEMU emulator version 11.0.0", Some((11, 0, 0))),
+            ("QEMU emulator version 11.1.0", Some((11, 1, 0))),
+            ("QEMU emulator version 12.0.0", Some((12, 0, 0))),
+            ("QEMU emulator version unknown", None),
+            ("not a QEMU version", None),
+        ] {
+            assert_eq!(parse_qemu_version(output), expected);
+        }
+    }
 
     #[test]
     fn test_virtio_serial_device_creation() {
