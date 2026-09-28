@@ -134,6 +134,9 @@ const IGNITION_CONFIG_MOUNT_PATH: &str = "/run/ignition-config.json";
 /// Kernel initramfs magic marker for bootconfig trailer.
 const BOOTCONFIG_MAGIC: &[u8; 12] = b"#BOOTCONFIG\n";
 
+/// Linux's LINUX_PE_MAGIC at offset 0x38 in an EFI bootable kernel image.
+const LINUX_PE_MAGIC: [u8; 4] = 0x8182_23cd_u32.to_le_bytes();
+
 // ---------------------------------------------------------------------------
 // Journal / output mode types
 // ---------------------------------------------------------------------------
@@ -1239,6 +1242,27 @@ fn require_binary(binary: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check if the file is a EFI kernel with zstd compression.
+fn is_zstd_efi_zboot(path: &str) -> Result<bool> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0u8; 60];
+    if file.metadata()?.len() < header.len() as u64 {
+        return Ok(false);
+    }
+    file.read_exact(&mut header)?;
+    Ok(&header[0..2] == b"MZ"
+        && &header[4..8] == b"zimg"
+        && &header[24..29] == b"zstd\0"
+        && header[56..60] == LINUX_PE_MAGIC)
+}
+
+fn qemu_supports_zstd_zboot() -> Result<bool> {
+    // QEMU 11.0 added zstd decompression to its EFI zboot loader.
+    Ok(qemu::qemu_version()?.is_some_and(|version| version >= (11, 0, 0)))
+}
+
 fn has_bootconfig_trailer(path: &str) -> Result<bool> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -1442,6 +1466,23 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
         // Copy initramfs so we can append to it
         fs::copy(source_initramfs_path, initramfs_mount)
             .map_err(|e| eyre!("Failed to copy initramfs: {e}"))?;
+    }
+
+    // ARM64 kernels have no built-in decompressors, which means Qemu has to decompress
+    // the kernel itself. Qemu added zstd support in version 11.0, so if this ie not
+    // available, manually uncompress the kernel with the unzboot tool.
+    if std::env::consts::ARCH == "aarch64"
+        && is_zstd_efi_zboot(kernel_mount)?
+        && !qemu_supports_zstd_zboot()?
+    {
+        require_binary("unzboot")?;
+        let unwrapped = "/run/qemu/kernel-unwrapped";
+        Command::new("unzboot")
+            .args([kernel_mount, unwrapped])
+            .stdout(Stdio::null())
+            .run_capture_stderr()
+            .map_err(|e| eyre!("Unwrapping ARM64 zstd EFI zboot kernel: {e}"))?;
+        fs::rename(unwrapped, kernel_mount)?;
     }
 
     remove_bootconfig(initramfs_mount)?;
@@ -2190,6 +2231,51 @@ Options=
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_zstd_efi_zboot() -> Result<()> {
+        use std::io::Write;
+
+        let mut header = [0u8; 60];
+        header[0..2].copy_from_slice(b"MZ");
+        header[4..8].copy_from_slice(b"zimg");
+        header[24..29].copy_from_slice(b"zstd\0");
+        header[56..60].copy_from_slice(&[0xcd, 0x23, 0x82, 0x81]);
+
+        for (contents, expected) in [
+            (header[..8].to_vec(), false),
+            (header.to_vec(), true),
+            (
+                {
+                    let mut data = header;
+                    data[4..8].copy_from_slice(b"nope");
+                    data.to_vec()
+                },
+                false,
+            ),
+            (
+                {
+                    let mut data = header;
+                    data[24..29].copy_from_slice(b"gzip\0");
+                    data.to_vec()
+                },
+                false,
+            ),
+            (
+                {
+                    let mut data = header;
+                    data[56..60].copy_from_slice(b"nope");
+                    data.to_vec()
+                },
+                false,
+            ),
+        ] {
+            let mut file = tempfile::NamedTempFile::new()?;
+            file.write_all(&contents)?;
+            assert_eq!(is_zstd_efi_zboot(file.path().to_str().unwrap())?, expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_has_bootconfig_trailer() -> Result<()> {
