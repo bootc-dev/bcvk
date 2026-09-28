@@ -1,0 +1,11 @@
+# Test fixture: Bootc image with a unit that always fails
+# The VM boots fine, but systemd ends up "degraded" instead of "running".
+# Used to test that bcvk ephemeral test-basic reports the failure.
+
+ARG BASE_IMAGE=quay.io/centos-bootc/centos-bootc:stream10
+
+FROM ${BASE_IMAGE}
+
+RUN printf '[Unit]\nDescription=bcvk test unit that always fails\n\n[Service]\nType=oneshot\nExecStart=/bin/false\n\n[Install]\nWantedBy=multi-user.target\n' \
+      > /usr/lib/systemd/system/bcvk-test-failing.service && \
+    systemctl enable bcvk-test-failing.service

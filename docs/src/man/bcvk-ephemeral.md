@@ -46,6 +46,10 @@ bcvk-ephemeral-run-ssh(8)
 
 :   Run an ephemeral VM and immediately SSH into it (auto-cleanup on exit)
 
+bcvk-ephemeral-test-basic(8)
+
+:   Boot an ephemeral VM and check that systemd reaches the running state
+
 bcvk-ephemeral-ssh(8)
 
 :   SSH into a running ephemeral VM
