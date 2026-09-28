@@ -125,6 +125,8 @@ use crate::{
 /// fw_cfg name for Ignition configuration (per FCOS documentation)
 const IGNITION_FW_CFG_NAME: &str = "opt/com.coreos/config";
 
+const SSH_CREDENTIAL_PATH: &str = "/run/qemu/ssh-credential";
+
 /// virtio-blk serial name for Ignition configuration (per FCOS documentation)
 const IGNITION_SERIAL_NAME: &str = "ignition";
 
@@ -1744,10 +1746,14 @@ StandardOutput=file:/dev/virtio-ports/executestatus
     // Handle SSH key generation and credential injection
     if opts.common.ssh_keygen {
         let key_pair = crate::ssh::generate_default_keypair()?;
-        // Create credential and add to kernel args
         let pubkey = std::fs::read_to_string(key_pair.public_key_path.as_path())?;
-        let credential = crate::credentials::smbios_cred_for_root_ssh(&pubkey)?;
-        qemu_config.add_smbios_credential(credential);
+        let credential_path = Utf8Path::new(SSH_CREDENTIAL_PATH);
+        fs::write(
+            credential_path,
+            crate::credentials::key_to_root_tmpfiles_d(&pubkey),
+        )
+        .context("Writing SSH credential for QEMU fw_cfg")?;
+        qemu_config.add_systemd_credential_file("tmpfiles.extra", credential_path.to_owned());
     }
 
     // Build kernel command line for direct boot.
@@ -2094,10 +2100,6 @@ Options=
     if opts.common.ssh_keygen {
         qemu_config.enable_ssh_access(None); // Use default port 2222
         debug!("Enabled SSH port forwarding: host port 2222 -> guest port 22");
-
-        // We need to extract the public key from the SSH credential to inject it via SMBIOS
-        // For now, the credential is already being passed via kernel cmdline
-        // TODO: Add proper SMBIOS credential injection if needed
     }
 
     // Set main virtiofs configuration for root filesystem (will be spawned by QEMU)
