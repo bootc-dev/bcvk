@@ -1860,7 +1860,8 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         let path: &Utf8Path = tmpf.path().try_into().unwrap();
 
         Command::new("mkswap")
-            .args(["-q", path.as_str()])
+            .arg(path.as_str())
+            .stdout(Stdio::null()) // -q is available in util-linux >= 2.38, EL9 has 2.37
             .run_capture_stderr()
             .map_err(|e| eyre!("{e}"))?;
 
