@@ -1890,7 +1890,7 @@ Options=
         let swap_dropin = format!("[Unit]\nWants={service_name}\n");
         let encoded_dropin = data_encoding::BASE64.encode(swap_dropin.as_bytes());
         let dropin_cred = format!(
-            "io.systemd.credential.binary:systemd.unit-dropin.default.target~bcvk-swap={encoded_dropin}"
+            "io.systemd.credential.binary:systemd.unit-dropin.basic.target~bcvk-swap={encoded_dropin}"
         );
         mount_unit_smbios_creds.push(dropin_cred);
         debug!("Generated SMBIOS credential for swap unit");
