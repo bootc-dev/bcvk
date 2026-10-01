@@ -27,13 +27,8 @@ const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
 const UPDATE_FROM_HOST_TRANSPORT: &str = "containers-storage";
 
 /// Create a virsh command with optional connection URI
-pub(super) fn virsh_command(connect_uri: Option<&str>) -> Result<std::process::Command> {
-    let mut cmd = std::process::Command::new("virsh");
-    cmd.env("LC_ALL", "C");
-    if let Some(uri) = connect_uri {
-        cmd.arg("-c").arg(uri);
-    }
-    Ok(cmd)
+pub(super) fn virsh_command(connect_uri: Option<&str>) -> Result<super::virsh::VirshCommand> {
+    Ok(super::virsh::VirshCommand::new(connect_uri))
 }
 
 /// Run a virsh command and handle errors consistently

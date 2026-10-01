@@ -3,11 +3,11 @@
 //! This module provides functionality to list libvirt domains created by bcvk libvirt,
 //! using libvirt as the source of truth instead of the VmRegistry cache.
 
+use crate::libvirt::virsh::VirshCommand;
 use crate::xml_utils;
 use base64::Engine;
 use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::time::SystemTime;
 
 /// Information about a podman-bootc domain from libvirt
@@ -87,13 +87,8 @@ impl DomainLister {
     }
 
     /// Build a virsh command with optional connection URI
-    fn virsh_command(&self) -> Command {
-        let mut cmd = Command::new("virsh");
-        cmd.env("LC_ALL", "C");
-        if let Some(ref uri) = self.connect_uri {
-            cmd.arg("-c").arg(uri);
-        }
-        cmd
+    fn virsh_command(&self) -> VirshCommand {
+        VirshCommand::new(self.connect_uri.as_deref())
     }
 
     /// List all domains (running and inactive)

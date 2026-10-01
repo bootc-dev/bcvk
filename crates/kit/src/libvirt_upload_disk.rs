@@ -5,6 +5,7 @@
 
 use crate::common_opts::MemoryOpts;
 use crate::install_options::InstallOptions;
+use crate::libvirt::virsh::VirshCommand;
 use crate::to_disk::{run as to_disk, ToDiskAdditionalOpts, ToDiskOpts};
 use crate::xml_utils::{self, XmlWriter};
 use crate::{images, utils};
@@ -12,7 +13,6 @@ use camino::Utf8Path;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::path::Path;
-use std::process::Command;
 use tracing::debug;
 
 /// Configuration options for uploading a bootc disk image to libvirt
@@ -77,7 +77,7 @@ impl LibvirtUploadDiskOpts {
 
     /// Check if libvirt storage pool exists
     fn check_pool_exists(&self) -> Result<()> {
-        let output = Command::new("virsh")
+        let output = VirshCommand::new(None)
             .args(&["pool-info", &self.pool])
             .output()?;
 
@@ -102,12 +102,12 @@ impl LibvirtUploadDiskOpts {
         let volume_path = format!("{}.raw", volume_name);
 
         // Delete existing volume if it exists
-        let _ = Command::new("virsh")
+        let _ = VirshCommand::new(None)
             .args(&["vol-delete", &volume_path, "--pool", &self.pool])
             .output();
 
         // Use the provided disk size
-        let output = Command::new("virsh")
+        let output = VirshCommand::new(None)
             .args(&[
                 "vol-create-as",
                 &self.pool,
@@ -125,7 +125,7 @@ impl LibvirtUploadDiskOpts {
 
         // Upload the disk image to the volume
         debug!("Uploading disk image to volume '{}'", volume_path);
-        let output = Command::new("virsh")
+        let output = VirshCommand::new(None)
             .args(&[
                 "vol-upload",
                 &volume_path,
@@ -173,7 +173,7 @@ impl LibvirtUploadDiskOpts {
         std::fs::write(&temp_metadata, metadata_xml)?;
 
         // Set the metadata on the volume
-        let _output = Command::new("virsh")
+        let _output = VirshCommand::new(None)
             .args(&[
                 "vol-desc",
                 &volume_path,
@@ -188,7 +188,7 @@ impl LibvirtUploadDiskOpts {
         // This is more reliable than vol-desc which might not support metadata
 
         // Get current volume XML
-        let output = Command::new("virsh")
+        let output = VirshCommand::new(None)
             .args(&["vol-dumpxml", &volume_path, "--pool", &self.pool])
             .output()?;
 

@@ -3,10 +3,10 @@
 //! This module provides a status command that outputs JSON metadata about
 //! the libvirt environment, including version information and domain count.
 
+use crate::libvirt::virsh::VirshCommand;
 use clap::Parser;
 use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 
 use crate::domain_list::DomainLister;
 
@@ -98,7 +98,7 @@ fn parse_libvirt_version_from_output(version_output: &str) -> Option<LibvirtVers
 
 /// Parse libvirt version from virsh version output
 pub fn parse_libvirt_version() -> Result<Option<LibvirtVersion>> {
-    let output = Command::new("virsh")
+    let output = VirshCommand::new(None)
         .args(&["version"])
         .output()
         .with_context(|| "Failed to check libvirt version")?;
