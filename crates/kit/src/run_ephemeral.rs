@@ -15,7 +15,7 @@
 //! The execution follows this chain:
 //! 1. **Host Process**: `bcvk run-ephemeral` invoked on host
 //! 2. **Container Launch**: Podman privileged container with KVM and host mounts
-//! 3. **Namespace Setup**: bwrap creates isolated namespace with hybrid rootfs  
+//! 3. **Root Setup**: `mount` and `chroot` into the hybrid rootfs
 //! 4. **Binary Re-execution**: Same binary re-executes with `container-entrypoint`
 //! 5. **VM Launch**: QEMU starts with VirtioFS root and additional mounts
 //!
@@ -41,12 +41,12 @@
 //! └── [other dirs created empty for container compatibility]
 //! ```
 //!
-//! ### Phase 3: Namespace Isolation (bwrap)
-//! Uses bubblewrap to create isolated namespace:
-//! - New mount namespace with `/run/tmproot` as root
+//! ### Phase 3: Root Setup (mount + chroot)
+//! The container is already privileged with its own mount namespace, so no
+//! further namespaces are needed:
+//! - `/run`, `/proc`, `/dev` and `/var/tmp` mounted into `/run/tmproot`
 //! - Shared `/run/inner-shared` for virtiofsd socket communication
-//! - Proper `/proc`, `/dev`, `/tmp` mounts
-//! - Re-executes binary: `bwrap ... -- /run/selfexe container-entrypoint`
+//! - Re-executes binary: `exec chroot /run/tmproot /run/selfexe container-entrypoint`
 //!
 //! ### Phase 4: VM Execution (`run_impl`)
 //! - Runs inside the container after namespace setup
@@ -1219,8 +1219,8 @@ fn parse_service_exit_code(status_content: &str) -> Result<i32> {
 fn check_required_container_binaries() -> Result<()> {
     // systemctl: used for checking cloud-init and other systemd operations
     // objcopy: for UKI kernel extraction (when using UKI images)
-    // NOTE: bwrap is checked earlier in entrypoint.sh, not here, because by the
-    // time run_impl() executes we're already inside the bwrap namespace
+    // NOTE: mount and chroot are checked earlier in entrypoint.sh, not here, because by the
+    // time run_impl() executes we're already inside the hybrid root
     let required_binaries = ["systemctl", "objcopy"];
 
     let mut missing = Vec::new();
@@ -1934,7 +1934,7 @@ Options=
                 // Check if disk file exists and is accessible
                 if !Utf8Path::new(&disk_file).exists() {
                     return Err(eyre!(
-                        "Disk file does not exist in bwrap namespace: {} (serial: {})",
+                        "Disk file does not exist in the hybrid root: {} (serial: {})",
                         disk_file,
                         serial
                     ));
