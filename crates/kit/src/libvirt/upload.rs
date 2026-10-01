@@ -5,13 +5,13 @@
 
 use crate::common_opts::MemoryOpts;
 use crate::install_options::InstallOptions;
+use crate::libvirt::virsh::VirshCommand;
 use crate::to_disk::{run as to_disk, ToDiskAdditionalOpts, ToDiskOpts};
 use crate::{images, utils};
 use camino::Utf8PathBuf;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use std::path::Path;
-use std::process::Command;
 use tracing::debug;
 
 /// Configuration options for uploading a bootc disk image to libvirt
@@ -46,7 +46,7 @@ pub struct LibvirtUploadOpts {
 
 impl LibvirtUploadOpts {
     /// Build a virsh command with optional connection URI  
-    fn virsh_command(&self, global_opts: &crate::libvirt::LibvirtOptions) -> Command {
+    fn virsh_command(&self, global_opts: &crate::libvirt::LibvirtOptions) -> VirshCommand {
         global_opts.virsh_command()
     }
 

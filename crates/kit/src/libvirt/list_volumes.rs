@@ -3,11 +3,11 @@
 //! This module provides functionality to discover and list bootc volumes
 //! with their container image metadata and creation information.
 
+use crate::libvirt::virsh::VirshCommand;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use comfy_table::{presets::UTF8_FULL, Table};
 use serde_json::{json, Value};
-use std::process::Command;
 use tracing::{debug, warn};
 
 /// Configuration options for listing bootc volumes
@@ -71,7 +71,7 @@ impl BootcVolume {
 
 impl LibvirtListVolumesOpts {
     /// Build a virsh command with optional connection URI
-    fn virsh_command(&self, global_opts: &crate::libvirt::LibvirtOptions) -> Command {
+    fn virsh_command(&self, global_opts: &crate::libvirt::LibvirtOptions) -> VirshCommand {
         global_opts.virsh_command()
     }
 

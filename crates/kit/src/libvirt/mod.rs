@@ -40,6 +40,7 @@ pub mod start;
 pub mod status;
 pub mod stop;
 pub mod upload;
+pub mod virsh;
 
 /// Global options for libvirt operations
 #[derive(Debug, Clone, Default)]
@@ -50,13 +51,8 @@ pub struct LibvirtOptions {
 
 impl LibvirtOptions {
     /// Create a virsh Command with the appropriate connection URI
-    pub fn virsh_command(&self) -> std::process::Command {
-        let mut cmd = std::process::Command::new("virsh");
-        cmd.env("LC_ALL", "C");
-        if let Some(ref uri) = self.connect {
-            cmd.arg("-c").arg(uri);
-        }
-        cmd
+    pub fn virsh_command(&self) -> virsh::VirshCommand {
+        virsh::VirshCommand::new(self.connect.as_deref())
     }
 }
 
