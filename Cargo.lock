@@ -200,6 +200,7 @@ dependencies = [
  "clap_mangen",
  "color-eyre",
  "comfy-table",
+ "composefs-boot",
  "const_format",
  "cpio",
  "data-encoding",
@@ -554,6 +555,16 @@ dependencies = [
  "crossterm",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "composefs-boot"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c61074a193dda9270830d3598d26b618b0181726c8cf61ab59d3f66924875d5e"
+dependencies = [
+ "thiserror",
+ "zerocopy",
 ]
 
 [[package]]

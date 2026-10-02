@@ -1428,40 +1428,37 @@ pub(crate) async fn run_impl(opts: RunEphemeralOpts) -> Result<()> {
 
     match kernel_info.kind {
         crate::kernel::KernelKind::Uki => {
-            require_binary("objcopy")?;
             debug!(
                 "Extracting kernel and initramfs from UKI: {:?}",
                 kernel_info.kernel_path
             );
-            for (section, output) in [(".linux", kernel_mount), (".initrd", initramfs_mount)] {
-                Command::new("objcopy")
-                    .args([
-                        "--dump-section",
-                        &format!("{section}={output}"),
-                        kernel_info.kernel_path.as_str(),
-                    ])
-                    .run_capture_stderr()
-                    .map_err(|e| eyre!("Failed to extract {section} from UKI: {e}"))?;
+            let mut uki = File::open(&kernel_info.kernel_path).context("opening UKI")?;
+            for (section, target) in [(".linux", kernel_mount), (".initrd", initramfs_mount)] {
+                // The buffered parser starts at the current position in the image.
+                uki.rewind().context("rewinding UKI")?;
+                let contents = composefs_boot::uki::get_section_buffered(&mut uki, section)
+                    .context(format!("extracting {section} from UKI"))?;
+                fs::write(target, contents).context(format!("writing {section} from UKI"))?;
+                debug!("Extracted {section} from UKI to {target}");
             }
         }
         crate::kernel::KernelKind::AndroidBoot => {
-            require_binary("unpack_bootimg")?;
-            let unpacked = "/run/qemu/aboot-unpacked";
-            fs::create_dir_all(unpacked)?;
-            Command::new("unpack_bootimg")
-                .args([
-                    "--boot_img",
-                    kernel_info.kernel_path.as_str(),
-                    "--out",
-                    unpacked,
-                ])
-                .stdout(Stdio::null())
-                .run_capture_stderr()
-                .map_err(|e| eyre!("Failed to unpack Android boot image: {e}"))?;
-            fs::rename(format!("{unpacked}/kernel"), kernel_mount)
-                .context("Getting kernel from Android boot image")?;
-            fs::rename(format!("{unpacked}/ramdisk"), initramfs_mount)
-                .context("Getting ramdisk from Android boot image")?;
+            use composefs_boot::android_boot::{AndroidBootImage, Component};
+
+            let mut image =
+                File::open(&kernel_info.kernel_path).context("opening Android boot image")?;
+            let header =
+                AndroidBootImage::parse(&mut image).context("parsing Android boot image")?;
+            for (component, name, target) in [
+                (Component::Kernel, "kernel", kernel_mount),
+                (Component::Ramdisk, "ramdisk", initramfs_mount),
+            ] {
+                let contents = header
+                    .component(&mut image, component)
+                    .with_context(|| format!("extracting {name} from Android boot image"))?;
+                fs::write(target, contents)
+                    .with_context(|| format!("writing {name} from Android boot image"))?;
+            }
         }
         crate::kernel::KernelKind::Traditional => {
             let source_initramfs_path = kernel_info
