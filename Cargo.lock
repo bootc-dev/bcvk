@@ -200,6 +200,7 @@ dependencies = [
  "clap_mangen",
  "color-eyre",
  "comfy-table",
+ "composefs-boot",
  "const_format",
  "cpio",
  "data-encoding",
@@ -552,6 +553,15 @@ dependencies = [
  "crossterm",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "composefs-boot"
+version = "0.9.3"
+source = "git+https://github.com/composefs/composefs-rs?branch=standalone-boot#3566c7a9c563b5a6b06108b1e06a001ded690520"
+dependencies = [
+ "thiserror",
+ "zerocopy",
 ]
 
 [[package]]
