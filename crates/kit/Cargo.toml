@@ -50,6 +50,7 @@ bcvk-qemu = { path = "../bcvk-qemu" }
 cap-std-ext = { workspace = true }
 bootc-mount = { package = "bootc-internal-mount", version = "1.16.14" }
 bootc-utils = { package = "bootc-internal-utils", version = "1.16.14" }
+composefs-boot = { version = "0.9.4", default-features = false }
 rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 vsock = "0.5"
 nix = { version = "0.31", features = ["socket"] }
