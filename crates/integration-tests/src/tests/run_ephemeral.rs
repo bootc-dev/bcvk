@@ -264,7 +264,7 @@ integration_test!(test_run_ephemeral_instancetype_invalid);
 /// Test that ephemeral VMs can boot from UKI-only images (no separate vmlinuz/initramfs)
 ///
 /// This tests compatibility with bootc images that only ship a Unified Kernel Image,
-/// verifying that bcvk can extract kernel/initramfs from the UKI using objcopy.
+/// verifying that bcvk can extract kernel/initramfs from the UKI.
 fn test_run_ephemeral_uki_only() -> TestResult {
     let sh = shell()?;
     let base_image = get_test_image();
