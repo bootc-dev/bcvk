@@ -10,6 +10,10 @@ bcvk-libvirt-ssh - SSH to libvirt domain with embedded SSH key
 
 SSH to libvirt domain with embedded SSH key
 
+If the domain is shut off, it is started first, and the connection is
+made once SSH is reachable. Domains in other states (e.g. paused) are
+not changed and result in an error.
+
 # OPTIONS
 
 <!-- BEGIN GENERATED OPTIONS -->
@@ -55,6 +59,11 @@ SSH to libvirt domain with embedded SSH key
 
 SSH into a running libvirt VM:
 
+    bcvk libvirt ssh my-server
+
+SSH into a stopped VM, starting it first:
+
+    bcvk libvirt stop my-server
     bcvk libvirt ssh my-server
 
 Execute a command on the VM:
