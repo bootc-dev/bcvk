@@ -837,6 +837,40 @@ fn spawn(
     cmd.spawn().context("Failed to spawn QEMU")
 }
 
+/// Wait until the process `name` creates `socket_path`. Fails if
+/// `process` exits first or `timeout` passes.
+async fn wait_for_socket(
+    name: &str,
+    socket_path: &Utf8Path,
+    process: &mut Pin<Box<dyn Future<Output = std::io::Result<Output>>>>,
+    timeout: Duration,
+) -> Result<()> {
+    let query_exists = async {
+        while !socket_path.exists() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    debug!("Waiting for socket at {socket_path}");
+    tokio::select! {
+        output = process => {
+            tracing::trace!("{name} exited");
+            let output = output?;
+            let status = output.status;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(eyre!(
+                "{name} failed to start for socket {socket_path}\nExit status: {status:?}\nOutput: {stderr}"
+            ))
+        }
+        _ = tokio::time::sleep(timeout) => {
+            Err(eyre!("timed out waiting for {name} socket {socket_path} to be created (waited {timeout:?})"))
+        }
+        _ = query_exists => {
+            debug!("{name} socket created: {socket_path}");
+            Ok(())
+        }
+    }
+}
+
 struct VsockCopier {
     port: VsockAddr,
     #[allow(dead_code)]
@@ -891,40 +925,16 @@ impl RunningQemu {
         // Wait for all virtiofsd to be ready
         let mut virtiofsd_processes = Vec::new();
         while let Some((proc, socket_path)) = awaiting_virtiofsd.pop() {
-            let socket_path = &socket_path;
-            let query_exists = async move {
-                loop {
-                    if socket_path.exists() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            };
-            tokio::pin!(query_exists);
-            let timeout_val = Duration::from_secs(60);
-            let timeout = tokio::time::sleep(timeout_val);
-            tokio::pin!(timeout);
-            debug!("Waiting for socket at {socket_path}");
             let mut output: Pin<Box<dyn Future<Output = std::io::Result<Output>>>> =
                 Box::pin(proc.wait_with_output());
-            tokio::select! {
-                output = &mut output => {
-                    tracing::trace!("virtiofsd exited");
-                    let output = output?;
-                    let status = output.status;
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(eyre!(
-                        "virtiofsd failed to start for socket {socket_path}\nExit status: {status:?}\nOutput: {stderr}"
-                    ));
-                }
-                _ = timeout => {
-                    return Err(eyre!("timed out waiting for virtiofsd socket {} to be created (waited {timeout_val:?})", socket_path));
-                }
-                _ = query_exists => {
-                }
-            }
+            wait_for_socket(
+                "virtiofsd",
+                &socket_path,
+                &mut output,
+                Duration::from_secs(60),
+            )
+            .await?;
             virtiofsd_processes.push(output);
-            tracing::debug!("virtiofsd socket created: {socket_path}");
         }
 
         let vsockdata = if let Some(vhost_fd) = config.vhost_fd.take() {
