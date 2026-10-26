@@ -22,8 +22,6 @@ For running bcvk:
 - virtiofsd
 - Podman
 - openssh-clients (for libvirt SSH operations)
-- binutils (for extracting UKIs, including ukiboot payloads)
-- android-tools (for extracting Android boot images)
 - kernel-tools (for initramfs bootconfig and ARM64 zstd EFI zboot kernels)
 
 Optional:

@@ -6,7 +6,7 @@ Tracking issue: https://github.com/bootc-dev/bcvk/issues/161
 
 Ephemeral VMs currently use direct kernel boot via QEMU's `-kernel` and
 `-initrd` options. For UKI-only images, we extract the kernel and initramfs
-from the UKI using `objcopy --dump-section`.
+from the UKI using the `composefs-boot` UKI parser.
 
 ### Where UKIs Live in bootc Images
 

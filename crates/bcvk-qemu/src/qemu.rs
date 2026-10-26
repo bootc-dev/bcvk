@@ -160,7 +160,7 @@ pub enum BootMode {
     /// Direct kernel boot (fast, testing-focused).
     /// Also used for UKI boot after extracting kernel/initramfs from UKI PE sections.
     ///
-    /// Note: For UKI images, we extract kernel/initramfs using objcopy rather than
+    /// Note: For UKI images, we extract kernel/initramfs from PE sections rather than
     /// booting the UKI directly via OVMF. This allows us to append bcvk units to
     /// the initramfs for /etc overlay and /var setup. The tradeoff is that this
     /// breaks the UKI signature chain, so Secure Boot is not supported for
