@@ -186,6 +186,15 @@ pub enum BootMode {
     },
 }
 
+/// A TPM 2.0 emulated by swtpm.
+#[derive(Debug, Clone)]
+pub struct TpmConfig {
+    /// Directory holding the TPM's persistent state.
+    pub state_dir: Utf8PathBuf,
+    /// Socket QEMU connects to.
+    pub socket_path: Utf8PathBuf,
+}
+
 /// Complete QEMU VM configuration with builder pattern.
 #[derive(Default, Debug)]
 pub struct QemuConfig {
@@ -231,6 +240,9 @@ pub struct QemuConfig {
 
     /// fw_cfg entries for passing config files to the guest
     fw_cfg_entries: Vec<(String, Utf8PathBuf)>,
+
+    /// TPM 2.0 to attach.
+    tpm: Option<TpmConfig>,
 }
 
 impl QemuConfig {
@@ -304,6 +316,10 @@ impl QemuConfig {
         }
         if self.memory_mb > 1024 * 1024 {
             return Err(eyre!("Memory too high: {}MB (maximum 1TB)", self.memory_mb));
+        }
+
+        if self.tpm.is_some() {
+            tpm_device()?;
         }
 
         // CPU validation
@@ -390,6 +406,12 @@ impl QemuConfig {
             format,
             readonly,
         });
+        self
+    }
+
+    /// Attach a TPM 2.0 emulated by swtpm.
+    pub fn set_tpm(&mut self, tpm: TpmConfig) -> &mut Self {
+        self.tpm = Some(tpm);
         self
     }
 
@@ -815,6 +837,17 @@ fn spawn(
         cmd.args(["-fw_cfg", &format!("name={},file={}", name, file_path)]);
     }
 
+    if let Some(tpm) = &config.tpm {
+        cmd.args([
+            "-chardev",
+            &format!("socket,id=chrtpm,path={}", tpm.socket_path),
+            "-tpmdev",
+            "emulator,id=tpm0,chardev=chrtpm",
+            "-device",
+            &format!("{},tpmdev=tpm0", tpm_device()?),
+        ]);
+    }
+
     // Configure stdio based on display mode
     match &config.display_mode {
         DisplayMode::Console => {
@@ -871,6 +904,45 @@ async fn wait_for_socket(
     }
 }
 
+/// The QEMU TPM device model for the host architecture.
+fn tpm_device() -> Result<&'static str> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok("tpm-tis"),
+        "aarch64" => Ok("tpm-tis-device"),
+        arch => Err(eyre!("TPM emulation is not supported on {arch}")),
+    }
+}
+
+/// Start swtpm for `tpm` and wait until it listens on its socket.
+async fn spawn_swtpm(
+    tpm: &TpmConfig,
+) -> Result<Pin<Box<dyn Future<Output = std::io::Result<Output>>>>> {
+    std::fs::create_dir_all(&tpm.state_dir)
+        .with_context(|| format!("Creating TPM state directory {}", tpm.state_dir))?;
+    let mut cmd = Command::new("swtpm");
+    cmd.args(["socket", "--tpm2", "--tpmstate"])
+        .arg(format!("dir={}", tpm.state_dir))
+        .arg("--ctrl")
+        .arg(format!("type=unixio,path={}", tpm.socket_path))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .lifecycle_bind_to_parent_thread();
+    let mut cmd = tokio::process::Command::from(cmd);
+    cmd.kill_on_drop(true);
+    debug!("{cmd:?}");
+    let child = cmd.spawn().context("Failed to spawn swtpm")?;
+    let mut process: Pin<Box<dyn Future<Output = std::io::Result<Output>>>> =
+        Box::pin(child.wait_with_output());
+    wait_for_socket(
+        "swtpm",
+        &tpm.socket_path,
+        &mut process,
+        Duration::from_secs(10),
+    )
+    .await?;
+    Ok(process)
+}
+
 struct VsockCopier {
     port: VsockAddr,
     #[allow(dead_code)]
@@ -894,6 +966,9 @@ pub struct RunningQemu {
     pub virtiofsd_processes: Vec<Pin<Box<dyn Future<Output = std::io::Result<Output>>>>>,
     #[allow(dead_code)]
     sd_notification: Option<VsockCopier>,
+    /// The swtpm process backing the VM's TPM.
+    #[allow(dead_code)]
+    swtpm_process: Option<Pin<Box<dyn Future<Output = std::io::Result<Output>>>>>,
 }
 
 impl std::fmt::Debug for RunningQemu {
@@ -911,6 +986,12 @@ impl std::fmt::Debug for RunningQemu {
 impl RunningQemu {
     /// Spawn QEMU with the given configuration.
     pub async fn spawn(mut config: QemuConfig) -> Result<Self> {
+        config.validate()?;
+        let swtpm_process = match &config.tpm {
+            Some(tpm) => Some(spawn_swtpm(tpm).await?),
+            None => None,
+        };
+
         // Spawn all virtiofsd processes first
         let mut awaiting_virtiofsd = Vec::new();
         let virtiofsd_configs = config
@@ -1044,6 +1125,7 @@ impl RunningQemu {
             qemu_process,
             virtiofsd_processes,
             sd_notification,
+            swtpm_process,
         })
     }
 

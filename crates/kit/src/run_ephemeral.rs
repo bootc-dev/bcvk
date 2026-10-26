@@ -133,6 +133,12 @@ const IGNITION_SERIAL_NAME: &str = "ignition";
 /// Mount path for Ignition config inside the container
 const IGNITION_CONFIG_MOUNT_PATH: &str = "/run/ignition-config.json";
 
+/// The TPM state directory inside the container.
+const SWTPM_STATE_DIR: &str = "/run/swtpm";
+
+/// The swtpm control socket QEMU connects to.
+const SWTPM_SOCKET: &str = "/run/inner-shared/swtpm.sock";
+
 /// Kernel initramfs magic marker for bootconfig trailer.
 const BOOTCONFIG_MAGIC: &[u8; 12] = b"#BOOTCONFIG\n";
 
@@ -545,6 +551,12 @@ pub struct RunEphemeralOpts {
         help = "Mount disk file as virtio-blk device at /dev/disk/by-id/virtio-<name>"
     )]
     pub mount_disk_files: Vec<String>,
+
+    #[clap(
+        long = "tpm",
+        help = "Enable TPM 2.0 support using swtpm, with state discarded on exit"
+    )]
+    pub tpm: bool,
 
     #[clap(long = "karg", help = "Additional kernel command line arguments")]
     pub kernel_args: Vec<String>,
@@ -2131,6 +2143,13 @@ Options=
     } else {
         None
     };
+
+    if opts.tpm {
+        qemu_config.set_tpm(qemu::TpmConfig {
+            state_dir: SWTPM_STATE_DIR.into(),
+            socket_path: SWTPM_SOCKET.into(),
+        });
+    }
 
     // Add virtio-blk devices
     for blk_device in virtio_blk_devices {

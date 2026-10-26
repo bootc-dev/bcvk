@@ -573,6 +573,7 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
             opts.target_disk,
             opts.additional.format.as_str()
         )], // Attach target disk
+        tpm: false,
         kernel_args: vec!["systemd.unit=bcvk-to-disk.target".to_string()],
         ignition_config: None,
         debug_entrypoint: None,

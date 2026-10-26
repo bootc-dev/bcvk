@@ -161,6 +161,10 @@ and print an error on stderr.
 
     Mount disk file as virtio-blk device at /dev/disk/by-id/virtio-<name>
 
+**--tpm**
+
+    Enable TPM 2.0 support using swtpm, with state discarded on exit
+
 **--karg**=*KERNEL_ARGS*
 
     Additional kernel command line arguments
