@@ -160,6 +160,10 @@ For longer-running VMs where you need to reconnect multiple times, use
 
     Mount disk file as virtio-blk device at /dev/disk/by-id/virtio-<name>
 
+**--tpm**
+
+    Enable TPM 2.0 support using swtpm, with state discarded on exit
+
 **--karg**=*KERNEL_ARGS*
 
     Additional kernel command line arguments

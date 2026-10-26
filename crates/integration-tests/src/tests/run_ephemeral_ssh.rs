@@ -286,6 +286,22 @@ echo "All checks passed!"
 }
 integration_test!(test_run_tmpfs);
 
+/// Test that --tpm attaches a TPM 2.0 to the VM
+fn test_run_ephemeral_tpm() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let image = get_test_image();
+    let label = INTEGRATION_TEST_LABEL;
+
+    cmd!(
+        sh,
+        "{bck} ephemeral run-ssh --label {label} --tpm {image} -- test -c /dev/tpmrm0"
+    )
+    .run()?;
+    Ok(())
+}
+integration_test!(test_run_ephemeral_tpm);
+
 /// Test that containers are properly cleaned up even when the image is broken
 ///
 /// This test verifies that the drop handler for ContainerCleanup works correctly

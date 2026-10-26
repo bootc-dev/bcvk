@@ -274,6 +274,7 @@ impl BcvkService {
                 bind_storage_ro: false,
                 add_swap: opts.add_swap,
                 mount_disk_files: opts.mount_disk_files.unwrap_or_default(),
+                tpm: false,
                 kernel_args: opts.kargs.unwrap_or_default(),
                 ignition_config: None,
                 host_dns_servers: None,
