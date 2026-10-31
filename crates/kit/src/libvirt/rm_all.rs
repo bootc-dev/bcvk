@@ -126,7 +126,7 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtRmAllOpts)
         println!("  Removing libvirt domain...");
         let output = global_opts
             .virsh_command()
-            .args(&["undefine", &domain.name, "--nvram"])
+            .args(&["undefine", &domain.name, "--nvram", "--managed-save"])
             .output()
             .with_context(|| format!("Failed to undefine domain '{}'", domain.name))?;
 
