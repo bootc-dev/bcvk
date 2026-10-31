@@ -48,6 +48,7 @@ filter = '''
   | test(/^test_libvirt_run/)
   | test(/^test_libvirt_(comprehensive|ssh_integration|port_forward_(xml|connectivity))/)
   | test(/^test_base_disk_creation/)
+  | test(/^test_libvirt_rm/)
   | test(=test_varlink_ephemeral_run_ps_and_ssh)
 '''
 threads-required = 2

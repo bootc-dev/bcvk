@@ -1299,3 +1299,75 @@ fn test_libvirt_secure_boot_vars_not_reused() -> TestResult {
     Ok(())
 }
 integration_test!(test_libvirt_secure_boot_vars_not_reused);
+
+/// Test that `rm` can remove a domain with a managed save image
+fn test_libvirt_rm_managed_save_domain() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let domain_name = create_test_vm_and_assert("test-rm-saved", &get_test_image())?;
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
+    // Simulate libvirt auto-saving a persistent session VM on host shutdown
+    cmd!(sh, "virsh managedsave {domain_name}").run()?;
+
+    let info = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
+    let line = info
+        .lines()
+        .find(|l| l.starts_with("Managed save:"))
+        .expect("dominfo should report Managed save");
+    assert!(
+        line.trim().ends_with("yes"),
+        "expected a managed save image, got: {line}"
+    );
+
+    cmd!(sh, "{bck} libvirt rm --force --stop {domain_name}").run()?;
+    let list = cmd!(sh, "virsh list --all --name").read()?;
+    assert!(!list.lines().any(|l| l.trim() == domain_name));
+    Ok(())
+}
+integration_test!(test_libvirt_rm_managed_save_domain);
+
+/// Test that `rm-all` can remove a domain with a managed save image
+fn test_libvirt_rm_all_managed_save_domain() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let test_image = get_test_image();
+    let domain_name = format!("test-rm-all-saved-{}", random_suffix());
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
+    // Label unique to this test, to avoid removing other tests' VMs
+    let rm_all_label = "test-rm-all-saved";
+
+    // Keep the integration label too as a safety net if this test fails to cleanup
+    cmd!(
+        sh,
+        "{bck} libvirt run --name {domain_name} --label {LIBVIRT_INTEGRATION_TEST_LABEL} --label {rm_all_label} --memory 512M --cpus 1 --filesystem ext4 {test_image}"
+    )
+    .run()?;
+
+    cmd!(sh, "virsh managedsave {domain_name}").run()?;
+
+    let info = cmd!(sh, "env LC_ALL=C virsh dominfo {domain_name}").read()?;
+    let line = info
+        .lines()
+        .find(|l| l.starts_with("Managed save:"))
+        .expect("dominfo should report Managed save");
+    assert!(
+        line.trim().ends_with("yes"),
+        "expected a managed save image, got: {line}"
+    );
+
+    cmd!(
+        sh,
+        "{bck} libvirt rm-all --force --stop --label {rm_all_label}"
+    )
+    .run()?;
+    let list = cmd!(sh, "virsh list --all --name").read()?;
+    assert!(!list.lines().any(|l| l.trim() == domain_name));
+    Ok(())
+}
+integration_test!(test_libvirt_rm_all_managed_save_domain);
