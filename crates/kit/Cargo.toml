@@ -55,7 +55,7 @@ rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "
 vsock = "0.5"
 nix = { version = "0.31", features = ["socket"] }
 libc = "0.2"
-zlink = "0.7"
+zlink = "0.8"
 futures-util = "0.3"
 libsystemd = "0.7"
 

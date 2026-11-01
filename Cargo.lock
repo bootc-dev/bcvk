@@ -289,9 +289,9 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-mount"
-version = "1.17.1"
+version = "1.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2caf1b60e2ef834f0fc4ec34d51c6758f88d8e9d5769dcebd538752442c49a7a"
+checksum = "af8c7b6df26c4e65328547d1ad3dee14e22b58d4a0b7582401bc72b4120c80c3"
 dependencies = [
  "anyhow",
  "bootc-internal-utils",
@@ -307,9 +307,9 @@ dependencies = [
 
 [[package]]
 name = "bootc-internal-utils"
-version = "1.17.1"
+version = "1.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "141f9ec0b86489a35e179dbb54431dc5d9fe815d970373596eb7bc6c9cfd6936"
+checksum = "516302b38bc1723a789ef6036ad16184567fce34539362ae2ae0baaf57228536"
 dependencies = [
  "anstream",
  "anyhow",
@@ -372,7 +372,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.61.1",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -413,7 +413,7 @@ dependencies = [
  "rustix",
  "rustix-linux-procfs",
  "uuid",
- "windows-sys 0.61.1",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -643,9 +643,9 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cpio"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "938e716cb1ade5d6c8f959c13a7248b889c07491fc7e41167c3afe20f8f0de1e"
+checksum = "dd609f59ec3371b104ae6b123ff63e89736dc50bae0bb6650295993487197f48"
 
 [[package]]
 name = "cpufeatures"
@@ -825,7 +825,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.1",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -882,7 +882,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.1",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2391,15 +2391,15 @@ checksum = "56f7d92ca342cea22a06f2121d944b4fd82af56988c270852495420f961d4ace"
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.9.4",
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.1",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2654,7 +2654,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.1",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2793,10 +2793,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.3",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.1",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3371,7 +3371,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.1",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3733,6 +3733,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "zcheapstr"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "939f186d9ecebe044315a5cb6d6f78568bbc21152adc954d5a0c2f58bdbc9920"
+
+[[package]]
 name = "zerocopy"
 version = "0.8.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3814,9 +3820,9 @@ dependencies = [
 
 [[package]]
 name = "zlink"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "706aa8f0ed19681e7e95291fdea930a10485257820999797c2eb3051b22e888b"
+checksum = "198be428106fe2987e3c014daadf976120909f4a765587341c9d4c2624912d61"
 dependencies = [
  "zlink-core",
  "zlink-smol",
@@ -3825,9 +3831,9 @@ dependencies = [
 
 [[package]]
 name = "zlink-core"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f77dd6d1dc0520a668f5640fef2d51dc39df22a939e7c827019d0a2edafe3cc"
+checksum = "24a314bfe2e205db0b9cc286abc09b08f34837a06dd709b10ef7cf28bd622e4f"
 dependencies = [
  "futures-util",
  "itoa",
@@ -3840,34 +3846,46 @@ dependencies = [
  "tracing",
  "zlink-idl",
  "zlink-macros",
+ "zlink-names",
 ]
 
 [[package]]
 name = "zlink-idl"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92b13734a025195596b4d855ddf1e66a5e74533564a7d1b0a8d072dd00e2c6ef"
+checksum = "9beafa91ab0672e1a2adc828cac4163152156d54046a0cad298807e290153ccf"
 dependencies = [
- "winnow 0.7.15",
+ "zlink-names",
 ]
 
 [[package]]
 name = "zlink-macros"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c09c588f0c465b5f17ac9ee187b34ca2b73b06c4a67c6170b856387dbede4cc7"
+checksum = "ad68b7baceb8afe7b0b21e408961f6a9d28fe5f10e02b19ef15b7ac3be39fc90"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
- "zlink-idl",
+ "zlink-names",
+]
+
+[[package]]
+name = "zlink-names"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2019f3c1186761aee19689ba2f99e659ec7f0d637ad1ee96f22a54434e743a"
+dependencies = [
+ "serde",
+ "winnow 0.7.15",
+ "zcheapstr",
 ]
 
 [[package]]
 name = "zlink-smol"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62c3ee8faa545275ae31816a08455209872da51ef8a3cb46dbe97c9a5f838f34"
+checksum = "43f8b15370cace714c53983a91688004407f897eb1cf9b877b3e9df9330a26aa"
 dependencies = [
  "async-broadcast",
  "async-channel",
@@ -3880,9 +3898,9 @@ dependencies = [
 
 [[package]]
 name = "zlink-tokio"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7fbaa1ec22ae711a158c85220007e8d8c5289591577729679215fce3e960747"
+checksum = "a46c4f9f765ecac29e50b21dc5c73185a2c2885a3d1ca1485ff1a97d96bc1538"
 dependencies = [
  "futures-util",
  "pin-project-lite",
