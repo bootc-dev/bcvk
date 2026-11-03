@@ -146,6 +146,51 @@ fn test_libvirt_ssh_integration() -> TestResult {
 }
 integration_test!(test_libvirt_ssh_integration);
 
+/// Test that `bcvk libvirt ssh` starts a shut off domain
+fn test_libvirt_ssh_autostart() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let test_image = get_test_image();
+    let label = LIBVIRT_INTEGRATION_TEST_LABEL;
+    let domain_name = format!("test-ssh-autostart-{}", random_suffix());
+
+    cleanup_domain(&domain_name);
+    defer! {
+        cleanup_domain(&domain_name);
+    }
+
+    cmd!(
+        sh,
+        "{bck} libvirt run --name {domain_name} --label {label} --filesystem ext4 {test_image}"
+    )
+    .run()?;
+
+    cmd!(sh, "{bck} libvirt stop --force {domain_name}").run()?;
+    let state = cmd!(sh, "env LC_ALL=C virsh domstate {domain_name}").read()?;
+    assert_eq!(state.trim(), "shut off");
+
+    let output = cmd!(sh, "{bck} libvirt ssh {domain_name} -- echo hello")
+        .ignore_status()
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "ssh to a shut off domain should start it and succeed: {stderr}"
+    );
+    // The start notice must not end up in the remote command's output
+    assert_eq!(stdout.trim(), "hello");
+    assert!(
+        stderr.contains("starting it"),
+        "should say that the domain is being started: {stderr}"
+    );
+
+    let state = cmd!(sh, "env LC_ALL=C virsh domstate {domain_name}").read()?;
+    assert_eq!(state.trim(), "running");
+    Ok(())
+}
+integration_test!(test_libvirt_ssh_autostart);
+
 /// Comprehensive workflow test: creates a VM and tests multiple features
 /// This consolidates several smaller tests to reduce expensive disk image creation
 fn test_libvirt_comprehensive_workflow() -> TestResult {
