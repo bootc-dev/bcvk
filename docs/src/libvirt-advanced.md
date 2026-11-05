@@ -21,6 +21,23 @@ Create custom libvirt networks for VM isolation:
 
 For direct host network access, use bridged networking or macvtap interfaces.
 
+### Network Isolation
+
+Use `--network-isolation` to block all outbound traffic from the VM while
+preserving SSH access from the host:
+
+```bash
+bcvk libvirt run --name hermetic-test \
+  --network-isolation \
+  --bind-storage-ro \
+  quay.io/centos-bootc/centos-bootc:stream10
+```
+
+This is particularly useful for CI/CD pipelines where test execution should
+not depend on external network resources.  Pre-stage any required container
+images or packages on the host and share them into the VM via `--bind`,
+`--bind-ro`, or `--bind-storage-ro`.
+
 ## Automation with Scripts
 
 Use shell scripts or configuration management tools to automate VM provisioning and management with bcvk libvirt commands.

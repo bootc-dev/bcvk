@@ -19,6 +19,7 @@ mod tests {
     pub mod libvirt_upload_disk;
     pub mod libvirt_verb;
     pub mod mount_feature;
+    pub mod network_isolation;
     pub mod run_ephemeral;
     pub mod run_ephemeral_ignition;
     pub mod run_ephemeral_ssh;
