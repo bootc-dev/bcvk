@@ -16,7 +16,7 @@ nix = { version = "0.31", features = ["socket"] }
 rustix = { version = "1", features = ["pipe", "process"] }
 tokio = { version = "1", features = ["fs", "process", "time", "macros"] }
 tracing = { workspace = true }
-vsock = "=0.5.4"
+vsock = "=0.5.5"
 
 [lints]
 workspace = true
