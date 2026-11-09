@@ -24,6 +24,11 @@ const SSH_RETRY_TIMEOUT_SECS: u64 = 60; // Total time to retry SSH connections
 const SSH_POLL_DELAY_SECS: u64 = 1; // Delay between SSH attempts
 const SSH_SERVER_ALIVE_INTERVAL: u32 = 60; // Server alive interval in seconds
 
+/// `virsh domstate` output for a running domain
+const DOMAIN_STATE_RUNNING: &str = "running";
+/// `virsh domstate` output for a domain that is defined but not running
+const DOMAIN_STATE_SHUT_OFF: &str = "shut off";
+
 /// Configuration options for SSH connection to libvirt domain
 #[derive(Debug, Parser)]
 pub struct LibvirtSshOpts {
@@ -278,7 +283,7 @@ impl LibvirtSshOpts {
             return Err(eyre!("Domain '{}' not found", self.domain_name));
         }
         let state = self.get_domain_state(global_opts)?;
-        if state != "running" {
+        if state != DOMAIN_STATE_RUNNING {
             return Err(eyre!(
                 "Domain '{}' is not running (current state: {}). Start it first with: virsh start {}",
                 self.domain_name,
@@ -287,6 +292,36 @@ impl LibvirtSshOpts {
             ));
         }
         Ok(())
+    }
+
+    /// Verify the domain exists, starting it if it is shut off.
+    ///
+    /// Returns `true` if the domain was started, in which case it
+    /// will still be booting.
+    fn ensure_domain_running(&self, global_opts: &crate::libvirt::LibvirtOptions) -> Result<bool> {
+        if !self.check_domain_exists(global_opts)? {
+            return Err(eyre!("Domain '{}' not found", self.domain_name));
+        }
+        match self.get_domain_state(global_opts)?.as_str() {
+            DOMAIN_STATE_RUNNING => Ok(false),
+            DOMAIN_STATE_SHUT_OFF => {
+                // Use stderr so that the output of a remote command stays clean
+                if !self.suppress_output {
+                    eprintln!("Domain '{}' is shut off; starting it", self.domain_name);
+                }
+                super::run::run_virsh_cmd(
+                    global_opts.connect.as_deref(),
+                    &["start", &self.domain_name],
+                    &format!("Failed to start domain '{}'", self.domain_name),
+                )?;
+                Ok(true)
+            }
+            state => Err(eyre!(
+                "Domain '{}' is not running (current state: {}); only shut off domains are started automatically",
+                self.domain_name,
+                state
+            )),
+        }
     }
 
     /// Create temp key file and parse extra SSH options — shared setup for
@@ -374,7 +409,13 @@ pub fn run_ssh_impl(
 ) -> Result<()> {
     debug!("Connecting to libvirt domain: {}", opts.domain_name);
 
-    opts.verify_domain_running(global_opts)?;
+    let started = opts.ensure_domain_running(global_opts)?;
+    // A domain we just started has to boot first
+    let ssh_timeout = if started {
+        super::run::SSH_WAIT_TIMEOUT_SECONDS
+    } else {
+        SSH_RETRY_TIMEOUT_SECS
+    };
 
     let ssh_config = opts.extract_ssh_config(global_opts)?;
 
@@ -405,7 +446,7 @@ pub fn run_ssh_impl(
                 Err(_) => Ok(false),
             }
         },
-        Duration::from_secs(SSH_RETRY_TIMEOUT_SECS),
+        Duration::from_secs(ssh_timeout),
         Duration::from_secs(SSH_POLL_DELAY_SECS),
     )
     .map_err(|_| {
