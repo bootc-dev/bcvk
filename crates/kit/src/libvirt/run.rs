@@ -20,8 +20,8 @@ use crate::libvirt::domain::VirtiofsFilesystem;
 use crate::utils::parse_memory_to_mb;
 use crate::xml_utils;
 
-/// SSH wait timeout in seconds
-const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
+/// SSH wait timeout in seconds, for a domain that is booting
+pub(crate) const SSH_WAIT_TIMEOUT_SECONDS: u64 = 180;
 
 /// Transport type for updating from host container storage
 const UPDATE_FROM_HOST_TRANSPORT: &str = "containers-storage";
@@ -374,7 +374,7 @@ impl LibvirtRunOpts {
 ///
 /// Uses the same `wait_for_readiness` polling loop as the ephemeral path
 /// and `run_ssh_impl`, just with a longer timeout for initial VM boot.
-fn wait_for_ssh_ready(
+pub(crate) fn wait_for_ssh_ready(
     global_opts: &crate::libvirt::LibvirtOptions,
     domain_name: &str,
     timeout_secs: u64,
