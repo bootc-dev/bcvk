@@ -58,9 +58,7 @@ jobs:
     dist_git_branches: &dist_git_branches
       - fedora-all
       - epel9
-      - epel10
-      - epel10.2
-      - epel10.3
+      - epel-10-all
 
   - job: koji_build
     trigger: commit
@@ -71,3 +69,6 @@ jobs:
     dist_git_branches:
       # Fedora rawhide updates are created automatically
       - fedora-branched
+      # Keep successful EPEL builds flowing through Bodhi as well.
+      - epel9
+      - epel-10-all
