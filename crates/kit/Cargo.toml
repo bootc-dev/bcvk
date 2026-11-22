@@ -15,7 +15,7 @@ data-encoding = { version = "2.9" }
 dirs = "7.0"
 fn-error-context = { version = "0.2" }
 indicatif = "0.18"
-notify = "8.0"
+notify = "9.0"
 thiserror = "2.0"
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
@@ -53,9 +53,9 @@ bootc-utils = { package = "bootc-internal-utils", version = "1.16.14" }
 composefs-boot = { version = "0.9.4", default-features = false }
 rustix = { version = "1", features = ["thread", "net", "fs", "pipe", "system", "process", "mount"] }
 vsock = "0.5"
-nix = { version = "0.31", features = ["socket"] }
+nix = { version = "0.32", features = ["socket"] }
 libc = "0.2"
-zlink = "0.8"
+zlink = "0.9"
 futures-util = "0.3"
 libsystemd = "0.7"
 
