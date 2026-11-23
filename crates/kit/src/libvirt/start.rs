@@ -73,6 +73,14 @@ pub fn run(global_opts: &crate::libvirt::LibvirtOptions, opts: LibvirtStartOpts)
     println!("VM '{}' started successfully", opts.name);
 
     if opts.ssh {
+        // The guest has to boot first, so wait for SSH as long as
+        // `libvirt run --ssh` does rather than the shorter retry of `libvirt ssh`
+        crate::libvirt::run::wait_for_ssh_ready(
+            global_opts,
+            &opts.name,
+            crate::libvirt::run::SSH_WAIT_TIMEOUT_SECONDS,
+        )?;
+
         // Use the libvirt SSH functionality directly
         let ssh_opts = crate::libvirt::ssh::LibvirtSshOpts {
             domain_name: opts.name,
