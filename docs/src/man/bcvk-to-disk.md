@@ -149,6 +149,10 @@ The installation process:
 
     Pass an extra argument to the inner `podman run` that executes `bootc install`.  May be specified multiple times.  Useful for testing edge cases; for example `--bootc-install-podman-arg=--read-only` stresses the install path by making the container rootfs read-only, which exercises bootloader code paths that avoid writing to the host's read-only /boot (similar to osbuild sandbox environments)
 
+**--systemd-units**=*SYSTEMD_UNITS_DIR*
+
+    Directory with systemd units to inject into the installer VM (expects system/ subdirectory with .service, .mount or .target units, like `ephemeral run --systemd-units`).  Units linked in system/default.target.wants/ are started during the install; units that change the sshd configuration need `Before=sshd.service`.  They only affect the installer VM, not the installed disk
+
 <!-- END GENERATED OPTIONS -->
 
 # ARGUMENTS

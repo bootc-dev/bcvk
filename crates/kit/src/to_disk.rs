@@ -80,7 +80,7 @@ use crate::install_options::InstallOptions;
 use crate::run_ephemeral::{run_detached, CommonVmOpts, RunEphemeralOpts};
 use crate::run_ephemeral_ssh::wait_for_ssh_ready;
 use crate::{images, ssh, utils};
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Parser, ValueEnum};
 use color_eyre::eyre::{eyre, Context};
 use color_eyre::Result;
@@ -152,6 +152,15 @@ pub struct ToDiskAdditionalOpts {
     /// read-only /boot (similar to osbuild sandbox environments).
     #[clap(long = "bootc-install-podman-arg")]
     pub bootc_install_podman_args: Vec<String>,
+
+    /// Directory with systemd units to inject into the installer VM (expects
+    /// system/ subdirectory with .service, .mount or .target units, like
+    /// `ephemeral run --systemd-units`).  Units linked in
+    /// system/default.target.wants/ are started during the install; units that
+    /// change the sshd configuration need `Before=sshd.service`.  They only
+    /// affect the installer VM, not the installed disk.
+    #[clap(long = "systemd-units")]
+    pub systemd_units_dir: Option<Utf8PathBuf>,
 }
 
 /// Configuration options for installing a bootc container image to disk
@@ -390,6 +399,79 @@ EOF
     }
 }
 
+/// Unit types copied by `--systemd-units`, matching `ephemeral run`.
+const USER_UNIT_SUFFIXES: &[&str] = &[".service", ".mount", ".target"];
+
+fn is_user_unit(name: &str) -> bool {
+    USER_UNIT_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// Copy the user's `--systemd-units` directory into the installer VM's units directory.
+///
+/// Uses the layout of `ephemeral run --systemd-units`: unit files in `system/`,
+/// enabled through `system/default.target.wants/`.  Returns the names of the
+/// enabled units, which the caller adds to bcvk-to-disk.target; the wants
+/// directory itself is not copied since default.target is never reached.
+fn copy_user_units(src: &Utf8Path, dest_system: &std::path::Path) -> Result<Vec<String>> {
+    let src_system = src.join("system");
+    if !src_system.is_dir() {
+        return Err(eyre!(
+            "--systemd-units: {src_system} is not a directory (expects system/ subdirectory)"
+        ));
+    }
+
+    for entry in src_system
+        .read_dir_utf8()
+        .with_context(|| format!("Reading {src_system}"))?
+    {
+        let entry = entry.with_context(|| format!("Reading {src_system}"))?;
+        let name = entry.file_name();
+        if !is_user_unit(name) {
+            debug!("Skipping non-unit entry: {}", entry.path());
+            continue;
+        }
+        let dest = dest_system.join(name);
+        // A symlink to /dev/null masks a unit; an empty file does the same
+        // and stays valid once the directory is mounted into the container.
+        let is_mask =
+            std::fs::read_link(entry.path()).is_ok_and(|t| t == Utf8Path::new("/dev/null"));
+        if is_mask {
+            std::fs::write(&dest, "")
+        } else {
+            std::fs::copy(entry.path(), &dest).map(|_| ())
+        }
+        .with_context(|| format!("Copying systemd unit {}", entry.path()))?;
+        debug!("Copied systemd unit: {name}");
+    }
+
+    let src_wants = src_system.join("default.target.wants");
+    if !src_wants.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut wants = Vec::new();
+    for entry in src_wants
+        .read_dir_utf8()
+        .with_context(|| format!("Reading {src_wants}"))?
+    {
+        let entry = entry.with_context(|| format!("Reading {src_wants}"))?;
+        if is_user_unit(entry.file_name()) {
+            wants.push(entry.file_name().to_owned());
+        }
+    }
+    // Deterministic unit content regardless of directory order
+    wants.sort();
+    Ok(wants)
+}
+
+/// Generate bcvk-to-disk.target, additionally pulling in the given units.
+fn to_disk_target_unit(extra_wants: &[String]) -> String {
+    let mut unit = include_str!("units/bcvk-to-disk.target").to_string();
+    if !extra_wants.is_empty() {
+        unit.push_str(&format!("Wants={}\n", extra_wants.join(" ")));
+    }
+    unit
+}
+
 /// Outcome of a `run()` call, indicating whether a disk was created fresh
 /// or reused from cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -536,12 +618,20 @@ pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
     // bcvk-to-disk.target starts only what the install needs:
     // basic.target, network-online + sshd (the host drives
     // the install over SSH), and remote-fs (virtiofs host-storage mounts).
+    //
+    // User units from --systemd-units are copied alongside it. Since
+    // default.target is never reached, the units they enable via
+    // default.target.wants/ are pulled in by bcvk-to-disk.target instead.
     let units_dir = TempDir::new()?;
     let units_system_dir = units_dir.path().join("system");
     std::fs::create_dir_all(&units_system_dir)?;
+    let user_wants = match opts.additional.systemd_units_dir {
+        Some(ref dir) => copy_user_units(dir, &units_system_dir)?,
+        None => Vec::new(),
+    };
     std::fs::write(
         units_system_dir.join("bcvk-to-disk.target"),
-        include_str!("units/bcvk-to-disk.target"),
+        to_disk_target_unit(&user_wants),
     )?;
 
     // Configure VM for installation:
@@ -747,5 +837,127 @@ mod tests {
             opts.additional.bootc_install_podman_args,
             ["--read-only", "--env=FOO=bar"]
         );
+    }
+
+    #[test]
+    fn test_to_disk_target_unit() {
+        let base = include_str!("units/bcvk-to-disk.target");
+        let cases: &[(&[&str], &str)] = &[
+            (&[], ""),
+            (&["a.service"], "Wants=a.service\n"),
+            (&["a.service", "b.mount"], "Wants=a.service b.mount\n"),
+        ];
+        for (wants, extra) in cases {
+            let wants: Vec<String> = wants.iter().map(|w| w.to_string()).collect();
+            assert_eq!(to_disk_target_unit(&wants), format!("{base}{extra}"));
+        }
+    }
+
+    #[test]
+    fn test_copy_user_units() -> Result<()> {
+        /// An entry in the user's units directory, relative to its root
+        enum Src {
+            File(&'static str, &'static str),
+            Link(&'static str, &'static str),
+        }
+        use Src::*;
+
+        struct Case {
+            name: &'static str,
+            src: &'static [Src],
+            /// Enabled units, or None if an error is expected
+            wants: Option<&'static [&'static str]>,
+            /// Files expected in the destination, with their content
+            copied: &'static [(&'static str, &'static str)],
+            /// Names expected to be absent from the destination
+            skipped: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                name: "missing system/ subdirectory",
+                src: &[File("a.service", "[Unit]\n")],
+                wants: None,
+                copied: &[],
+                skipped: &[],
+            },
+            Case {
+                name: "units without default.target.wants/",
+                src: &[
+                    File("system/a.service", "[Unit]\n"),
+                    File("system/b.mount", "[Mount]\n"),
+                    File("system/c.target", "[Unit]\n"),
+                ],
+                wants: Some(&[]),
+                copied: &[
+                    ("a.service", "[Unit]\n"),
+                    ("b.mount", "[Mount]\n"),
+                    ("c.target", "[Unit]\n"),
+                ],
+                skipped: &["default.target.wants"],
+            },
+            Case {
+                name: "enabled units are sorted, non-units skipped",
+                src: &[
+                    File("system/a.service", "[Unit]\n"),
+                    File("system/b.service", "[Unit]\n"),
+                    File("system/README", ""),
+                    File("system/c.socket", "[Socket]\n"),
+                    Link("system/default.target.wants/b.service", "../b.service"),
+                    Link("system/default.target.wants/a.service", "../a.service"),
+                    // Units shipped in the image can be enabled too
+                    Link(
+                        "system/default.target.wants/image.service",
+                        "/usr/lib/systemd/system/image.service",
+                    ),
+                    File("system/default.target.wants/.gitkeep", ""),
+                ],
+                wants: Some(&["a.service", "b.service", "image.service"]),
+                copied: &[("a.service", "[Unit]\n"), ("b.service", "[Unit]\n")],
+                skipped: &["README", "c.socket", "default.target.wants"],
+            },
+            Case {
+                name: "masked unit becomes an empty file",
+                src: &[Link("system/masked.service", "/dev/null")],
+                wants: Some(&[]),
+                copied: &[("masked.service", "")],
+                skipped: &[],
+            },
+        ];
+
+        for case in cases {
+            let src = TempDir::new()?;
+            let src = Utf8Path::from_path(src.path()).unwrap();
+            for entry in case.src {
+                let (File(path, _) | Link(path, _)) = entry;
+                let path = src.join(path);
+                std::fs::create_dir_all(path.parent().unwrap())?;
+                match entry {
+                    File(_, content) => std::fs::write(&path, content)?,
+                    Link(_, target) => std::os::unix::fs::symlink(target, &path)?,
+                }
+            }
+
+            let dest = TempDir::new()?;
+            let result = copy_user_units(src, dest.path());
+            let Some(expected_wants) = case.wants else {
+                assert!(result.is_err(), "{}: expected an error", case.name);
+                continue;
+            };
+            assert_eq!(result?, expected_wants, "{}", case.name);
+            for (name, content) in case.copied {
+                let path = dest.path().join(name);
+                assert!(!path.is_symlink(), "{}: {name} is a symlink", case.name);
+                assert_eq!(std::fs::read_to_string(&path)?, *content, "{}", case.name);
+            }
+            for name in case.skipped {
+                assert!(
+                    !dest.path().join(name).exists(),
+                    "{}: {name} should not be copied",
+                    case.name
+                );
+            }
+        }
+        Ok(())
     }
 }
