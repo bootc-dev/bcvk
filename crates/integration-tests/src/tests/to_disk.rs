@@ -256,6 +256,53 @@ fn test_to_disk_bootc_install_podman_arg() -> TestResult {
 }
 integration_test!(test_to_disk_bootc_install_podman_arg);
 
+/// Test that --systemd-units starts units enabled via default.target.wants/
+/// in the installer VM, even though it boots bcvk-to-disk.target.
+///
+/// The injected unit creates a marker file before sshd starts, and the inner
+/// `podman run` bind-mounts it: podman refuses a missing volume source, so the
+/// install only succeeds if the unit ran.
+fn test_to_disk_systemd_units() -> TestResult {
+    let sh = shell()?;
+    let bck = get_bck_command()?;
+    let label = INTEGRATION_TEST_LABEL;
+    let image = get_test_image();
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let disk_path = Utf8PathBuf::try_from(temp_dir.path().join("test-disk.img"))
+        .expect("temp path is not UTF-8");
+
+    let units_dir = TempDir::new()?;
+    let units_dir_path =
+        Utf8PathBuf::try_from(units_dir.path().to_path_buf()).expect("temp path is not UTF-8");
+    let wants_dir = units_dir_path.join("system/default.target.wants");
+    std::fs::create_dir_all(&wants_dir)?;
+    std::fs::write(
+        units_dir_path.join("system/bcvk-test-marker.service"),
+        "[Unit]\n\
+         Description=Create a marker the install depends on\n\
+         Before=sshd.service\n\
+         [Service]\n\
+         Type=oneshot\n\
+         ExecStart=/usr/bin/touch /run/bcvk-test-marker\n\
+         RemainAfterExit=yes\n",
+    )?;
+    std::os::unix::fs::symlink(
+        "../bcvk-test-marker.service",
+        wants_dir.join("bcvk-test-marker.service"),
+    )?;
+
+    let output = cmd!(
+        sh,
+        "{bck} to-disk --label {label} --systemd-units {units_dir_path} --bootc-install-podman-arg=--volume=/run/bcvk-test-marker:/run/bcvk-test-marker:ro {image} {disk_path}"
+    )
+    .output()?;
+
+    validate_disk_image(&disk_path, &output, "test_to_disk_systemd_units")?;
+    Ok(())
+}
+integration_test!(test_to_disk_systemd_units);
+
 /// Test to-disk with various bootc images to ensure compatibility
 ///
 /// This parameterized test runs to-disk with multiple container images,
