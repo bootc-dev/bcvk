@@ -113,6 +113,66 @@ pub fn default_vcpus() -> u32 {
         .unwrap_or(2)
 }
 
+/// Validate a guest authorized-keys path before using it in tmpfiles.d.
+fn validate_ssh_authorized_keys_path(path: &Utf8Path) -> Result<()> {
+    color_eyre::eyre::ensure!(
+        path.is_absolute(),
+        "SSH authorized-keys path must be absolute: {path}"
+    );
+    color_eyre::eyre::ensure!(
+        path.file_name().is_some(),
+        "SSH authorized-keys path must name a file: {path}"
+    );
+    color_eyre::eyre::ensure!(
+        !path.as_str().chars().any(char::is_whitespace),
+        "SSH authorized-keys path cannot contain whitespace: {path}"
+    );
+    color_eyre::eyre::ensure!(
+        !path.as_str().split('/').any(|component| component == ".."),
+        "SSH authorized-keys path cannot contain '..': {path}"
+    );
+    color_eyre::eyre::ensure!(
+        path.as_str().starts_with("/etc/"),
+        "SSH authorized-keys path must be below the writable guest /etc directory: {path}"
+    );
+    Ok(())
+}
+
+/// Validate the SSH account name before passing it to podman and SSH.
+fn validate_ssh_user(user: &str) -> Result<()> {
+    color_eyre::eyre::ensure!(!user.is_empty(), "SSH user cannot be empty");
+    color_eyre::eyre::ensure!(
+        !user.chars().any(char::is_whitespace),
+        "SSH user cannot contain whitespace: {user:?}"
+    );
+    Ok(())
+}
+
+/// Render the credential which adds the generated public key to the guest.
+fn ssh_key_tmpfiles(
+    public_key: &str,
+    ssh_user: &str,
+    authorized_keys_path: Option<&Utf8Path>,
+) -> Result<String> {
+    validate_ssh_user(ssh_user)?;
+    match authorized_keys_path {
+        Some(path) => {
+            validate_ssh_authorized_keys_path(path)?;
+            Ok(crate::credentials::key_to_authorized_keys_tmpfiles_d(
+                public_key,
+                path.as_str(),
+            ))
+        }
+        None => {
+            color_eyre::eyre::ensure!(
+                ssh_user == "root",
+                "--ssh-user {ssh_user:?} requires --ssh-authorized-keys-path below /etc"
+            );
+            Ok(crate::credentials::key_to_root_tmpfiles_d(public_key))
+        }
+    }
+}
+
 use crate::qemu::{self, QemuConfigExt};
 use crate::{
     boot_progress,
@@ -452,6 +512,21 @@ pub struct CommonVmOpts {
     pub ssh_keygen: bool,
 
     #[clap(
+        long,
+        value_name = "USER",
+        default_value = "root",
+        help = "SSH user for generated-key access (default: root)"
+    )]
+    pub ssh_user: Option<String>,
+
+    #[clap(
+        long,
+        value_name = "PATH",
+        help = "Guest /etc path for the generated SSH public key; its parent must exist (default: /root/.ssh/authorized_keys)"
+    )]
+    pub ssh_authorized_keys_path: Option<Utf8PathBuf>,
+
+    #[clap(
         long = "virtiofsd",
         env = "VIRTIOFSD_BIN",
         help = "Path to virtiofsd binary (overrides auto-detection)"
@@ -480,6 +555,12 @@ pub struct CommonVmOpts {
 }
 
 impl CommonVmOpts {
+    /// SSH account used for the generated key.  `None` occurs when options
+    /// are constructed programmatically with [`Default`].
+    pub fn ssh_user(&self) -> &str {
+        self.ssh_user.as_deref().unwrap_or("root")
+    }
+
     /// Parse memory specification to MB, using instancetype if specified
     pub fn memory_mb(&self) -> color_eyre::Result<u32> {
         if let Some(itype) = self.itype {
@@ -703,6 +784,18 @@ fn prepare_run_command_with_temp(
 )> {
     debug!("Running QEMU inside hybrid container for {}", opts.image);
 
+    if opts.common.ssh_keygen {
+        validate_ssh_user(opts.common.ssh_user())?;
+        if let Some(path) = opts.common.ssh_authorized_keys_path.as_deref() {
+            validate_ssh_authorized_keys_path(path)?;
+        } else if opts.common.ssh_user() != "root" {
+            return Err(eyre!(
+                "--ssh-user {:?} requires --ssh-authorized-keys-path below /etc",
+                opts.common.ssh_user()
+            ));
+        }
+    }
+
     // Check Ignition support early (before launching container) if --ignition is specified
     if opts.ignition_config.is_some() {
         let has_ignition = check_ignition_support(&opts.image)?;
@@ -796,6 +889,9 @@ fn prepare_run_command_with_temp(
     for label in opts.podman.label.iter() {
         cmd.arg(format!("--label={label}"));
     }
+    // Keep this after user-provided labels so the connection account always
+    // matches the key location selected above.
+    cmd.arg(format!("--label=bcvk.ssh-user={}", opts.common.ssh_user()));
 
     // We always want this to be a tmpfs on general principle
     // to match the running system. But also, apparently creating
@@ -1770,11 +1866,12 @@ StandardOutput=file:/dev/virtio-ports/executestatus
         let key_pair = crate::ssh::generate_default_keypair()?;
         let pubkey = std::fs::read_to_string(key_pair.public_key_path.as_path())?;
         let credential_path = Utf8Path::new(SSH_CREDENTIAL_PATH);
-        fs::write(
-            credential_path,
-            crate::credentials::key_to_root_tmpfiles_d(&pubkey),
-        )
-        .context("Writing SSH credential for QEMU fw_cfg")?;
+        let tmpfiles = ssh_key_tmpfiles(
+            &pubkey,
+            opts.common.ssh_user(),
+            opts.common.ssh_authorized_keys_path.as_deref(),
+        )?;
+        fs::write(credential_path, tmpfiles).context("Writing SSH credential for QEMU fw_cfg")?;
         qemu_config.add_systemd_credential_file("tmpfiles.extra", credential_path.to_owned());
     }
 
@@ -2263,6 +2360,42 @@ Options=
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_ssh_authorized_keys_path() {
+        for path in ["/etc/ssh/auth_keys/root"] {
+            validate_ssh_authorized_keys_path(Utf8Path::new(path)).unwrap();
+        }
+
+        for path in [
+            "authorized_keys",
+            "/",
+            "/etc/ssh/auth keys/root",
+            "/root/.ssh/authorized_keys",
+            "/var/lib/ssh/auth_keys/root",
+            "/home/root/.ssh/authorized_keys",
+            "/etc/../home/root/.ssh/authorized_keys",
+        ] {
+            assert!(validate_ssh_authorized_keys_path(Utf8Path::new(path)).is_err());
+        }
+    }
+
+    #[test]
+    fn test_ssh_key_tmpfiles() {
+        assert_eq!(CommonVmOpts::default().ssh_user(), "root");
+        assert!(ssh_key_tmpfiles("key", "root", None)
+            .unwrap()
+            .contains("/root/.ssh/authorized_keys"));
+        assert!(ssh_key_tmpfiles(
+            "key",
+            "build",
+            Some(Utf8Path::new("/etc/ssh/auth_keys/build")),
+        )
+        .unwrap()
+        .contains("/etc/ssh/auth_keys/build"));
+        assert!(ssh_key_tmpfiles("key", "build", None).is_err());
+        assert!(ssh_key_tmpfiles("key", "has space", None).is_err());
+    }
 
     #[test]
     fn test_is_zstd_efi_zboot() -> Result<()> {

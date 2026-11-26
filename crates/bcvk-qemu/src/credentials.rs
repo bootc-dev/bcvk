@@ -189,8 +189,19 @@ pub fn smbios_cred_for_root_ssh(pubkey: &str) -> Result<String> {
 /// `/root/.ssh/authorized_keys` file (700) with the Base64-encoded SSH key.
 /// Uses `f+~` to append to existing authorized_keys files.
 pub fn key_to_root_tmpfiles_d(pubkey: &str) -> String {
+    format!(
+        "d /root/.ssh 0750 - - -\n{}",
+        key_to_authorized_keys_tmpfiles_d(pubkey, "/root/.ssh/authorized_keys")
+    )
+}
+
+/// Convert an SSH public key to a systemd tmpfiles.d entry for an existing path.
+///
+/// The caller is responsible for ensuring the parent directory exists.  The
+/// `f+~` directive appends the Base64-encoded key to an existing file.
+pub fn key_to_authorized_keys_tmpfiles_d(pubkey: &str, authorized_keys_path: &str) -> String {
     let buf = data_encoding::BASE64.encode(pubkey.as_bytes());
-    format!("d /root/.ssh 0750 - - -\nf+~ /root/.ssh/authorized_keys 700 - - - {buf}\n")
+    format!("f+~ {authorized_keys_path} 700 - - - {buf}\n")
 }
 
 #[cfg(test)]
@@ -207,6 +218,15 @@ mod tests {
     fn test_key_to_root_tmpfiles_d() {
         let expected = "d /root/.ssh 0750 - - -\nf+~ /root/.ssh/authorized_keys 700 - - - c3NoLXJzYSBBQUFBQjNOemFDMXljMkVBQUFBREFRQUJBQUFCQVFDLi4u\n";
         assert_eq!(key_to_root_tmpfiles_d(STUBKEY), expected);
+    }
+
+    #[test]
+    fn test_key_to_custom_authorized_keys_tmpfiles_d() {
+        let expected = "f+~ /etc/ssh/auth_keys/root 700 - - - c3NoLXJzYSBBQUFBQjNOemFDMXljMkVBQUFBREFRQUJBQUFCQVFDLi4u\n";
+        assert_eq!(
+            key_to_authorized_keys_tmpfiles_d(STUBKEY, "/etc/ssh/auth_keys/root"),
+            expected
+        );
     }
 
     /// Test SMBIOS credential generation and format validation

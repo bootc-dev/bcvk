@@ -82,6 +82,14 @@ For longer-running VMs where you need to reconnect multiple times, use
 
     Generate SSH keypair and inject via systemd credentials
 
+**--ssh-user**=*USER*
+
+    SSH user for generated-key access (default: root)
+
+**--ssh-authorized-keys-path**=*PATH*
+
+    Guest /etc path for the generated SSH public key; its parent must exist (default: /root/.ssh/authorized_keys)
+
 **--virtiofsd**=*VIRTIOFSD_BINARY*
 
     Path to virtiofsd binary (overrides auto-detection)
