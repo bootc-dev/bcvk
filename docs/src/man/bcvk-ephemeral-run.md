@@ -85,6 +85,14 @@ This design allows bcvk to provide VM-like isolation and boot behavior while lev
 
     Generate SSH keypair and inject via systemd credentials
 
+**--ssh-user**=*USER*
+
+    SSH user for generated-key access (default: root)
+
+**--ssh-authorized-keys-path**=*PATH*
+
+    Guest /etc path for the generated SSH public key; its parent must exist (default: /root/.ssh/authorized_keys)
+
 **--virtiofsd**=*VIRTIOFSD_BINARY*
 
     Path to virtiofsd binary (overrides auto-detection)
@@ -233,6 +241,14 @@ ephemeral testing to avoid accumulating stopped containers.
 
 **-K, --ssh-keygen**: Generate SSH keypair and inject into the VM via
 systemd credentials. Required for **bcvk ephemeral ssh** to work.
+
+**--ssh-user**: SSH to the VM as this user (defaults to `root`). A non-root
+user requires **--ssh-authorized-keys-path** to point at that account's
+configured authorized-keys file under `/etc`.
+
+**--ssh-authorized-keys-path**: Override where bcvk puts the generated public
+key in `/etc`. Its parent directory must already exist; for example,
+`--ssh-authorized-keys-path /etc/ssh/auth_keys/root`.
 
 **--name**: Assign a name for easy reference with other commands like
 **bcvk ephemeral ssh**.

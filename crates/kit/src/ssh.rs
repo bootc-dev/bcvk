@@ -143,7 +143,9 @@ fn build_podman_ssh_command(
         cmd.arg("-t");
     }
 
-    cmd.arg("root@127.0.0.1");
+    let ssh_user = ssh_user_for_container(container_name)?;
+    cmd.args(["-l", ssh_user.as_str()]);
+    cmd.arg("127.0.0.1");
     cmd.args(["-p", "2222"]);
 
     let ssh_args = build_ssh_command(args)?;
@@ -153,6 +155,37 @@ fn build_podman_ssh_command(
     }
 
     Ok(cmd)
+}
+
+/// Return the SSH account recorded when the ephemeral VM was launched.
+///
+/// Containers created by older bcvk releases have no label and continue to
+/// use the historical root default.
+fn ssh_user_for_container(container_name: &str) -> Result<String> {
+    let output = Command::new("podman")
+        .args([
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"bcvk.ssh-user\"}}",
+            "--",
+            container_name,
+        ])
+        .output()
+        .map_err(|e| eyre!("Failed to read SSH user for container: {e}"))?;
+    if !output.status.success() {
+        return Err(eyre!(
+            "Failed to read SSH user for container '{}': {}",
+            container_name,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if user.is_empty() || user == "<no value>" {
+        Ok("root".to_string())
+    } else {
+        Ok(user)
+    }
 }
 
 pub fn connect(

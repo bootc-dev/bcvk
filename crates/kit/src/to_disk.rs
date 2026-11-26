@@ -409,6 +409,11 @@ pub enum RunOutcome {
 /// Main entry point for the bootc installation process. See module-level documentation
 /// for details on the installation workflow and architecture.
 pub fn run(mut opts: ToDiskOpts) -> Result<RunOutcome> {
+    color_eyre::eyre::ensure!(
+        opts.additional.common.ssh_user() == "root",
+        "bcvk to-disk requires root SSH access; --ssh-user is only supported by ephemeral commands"
+    );
+
     // Normalize the source image name by stripping containers-storage: prefix if present.
     // The containers-storage: prefix is a transport specifier used by some tools like skopeo,
     // but podman commands (image inspect, run --mount=type=image) expect just the image name.
@@ -747,5 +752,27 @@ mod tests {
             opts.additional.bootc_install_podman_args,
             ["--read-only", "--env=FOO=bar"]
         );
+    }
+
+    #[test]
+    fn test_ssh_authorized_keys_path() {
+        use clap::Parser;
+
+        let opts = ToDiskOpts::try_parse_from([
+            "bcvk",
+            "test:latest",
+            "/tmp/test.img",
+            "--ssh-authorized-keys-path",
+            "/etc/ssh/auth_keys/root",
+            "--ssh-user",
+            "root",
+        ])
+        .expect("custom SSH authorized-keys path must parse");
+
+        assert_eq!(
+            opts.additional.common.ssh_authorized_keys_path.as_deref(),
+            Some(camino::Utf8Path::new("/etc/ssh/auth_keys/root"))
+        );
+        assert_eq!(opts.additional.common.ssh_user(), "root");
     }
 }
